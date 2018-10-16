@@ -1,0 +1,6 @@
+Binary file ./libCitcomS.a matches
+./Full_solver.c:void full_lith_age_read_files(struct All_variables *, int);
+./Full_solver.c:    E->solver.lith_age_read_files = full_lith_age_read_files;
+Binary file ./libCitcomS_a-Full_lith_age_read_files.o matches
+./Full_lith_age_read_files.c:void full_lith_age_read_files(struct All_variables *E, int output)
+Binary file ./libCitcomS_a-Full_solver.o matches
