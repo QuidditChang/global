@@ -238,7 +238,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
     //visc_from_PB(E,evisc,propogate);
 
     //if(E->monitor.solution_cycles < 4000) {
-        weak_slab_hinge_wedge(E,evisc);
+        //weak_slab_hinge_wedge(E,evisc);
 	//weak_plate_boundary_from_velocities_v2(E,evisc);
     //}
 
