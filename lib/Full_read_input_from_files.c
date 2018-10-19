@@ -583,7 +583,7 @@ void create_new_trench2(struct All_variables *E, char *file_name, float *flag_de
     else if(flag_depth==E->tf_depth)
 	Length=35000;
     else
-	Length=12000;
+	Length=13500;
     sz=(double **)malloc(2*sizeof(double *));
     sz[0]=(double *)malloc(Length*sizeof(double));
     sz[1]=(double *)malloc(Length*sizeof(double));
