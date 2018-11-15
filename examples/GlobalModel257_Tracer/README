@@ -1,0 +1,13 @@
+before 230 time step, no chemical buoyancy applied below 0.98
+since 230 time step, use lib_08_17_2017
+
+
+New models should assimilate depth only at the surface within continents,
+define only once for the tracers in the continents,
+include cratons,
+fix the behavior of tracer flavor 4.
+
+Potential projects:
+1. Hybrid boundary conditions within North America to test the Laramide Orogeny.
+2. The driving forces of the fast moving Indian Plate, subducting of underplated oceanic plates.
+3. Short wavelength dynamic topography due to the viscosity variation in lithosphere.

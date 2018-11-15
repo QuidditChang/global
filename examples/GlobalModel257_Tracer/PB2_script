@@ -1,0 +1,51 @@
+#!/bin/bash
+#----------------------------------------------------
+# Example SLURM job script to run hybrid applications 
+# (MPI/OpenMP or MPI/pthreads) on TACC's Stampede 
+# system.
+#----------------------------------------------------
+#SBATCH -J mpi_job     # Job name
+#SBATCH -o stdout.o%j # Name of stdout output file(%j expands to jobId) 
+#SBATCH -e stderr.o%j # Name of stderr output file(%j expands to jobId)
+#SBATCH -p normal         # Serial queue for serial and MPI jobs
+#SBATCH -N 48            # Total number of nodes requested (16 cores/node)
+#SBATCH -n 1536           # Total number of mpi tasks requested
+#SBATCH -t 10:00:00       # Run time (hh:mm:ss) - 1.5 hours
+#SBATCH --mail-user=jiashun@caltech.edu
+#SBATCH --mail-type=all  # Send email at begin and end of job
+# The next line is required if the user has more than one project
+#SBATCH -A TG-EAR160027  # <-- Allocation name to charge job against
+
+export PATH=/home1/02505/hujs/mypython/bin:$PATH
+export PYTHONPATH=/home1/02505/hujs/global_assimilation_phd:$PYTHONPATH
+
+restart=1
+datadir=~/scratch/GlobalModel257_Tracer_plume_80Ma_output
+
+if [ $restart -eq 0 ]; then
+/home1/02505/hujs/global_assimilation_phd/bin/pycitcoms --pyre-start /home1/02505/hujs/global_assimilation_phd/python/merlin-1.6.egg:/home1/02505/hujs/global_assimilation_phd/python/Cheetah-2.0rc8-py2.5-linux-x86_64.egg:/home1/02505/hujs/global_assimilation_phd/python/pythia-0.8.1.15-py2.6.egg:/mnt/a/home1/02505/hujs/global_assimilation_phd:/mnt/a/home1/02505/hujs/global_assimilation_phd/bin:/home1/02505/hujs/global_assimilation_phd/python:/usr/lib/python26.zip:/usr/lib64/python2.6/lib-dynload:/usr/lib64/python2.6/site-packages:/usr/lib64/python2.6:/usr/lib64/python2.6/plat-linux2:/usr/lib64/python2.6/lib-tk:/usr/lib64/python2.6/lib-old:/usr/local/lib64/python2.6/site-packages:/usr/lib64/python2.6/site-packages/gtk-2.0:/usr/lib64/python2.6/site-packages/setuptools-0.6c11-py2.6.egg-info pythia pyre.schedulers:jobstart --scheduler-class=pyre.schedulers.SchedulerTACCRanger:SchedulerTACCRanger CitcomS.SimpleApp:SimpleApp lab257x129.cfg --nodes=1536 --macros.nodes=1536 --macros.job.name=plst_3
+else
+    timestep=`ls -t $datadir/DATA/0/global.chkpt.* | head -1 | awk -F . '{print $4}' | awk '{print $1/1.0}'`
+    age=`awk -v tp=$timestep '{if($1==tp) print 80-$2/7.7748e-7}' $datadir/DATA/0/global.time | tail -1`
+    sed -e "/^solution/a\solution_cycles_init = $timestep" -e "/^solution/d" cp1.cfg > cp2.cfg
+    dos2unix cp2.cfg
+    echo $age | xargs -I {} sed -e '/^start_age/a\start_age = {}' -e '/^start_age/d' cp2.cfg > cp3.cfg
+    dos2unix cp3.cfg
+    #sed -r "s/\[0m//g" cp3.cfg > cp2.cfg
+    #rm cp3.cfg
+    mv cp3.cfg cp2.cfg
+    ls $datadir/Restart/global.chkpt.99.$timestep >/dev/null 2>&1
+    if [ $? = 0 ]; then
+        echo "Restart file exist..."
+    else
+        cp $datadir/DATA/*/global.chkpt.*.$timestep $datadir/Restart
+    fi
+/home1/02505/hujs/global_assimilation_phd/bin/pycitcoms --pyre-start /home1/02505/hujs/global_assimilation_phd/python/merlin-1.6.egg:/home1/02505/hujs/global_assimilation_phd/python/Cheetah-2.0rc8-py2.5-linux-x86_64.egg:/home1/02505/hujs/global_assimilation_phd/python/pythia-0.8.1.15-py2.6.egg:/mnt/a/home1/02505/hujs/global_assimilation_phd:/mnt/a/home1/02505/hujs/global_assimilation_phd/bin:/home1/02505/hujs/global_assimilation_phd/python:/usr/lib/python26.zip:/usr/lib64/python2.6/lib-dynload:/usr/lib64/python2.6/site-packages:/usr/lib64/python2.6:/usr/lib64/python2.6/plat-linux2:/usr/lib64/python2.6/lib-tk:/usr/lib64/python2.6/lib-old:/usr/local/lib64/python2.6/site-packages:/usr/lib64/python2.6/site-packages/gtk-2.0:/usr/lib64/python2.6/site-packages/setuptools-0.6c11-py2.6.egg-info pythia pyre.schedulers:jobstart --scheduler-class=pyre.schedulers.SchedulerTACCRanger:SchedulerTACCRanger CitcomS.SimpleApp:SimpleApp cp2.cfg --nodes=1536 --macros.nodes=1536 --macros.job.name=plst_3
+fi
+
+# ~~~~ comments ~~~~
+# [mpich] command: aprun -n ${nodes} /u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/bin/mpipycitcoms --pyre-start /u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/python/merlin-1.6.egg:/u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/python/Cheetah-2.0rc8-py2.5-linux-x86_64.egg:/u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/python/pythia-0.8.1.15-py2.6.egg:/mnt/a/u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3:/mnt/a/u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/bin:/u/sciteam/zhou2/citcoms5/Tracer_CitcomS-3.0.3/python:/usr/lib/python26.zip:/usr/lib64/python2.6/lib-dynload:/usr/lib64/python2.6/site-packages:/usr/lib64/python2.6:/usr/lib64/python2.6/plat-linux2:/usr/lib64/python2.6/lib-tk:/usr/lib64/python2.6/lib-old:/usr/local/lib64/python2.6/site-packages:/usr/lib64/python2.6/site-packages/gtk-2.0:/usr/lib64/python2.6/site-packages/setuptools-0.6c11-py2.6.egg-info pythia mpi:mpistart CitcomS.SimpleApp:SimpleApp lab257x129.cfg --nodes=96 --macros.nodes=96 --macros.job.name=plst_3 --macros.job.id=None
+
+# ~~~~ submit command ~~~~
+# qsub < [script]
+
