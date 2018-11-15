@@ -1,0 +1,2 @@
+./setProperties.c:    getStringProperty(properties, "flag_depth_file", E->control.flag_depth_file, fp);
+./Exchanger/SVTInlet.cc:    // set CitcomS boundary flags
