@@ -254,7 +254,8 @@ void tracer_advection(struct All_variables *E)
         fill_composition(E);
     }
 
-    tracer_post_processing(E);
+    if(E->monitor.solution_cycles%50==0)
+        tracer_post_processing(E);
 
     return;
 }

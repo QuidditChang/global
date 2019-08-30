@@ -1194,6 +1194,122 @@ void visc_from_S(E,EEta,propogate)
     int propogate;
 {
    float one,two,scale,stress_magnitude,depth,exponent1;
+   float theta,phi,tempa,zz[9],TT[9],zzz,temp,viscE,viscT,zero=0.0,T_max,r;
+   float *eedot;
+   double t1=0, t2=0;
+   double norm1=1.0, norm2=1.0e6;
+   double adj_factor;
+   double etads;
+
+   void strain_rate_2_inv();
+   int m,e,l,z,jj,kk;
+
+   const int vpts = vpoints[E->mesh.nsd];
+   const int ends = enodes[E->mesh.nsd];
+   const int nel = E->lmesh.nel;
+
+   eedot = (float *) malloc((2+nel)*sizeof(float));
+   one = E->control.lith_age_mantle_temp;
+   T_max = one;
+
+   two = 2.0;
+   /* added by Jiashun */
+   adj_factor = pow(4.06e4/norm2, 2.0/3.0);
+
+   for(m=1;m<=E->sphere.caps_per_proc;m++)  {
+     fprintf(E->fp,"E->viscosity.sdepv_visited = %d\n", E->viscosity.sdepv_visited);
+     if(E->viscosity.sdepv_visited){
+
+       /* get second invariant for all elements */
+       strain_rate_2_inv(E,m,eedot,1);
+     }else{
+       for(e=1;e<=nel;e++)     /* initialize with unity if no velocities around */
+         eedot[e] = norm1;
+       E->viscosity.sdepv_visited = 1;
+
+     }
+       /* eedot cannot be too small, or the viscosity will go to inf */
+       for(e=1;e<=nel;e++){
+         eedot[e] = max(eedot[e], 1.0e-16);
+         /* Lijun add t1, Jiashun modify */
+         t1=max(eedot[e],t1);
+       }
+       fprintf(E->fp,"t1 = %f\n", t1);
+       /* Jiashun add maximum strain rate */
+      for(e=1;e<=nel;e++){
+         if(eedot[e]>1.0e8) eedot[e]=1.0e8;
+       }
+       if(t1<=1.0e-6){
+         for(e=1;e<=nel;e++)
+           eedot[e] = norm1;
+       }
+
+       /* Lijun add normalization */
+       MPI_Allreduce(&t1, &t2,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+
+       if(t2 > 1.0) {
+          for(e=1;e<=nel;e++)
+            eedot[e] = eedot[e]/norm2;
+       }
+
+       /* (Lijun add Formula) eta = pow(eta,1/n)*pow(epcilon_dot,(1-n)/n) */
+       for(e=1;e<=nel;e++)   {
+           phi = 0.5*(E->sx[m][2][E->ien[m][e].node[1]]+E->sx[m][2][E->ien[m][e].node[8]]);
+           theta = 0.5*(E->sx[m][1][E->ien[m][e].node[1]]+E->sx[m][1][E->ien[m][e].node[8]]);
+           /* Reads in num_mech*num_mat parameters with VISC_COMP */
+            l = E->mat[m][e];
+            tempa = E->viscosity.N0[l-1];
+            viscE = E->viscosity.E[l-1];
+            viscT = E->viscosity.T[l-1];
+
+            for(kk=1;kk<=ends;kk++) {
+                TT[kk] = E->T[m][E->ien[m][e].node[kk]];
+                zz[kk] = (1.-E->sx[m][3][E->ien[m][e].node[kk]]);
+            }
+
+            for(jj=1;jj<=vpts;jj++) {
+
+                temp=0.0;
+                zzz=0.0;
+                for(kk=1;kk<=ends;kk++)   {
+                    TT[kk]=max(TT[kk],zero);
+                    temp += min(TT[kk],T_max) * E->N.vpt[GNVINDEX(kk,jj)];
+                    zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                }
+
+            r = 1.0-zzz;
+
+            exponent1= 1.0/E->viscosity.sdepv_expt[E->mat[m][e]-1];
+            //fprintf(E->fp,"exponet1=%f\n",exponent1);
+            scale=pow(eedot[e],exponent1-1.0);
+            //etads=min(1e20, 1.0e-7*tempa*scale*exp( (E->viscosity.E[l-1] +  E->viscosity.Z[l-1]*zzz )/(E->viscosity.T[l-1]+temp) ));
+	    etads=min(1e20, 1.0e-6*tempa*scale*exp( (E->viscosity.E[l-1] +  E->viscosity.Z[l-1]*zzz )/(E->viscosity.T[l-1]+temp) ));
+            /* if(e%10==5)
+ *                 fprintf(E->fp,"etads=%f,scale=%f,T=%f,one=%f,viscE=%f,viscT=%f,exponent=%f,temp=%f,zzz=%f\n",etads,scale,tempa*exp(viscE/(temp+viscT) - viscE/(one+viscT) ),one,viscE,viscT,(E->viscosity.E[l-1] +  E->viscosity.Z[l-1]*zzz )/(E->viscosity.T[l-1]+temp),temp,zzz); */
+
+           /*if(theta > E->control.theta_min+0.1 && theta < E->control.theta_max-0.1 && phi > E->control.fi_min+0.1 && 
+ *                 phi < E->control.fi_max-0.1 && r<0.99 && temp>=0.6*E->control.lith_age_mantle_temp) { */
+           if(r<0.99 && temp>=0.6*E->control.lith_age_mantle_temp) {
+               if(E->viscosity.sdepv_expt[E->mat[m][e]-1]!=1)
+                   EEta[m][(e-1)*vpts + jj] = etads*EEta[m][(e-1)*vpts + jj]/(etads+EEta[m][(e-1)*vpts + jj]);
+
+               }
+           }
+       }
+       //fprintf(E->fp,"EEta[3000] = %f\n", EEta[m][3000]);
+   }
+
+   free ((void *)eedot);
+   return;
+}
+
+
+void visc_from_S2(E,EEta,propogate)
+    struct All_variables *E;
+    float **EEta;
+    int propogate;
+{
+   float one,two,scale,stress_magnitude,depth,exponent1;
    float *eedot;
    double t1=0, t2=0;
    double norm1=1.0, norm2=1.0e6;

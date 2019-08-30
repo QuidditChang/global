@@ -134,11 +134,6 @@ void lith_age_construct_tic(struct All_variables *E)
 	  norm=1.0;
 
 	  dist=fabs(E->flag_depth2[nodeg])*1000.0/6371.0;
-	  //asm_depth=1.0;
-	//  assim_depth = /*E->asm_depth[nodeg]**/E->control.lith_age_depth;
-	  /*if(E->flag_depth2[nodeg]*1000.0/6371.0>=-0.09 && E->flag_depth2[nodeg]<=0.0 && dist*1000.0/6371.0<=0.09)
-	      asm_depth=-0.01;
-	  else if (dist<0.06) */
 	  if(E->flag_depth2[nodeg]>=0.0)
 	      asm_depth=1.0;
           else if (dist<=0.1)
@@ -150,7 +145,7 @@ void lith_age_construct_tic(struct All_variables *E)
 	  if( r1 >= E->sphere.ro-assim_depth)
 	    { /* if closer than (lith_age_depth) from top */
 	      /* zero age surface has mantle temperature */
-	      if(E->age_t[nodeg]>0.0 && E->age_t[nodeg]<180.0/E->data.scalet) //Lijun: define continent to be 0 age
+	      if(E->age_t[nodeg]>0.0) //Lijun: define continent to be 0 age
                     temp = (E->sphere.ro-r1) *0.5 /sqrt(E->age_t[nodeg])/norm;
                 else
                     temp = 10.0;
@@ -160,10 +155,6 @@ void lith_age_construct_tic(struct All_variables *E)
 
 	    //  if((E->node[m][node] & TBZ) == TBZ) 
 		E->T[m][node] = temp1;
-
-	      if(E->age_t[nodeg]>180.0/E->data.scalet)
-		 E->T[m][node] = 0.5*(1.0-r1)/0.025; 
-
 	    }
 	/* add thermal continents */
         /*dist=fabs(E->flag_depth2[nodeg])*1000.0/6371.0;
@@ -186,8 +177,10 @@ void lith_age_construct_tic(struct All_variables *E)
 	    E->T[m][node]=E->T[m][node]+0.2; */
 
 	/* add a chemical layer above CMB */
-	/*if(r1<E->sphere.ri+250.0/6371.0)
-	    E->T[m][node] = 1.5; */
+	if(r1 <= E->sphere.ri+2.0*E->control.lith_age_depth) {
+	    temp = (r1 - E->sphere.ri) *0.5 /sqrt(500./E->data.scalet);
+	    E->T[m][node] = 1.0 - (1.0 - E->control.lith_age_mantle_temp) * erf(temp);
+	}
 	}
 
   /* modify temperature BC to be concorded with read in T */
@@ -310,7 +303,7 @@ all three get set to true. CPC 6/20/00 */
         	phi = E->sx[j][2][node];
 		dist=fabs(E->flag_depth2[nodeg]);
 		if(E->flag_depth2[nodeg]*1000.0/6371.0>=-0.1 && E->flag_depth2[nodeg]<=0.0 && dist*1000.0/6371.0<=0.1)
-			asm_depth=-0.003;
+			asm_depth=0.003;
 	        else if (dist<0.06)
 			asm_depth=0.003;
                 else if (dist<=0.3)
@@ -478,7 +471,7 @@ void lith_age_conform_tbc(struct All_variables *E)
 	    if(fabs(r1-E->sphere.ro)>=e_4 && fabs(r1-E->sphere.ri)>=e_4)  { // if NOT right on the boundary 
 	      dist=fabs(E->flag_depth2[nodeg]);
 	      if(E->flag_depth2[nodeg]*1000.0/6371.0>=-0.1 && E->flag_depth2[nodeg]<=0.0 && dist*1000.0/6371.0<=0.1)
-			asm_depth=-0.003;
+			asm_depth=0.003;
 	      else if (dist<0.06)
                         asm_depth=0.003;
               else if (dist<=0.3)
@@ -494,12 +487,10 @@ void lith_age_conform_tbc(struct All_variables *E)
 
 		// set a new age from the file 
 //		temp = (E->sphere.ro-r1) *0.5 /sqrt(E->age_t[nodeg]);
-		if(E->age_t[nodeg]>0.0 && E->age_t[nodeg]<180.0/E->data.scalet) {
+		if(E->age_t[nodeg]>0.0) {
                     temp = (E->sphere.ro-r1) *0.5 /sqrt(E->age_t[nodeg])/norm;
 		    t0 = E->control.lith_age_mantle_temp * erf(temp);
 		}
-		else if(E->age_t[nodeg]>180.0/E->data.scalet)
-		    t0 = 0.5*(1.0-E->sx[m][3][node])/0.025;
                 else {
                     temp = 10.0;
 		    t0 = E->control.lith_age_mantle_temp * erf(temp);
@@ -593,7 +584,7 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
             default:
 		dist=fabs(E->flag_depth2[nodeg]);
 		if(E->flag_depth2[nodeg]*1000.0/6371.0>=-0.1 && E->flag_depth2[nodeg]<=0.0 && dist*1000.0/6371.0<=0.1)
-			asm_depth=-0.003;
+			asm_depth=0.003;
 		else if (dist<0.06)
                         asm_depth=0.003;
                 else if (dist<=0.3)
