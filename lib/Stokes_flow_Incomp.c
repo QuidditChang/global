@@ -279,6 +279,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
             fputs("Warning: solver not converging! 1\n", E->fp);
+	    exit(18);
         }
         strip_bcs_from_residual(E, E->u1, lev);
 

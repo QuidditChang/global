@@ -108,8 +108,8 @@ void lith_age_construct_tic(struct All_variables *E)
 {
   int i, j, k, m, node, nodeg;
   int nox, noy, noz, gnox, gnoy, gnoz;
-  double r1, temp, temp1, norm, dist;
-  float age,age1,theta,phi,assim_depth,asm_depth;
+  double r1, temp, temp1, temp2, temp3, temp4, norm, dist, dist2, slope;
+  float age,age1,theta,phi,assim_depth,asm_depth,flag_depth2;
   void temperatures_conform_bcs();
 
   noy=E->lmesh.noy;
@@ -119,6 +119,9 @@ void lith_age_construct_tic(struct All_variables *E)
   gnox=E->mesh.nox;
   gnoy=E->mesh.noy;
   gnoz=E->mesh.noz;
+
+  slope = ((1.0 - E->control.lith_age_mantle_temp) - E->control.lith_age_mantle_temp) / \
+      (1.0 - E->control.lith_age_depth - (E->sphere.ri+2.0*E->control.lith_age_depth)); 
 
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=noy;i++)
@@ -156,31 +159,28 @@ void lith_age_construct_tic(struct All_variables *E)
 	    //  if((E->node[m][node] & TBZ) == TBZ) 
 		E->T[m][node] = temp1;
 	    }
-	/* add thermal continents */
-        /*dist=fabs(E->flag_depth2[nodeg])*1000.0/6371.0;
-        if(dist>=0.03 && r1>0.98 && r1>0.997+(0.98-0.997)*(dist-0.03)/(0.06-0.03) && E->age_t[nodeg]>180.0/E->data.scalet) {
-            assim_depth = 0.997+(0.98-0.997)*(dist-0.03)/(0.06-0.03);
-            if(assim_depth>0.98)
-                assim_depth=0.98;
-            E->T[m][node] = 0.5*(1.0-r1)/0.025;
-        }*/
-	/*if(r1>0.98 && E->age_t[nodeg]>180.0/E->data.scalet)
-            E->T[m][node] = 0.5*(1.0-r1)/0.025; */
-
-	/*else if(r1>=0.975 && dist>0.99 && E->age_t[nodeg]>180.0/E->data.scalet)
-	    E->T[m][node] = 0.5*(1.0-r1)/0.025; */
-
-	/* add superadiabatic asthenosphere */
-	/*if(r1<0.98 && r1>0.94)
-	    E->T[m][node]=E->T[m][node]+0.2*(0.98-r1)/0.04;
-	else if(r1<=0.94)
-	    E->T[m][node]=E->T[m][node]+0.2; */
-
 	/* add a chemical layer above CMB */
-	if(r1 <= E->sphere.ri+2.0*E->control.lith_age_depth) {
-	    temp = (r1 - E->sphere.ri) *0.5 /sqrt(500./E->data.scalet);
-	    E->T[m][node] = 1.0 - (1.0 - E->control.lith_age_mantle_temp) * erf(temp);
+	else if(r1 <= E->sphere.ri+2.0*E->control.lith_age_depth) {
+	    temp = (r1 - E->sphere.ri) *0.5 /sqrt(200./E->data.scalet);
+	    E->T[m][node] = 1.0 - E->control.lith_age_mantle_temp * erf(temp);
 	}
+	else
+	    E->T[m][node] = E->control.lith_age_mantle_temp + slope * (1.0 - E->control.lith_age_depth - r1);
+
+	/* add initial slabs */
+	flag_depth2=E->flag_depth2[nodeg]*1000.0/6371.0;
+	if(flag_depth2<0.0 && flag_depth2>-0.03 && r1>=0.97) {
+                temp1=0.0009-flag_depth2*flag_depth2;
+                temp2=0.026*0.026-flag_depth2*flag_depth2;
+                temp3=0.0001-flag_depth2*flag_depth2;
+                temp4=(r1-0.97)*(r1-0.97);
+                if(temp4<=temp1 && temp4>=temp3) {
+                    dist2=0.03-sqrt(temp4+flag_depth2*flag_depth2);
+                    temp=dist2*0.5/sqrt(50.0/E->data.scalet);
+                    E->T[m][node]=E->control.lith_age_mantle_temp * erf(temp);
+                }
+           }
+
 	}
 
   /* modify temperature BC to be concorded with read in T */
@@ -518,8 +518,8 @@ void lith_age_conform_tbc(struct All_variables *E)
 
 void assimilate_lith_conform_bcs(struct All_variables *E)
 {
-  float depth, dist, daf, assimilate_new_temp,temp1,temp2,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth;
-  float theta,phi,lat_max,lat_max1,lat_max2,lat_min,lat_min1,lat_min2,age,age1,age2;
+  float depth, dist, dist2, daf, assimilate_new_temp,temp,temp1,temp2,temp3,temp4,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth,flag_depth2;
+  float theta,phi,lat_max,lat_max1,lat_max2,lat_min,lat_min1,lat_min2,age,age1,age2,rad;
   float tt1,tt2,ttt1,ttt2,gap,wid_assim,v_trench;
   int m,j,nno,node,nox,noz,noy,gnox,gnoy,gnoz,nodeg,ii,i,k,nnn,ttt,intage;
   char pb_1[255],pb_2[255];
@@ -536,7 +536,8 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
   noy=E->lmesh.noy;
   noz=E->lmesh.noz;
 
-
+  age=find_age_in_MY(E);
+  intage=age;
 
   for(j=1;j<=E->sphere.caps_per_proc;j++)
       for(i=1;i<=noy;i++)
@@ -576,7 +577,6 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
             } /* end switch */
 
             depth = E->sphere.ro - E->sx[j][3][node];
-	    age=find_age_in_MY(E);
 
             switch (type) {
             case 0:  /* no match, next node */
@@ -600,6 +600,22 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
 		    daf = 0.5*depth/assim_depth;
                     E->T[j][node] = daf*E->T[j][node] + (1.0-daf)*assimilate_new_temp;
 		}*/
+		/* add initial slabs */
+		if(intage<E->trench_visit_age && E->monitor.solution_cycles>0) {
+        	flag_depth2=E->flag_depth2[nodeg]*1000.0/6371.0;
+		rad = E->sx[j][3][node];
+        	if(flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
+        	        temp1=0.0009-flag_depth2*flag_depth2;
+        	        temp2=0.026*0.026-flag_depth2*flag_depth2;
+        	        temp3=0.0001-flag_depth2*flag_depth2;
+        	        temp4=(rad-0.97)*(rad-0.97);
+        	        if(temp4<=temp1 && temp4>=temp3) {
+        	            dist2=0.03-sqrt(temp4+flag_depth2*flag_depth2);
+        	            temp=dist2*0.5/sqrt(50.0/E->data.scalet);
+        	            E->T[m][node]=E->control.lith_age_mantle_temp * erf(temp);
+        	        }
+        	   }
+		}
             } /* end switch */
 
           } /* next node */

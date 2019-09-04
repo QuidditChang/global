@@ -254,6 +254,7 @@ void tracer_advection(struct All_variables *E)
         fill_composition(E);
     }
 
+    /* Jiashun changed */
     if(E->monitor.solution_cycles%50==0)
         tracer_post_processing(E);
 
@@ -654,6 +655,7 @@ void count_tracers_of_flavors(struct All_variables *E)
     const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17,chem=18;
     double PI=3.1415926;
     double inputdata,tmp1,tmp2,*geomx1,*geomy1,*geomx2,*geomy2,*geomx3,*geomy3;
+    double temp1,temp2,temp3,temp4;
     char pb[250];
     FILE *fp,*flgeo;
     float find_age_in_MY();
@@ -887,6 +889,20 @@ void count_tracers_of_flavors(struct All_variables *E)
                     E->trace.extraq[j][0][kk]=weakarc;
            }
 
+	   /* create pre-existing weak zone when model starts */
+           if(E->monitor.solution_cycles==0 && flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
+		temp1=0.0009-flag_depth2*flag_depth2;
+                temp2=0.026*0.026-flag_depth2*flag_depth2;
+                temp3=0.0001-flag_depth2*flag_depth2;
+                temp4=(rad-0.97)*(rad-0.97);
+                if(temp4<=temp1 && temp4>=temp3) {
+                    if(temp4>temp2)
+                        E->trace.extraq[j][0][kk]=oc;
+                    else
+                        E->trace.extraq[j][0][kk]=ol;
+		}
+           }
+
 	   /*if(E->monitor.solution_cycles==0 && age1==0.0 && rad>0.996) {
 	       E->trace.extraq[j][0][kk]=5.0;
 	   }*/
@@ -909,6 +925,20 @@ void count_tracers_of_flavors(struct All_variables *E)
                else if(rad>0.98)
                     E->trace.extraq[j][0][kk]=weakarc;
                 }
+
+		/* create new weakzone when new trench forms */
+		if(flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
+                temp1=0.0009-flag_depth2*flag_depth2;
+                temp2=0.026*0.026-flag_depth2*flag_depth2;
+                temp3=0.0001-flag_depth2*flag_depth2;
+                temp4=(rad-0.97)*(rad-0.97);
+                if(temp4<=temp1 && temp4>=temp3) {
+                    if(temp4>temp2)
+                        E->trace.extraq[j][0][kk]=oc;
+                    else
+                        E->trace.extraq[j][0][kk]=ol;
+                }
+           }
             }
 
 	    /* define oceanic plateau if necessary */
@@ -940,6 +970,10 @@ void count_tracers_of_flavors(struct All_variables *E)
 	       if(E->trace.extraq[j][0][kk]>0.0 && E->trace.extraq[j][0][kk]!=oecl)
                  E->trace.extraq[j][0][kk]=0.0;
 	      }*/
+
+	    /* add a chemical layer above CMB */
+            if(rad<E->sphere.ri+100.0/6371.0 && E->monitor.solution_cycles==0)
+                 E->trace.extraq[j][0][kk]=chem;
 
 	    flavor = E->trace.extraq[j][0][kk];
             E->trace.ntracer_flavor[j][flavor][e]++;

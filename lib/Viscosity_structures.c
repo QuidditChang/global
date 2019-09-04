@@ -338,6 +338,7 @@ void visc_from_T(E,EEta,propogate)
     float T_max, T_min,age,age1,age2,viscE,viscT;
     char input_s[1000],pb_1[255],pb_2[255],bounds[255];
     double Tmaxd();
+    double slope;
     const int vpts = vpoints[E->mesh.nsd];
     const int ends = enodes[E->mesh.nsd];
     const int nel = E->lmesh.nel;
@@ -421,8 +422,9 @@ void visc_from_T(E,EEta,propogate)
               sscanf(input_s,"%f %f",&T_max,&T_min);
               fclose(fp);
         }
-        one = E->control.lith_age_mantle_temp;
         //one = 1.0;
+        slope = ((1.0 - E->control.lith_age_mantle_temp) - E->control.lith_age_mantle_temp) / \
+            (1.0 - E->control.lith_age_depth - (E->sphere.ri+2.0*E->control.lith_age_depth)); 
 
         T_max = 1.0; T_min = 0.0;
 
@@ -545,6 +547,8 @@ void visc_from_T(E,EEta,propogate)
 				    temp1=tempa+(temp1-tempa)*cos((0.98-r)/0.02*3.1415926);
 				tempa=temp1;
 			   }*/
+
+	                   one = E->control.lith_age_mantle_temp + slope * (zzz - E->control.lith_age_depth);
 
                            EEta[m][ (i-1)*vpts + jj ] = tempa*exp(viscE/(temp+viscT) - viscE/(one+viscT) );
 
