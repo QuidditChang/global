@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# To install Python2.6
+# Currently Loaded Modules:
+#   1) git/2.21.0      3) cmake/3.13.4   5) pmix/3.1.2      7) xalt/2.7.1   9) intel/18.0.5     11) impi/18.0.5
+#   2) autotools/1.2   4) ucx/1.5.1      6) hwloc/1.11.12   8) TACC        10) libfabric/1.7.1  12) python2/2.7.16
+# Use intel/18 instead of intel/19
+
+export PATH=/work/ess-zhangj/code/python2.6.9/bin:$PATH
+export PATH=$PATH:/work/ess-zhangj/code/Tracer_CitcomS-3.0.3-Non_Newtonian2
+module load intel/2018.4 mpi/intel/2018.4
+./configure
+make
+
+#./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
+#CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
+#LDFLAGS=-pie
