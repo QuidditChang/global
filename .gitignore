@@ -1,0 +1,14 @@
+*.o
+*.a
+*.so
+*.lo
+*.la
+config.log
+config.status
+autom4te.cache/
+*.log
+lib/.deps/
+__pycache__/
+*.pyc
+cmbhf_2026/
+tracer_non_newtonian/
