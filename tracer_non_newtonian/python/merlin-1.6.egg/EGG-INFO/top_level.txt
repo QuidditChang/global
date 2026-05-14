@@ -1,3 +1,0 @@
-merlin
-pkg_resources
-site
