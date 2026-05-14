@@ -1,0 +1,3 @@
+#!/home/tan2/opt/bin/python
+from Cheetah.CheetahWrapper import CheetahWrapper
+CheetahWrapper().main()

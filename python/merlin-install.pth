@@ -1,0 +1,6 @@
+import sys; sys.__plen = len(sys.path)
+./merlin-1.6.egg
+./Cheetah-2.0rc8-py2.5-linux-x86_64.egg
+./pythia-0.8.1.15-py2.6.egg
+/work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle
+import sys; new=sys.path[sys.__plen:]; del sys.path[sys.__plen:]; p=getattr(sys,'__egginsert',0); sys.path[p:p]=new; sys.__egginsert = p+len(new)
