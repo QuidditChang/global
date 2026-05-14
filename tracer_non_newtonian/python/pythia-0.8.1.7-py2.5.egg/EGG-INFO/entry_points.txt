@@ -1,3 +1,0 @@
-[console_scripts]
-opal = opal.core.management:execute_from_command_line [opal]
-
