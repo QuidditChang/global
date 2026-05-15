@@ -10,5 +10,5 @@ autom4te.cache/
 lib/.deps/
 __pycache__/
 *.pyc
-cmbhf_2026/
-tracer_non_newtonian/
+._*
+.DS_Store
