@@ -10,3 +10,4 @@ autom4te.cache/
 lib/.deps/
 __pycache__/
 *.pyc
+._*
