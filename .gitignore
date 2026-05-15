@@ -12,3 +12,4 @@ __pycache__/
 *.pyc
 cmbhf_2026/
 tracer_non_newtonian/
+._*
