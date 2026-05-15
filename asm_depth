@@ -1,0 +1,46 @@
+./assim_depth:./lib/Lith_age.c:	  assim_depth = /*E->asm_depth[nodeg]**/E->control.lith_age_depth;
+./assim_depth:./lib/Lith_age.c:  float tt1,tt2,ttt1,ttt2,ttt3,fff2,fff3,*PB1[4],*PB2[4],fi,fi_1,fi_2,gap,assim_depth,asm_depth;
+./assim_depth:./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./assim_depth:./lib/Lith_age.c:  float depth,assim_depth,asm_depth;
+./assim_depth:./lib/Lith_age.c:	      assim_depth=asm_depth*E->control.lith_age_depth;
+./assim_depth:./lib/Lith_age.c:  float depth, daf, assimilate_new_temp,temp1,temp2,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth;
+./assim_depth:./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/global_defs.h:    float *asm_depth;
+./lib/Lith_age.c:	  assim_depth = /*E->asm_depth[nodeg]**/E->control.lith_age_depth;
+./lib/Lith_age.c:  float tt1,tt2,ttt1,ttt2,ttt3,fff2,fff3,*PB1[4],*PB2[4],fi,fi_1,fi_2,gap,assim_depth,asm_depth;
+./lib/Lith_age.c:		asm_depth=fabs(E->asm_depth[nodeg]);
+./lib/Lith_age.c:                if (asm_depth<=0.5)
+./lib/Lith_age.c:                        asm_depth=2.0*asm_depth;
+./lib/Lith_age.c:                        asm_depth=1.0;
+./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Lith_age.c:  float depth,assim_depth,asm_depth;
+./lib/Lith_age.c:	      asm_depth=fabs(E->asm_depth[nodeg]);
+./lib/Lith_age.c:              if (asm_depth<=0.5)
+./lib/Lith_age.c:                  asm_depth=2.0*asm_depth;
+./lib/Lith_age.c:                  asm_depth=1.0;
+./lib/Lith_age.c:	      assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Lith_age.c:  float depth, daf, assimilate_new_temp,temp1,temp2,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth;
+./lib/Lith_age.c:		asm_depth=fabs(E->asm_depth[nodeg]);
+./lib/Lith_age.c:                if (asm_depth<=0.5)
+./lib/Lith_age.c:                    asm_depth=2.0*asm_depth;
+./lib/Lith_age.c:                    asm_depth=1.0;
+./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Viscosity_structures.c:			      if(fabs(E->asm_depth[nodeg])*1000.0/6371.0<0.03)
+./lib/Viscosity_structures.c:                              if(fabs(E->asm_depth[nodeg])*1000.0/6371.0<0.1){
+./lib/Viscosity_structures.c:                                  if(E->asm_depth[nodeg]<0.0 || (E->asm_depth[nodeg]>0.0 && r<0.99))
+./lib/Viscosity_structures.c:	  if(fabs(fi)<50.0 && E->asm_depth[nodeg]<0.0 && fabs(E->asm_depth[nodeg])*1000.0/6371.0<0.15)
+./lib/Viscosity_structures.c:		if(fabs(fi)<50.0 && E->asm_depth[nodeg]*1000.0/6371.0<0.045 && E->asm_depth[nodeg]*1000.0/6371.0>-0.005) {
+./lib/Viscosity_structures.c:		    if(E->asm_depth[nodeg]*1000.0/6371.0<0.045) t2 = 0.03;
+./lib/Viscosity_structures.c:		    if(E->asm_depth[nodeg]*1000.0/6371.0>-0.005) t2 = 0.02;
+./lib/Viscosity_structures.c:		   if((fi<50.0 && E->asm_depth[nodeg]*1000.0/6371.0<0.05 && E->asm_depth[nodeg]*1000.0/6371.0>-0.05) || rad<0.999)
+./lib/Viscosity_structures.c:	      if(surf && fabs(fi)<50.0 && fabs(E->asm_depth[nodeg])*1000.0/6371.0<width && rad>(1.0-height)) {
+./lib/Viscosity_structures.c:		 tt1=-E->asm_depth[nodeg]*1000.0/6371.0-0.02-7.0*(1-rad);
+./lib/Viscosity_structures.c:	      if(wedge && fabs(fi)<50.0 && E->asm_depth[nodeg]*1000.0/6371.0<0.03 && E->asm_depth[nodeg]*1000.0/6371.0>-wide_wdg && rad>d_wdg) {
+./lib/Viscosity_structures.c:		 if(-E->asm_depth[nodeg]*1000.0/6371.0+0.03-(1.0-rad)>0.0) {
+./lib/Viscosity_structures.c:                             temp1 += (EEta[m][(e-1)*vpts+jj]-temp1)*cos(pow((wide_wdg-(-E->asm_depth[nodeg]*1000.0/6371.0))/(wide_wdg/4.0),1)*1.57);
+./lib/Regional_read_input_from_files.c:	E->asm_depth=(float*) malloc((nox*noy+1)*sizeof(float));
+./lib/Regional_read_input_from_files.c:              E->asm_depth[node] = inputdepth1+(inputdepth2-inputdepth1)/(newage2-newage1)*(age-newage1)
+./lib/Regional_read_input_from_files.c:              E->asm_depth[node] = inputdepth1;
+./lib/Tracer_setup.c:	       if(rad>0.994 && fabs(E->asm_depth[nodeg])>0.3)
+./lib/Tracer_setup.c:	       else if(rad>0.98 && fabs(E->asm_depth[nodeg])*1000/(6371.0)>0.05+2*(1.0-rad))
+./lib/Tracer_setup.c:	       if(E->asm_depth[nodeg]>0.03 && E->trace.nflavors>=4) {
