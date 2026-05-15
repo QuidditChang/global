@@ -10,3 +10,5 @@ autom4te.cache/
 lib/.deps/
 __pycache__/
 *.pyc
+._*
+.DS_Store
