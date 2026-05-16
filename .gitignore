@@ -12,3 +12,31 @@ __pycache__/
 *.pyc
 ._*
 .DS_Store
+# Build-generated files
+Makefile
+*/Makefile
+.deps/
+*/.deps/
+config.h
+config_script
+libtool
+config.log
+config.status
+
+# Python install artifacts
+python/CitcomS.egg-link
+python/merlin-install.pth
+python/merlin.pth
+python/site.py
+*.egg
+
+# Compiled binaries
+bin/CitcomSFull
+bin/CitcomSRegional
+bin/citcoms
+bin/pycitcoms
+
+# Visual output
+visual/*.net
+visual/project_geoid
+visual/OpenDXMacro/*.net
