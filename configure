@@ -3590,7 +3590,7 @@ if { ac_try='$PYTHON setup.py egg_flags >&5 2>&5'
   test $ac_status = 0; }; }; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: ok" >&5
 $as_echo "ok" >&6; }
-       . egg-flags.sh
+       .egg-flags.sh
        rm -f egg-flags.sh
 
 else
