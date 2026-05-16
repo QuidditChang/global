@@ -20,7 +20,6 @@ Makefile
 # -------------------------------------------------------
 CitcomS.egg-info/
 *.egg-info/
-python/
 __pycache__/
 *.pyc
 
