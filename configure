@@ -3966,7 +3966,7 @@ See \`config.log' for more details" "$LINENO" 5
       $as_echo "$as_me:${as_lineno-$LINENO}: result: ok" >&5
       $as_echo "ok" >&6
     }
-    egg-flags.sh
+    . ./egg-flags.sh
     rm -f egg-flags.sh
 
   else
