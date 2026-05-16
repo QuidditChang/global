@@ -64,6 +64,10 @@ if os.name == "nt":
     vars['BLDLIBRARY'] = "-L%s -lpython%s" % (libs, version)
 else:
     vars = sysconfig.get_config_vars()
+    # Convert relative paths to absolute so -L flags are valid from any subdir
+    for _key in ('LIBPL', 'LIBDIR'):
+        if _key in vars and vars[_key] and not os.path.isabs(vars[_key]):
+            vars[_key] = os.path.abspath(vars[_key])
     # transform AIX's python.exp
     vars['LINKFORSHARED'] = vars['LINKFORSHARED'].replace('Modules',vars['LIBPL'])
     if vars['LDLIBRARY'] == vars['LIBRARY']:
