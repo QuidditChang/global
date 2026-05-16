@@ -155,11 +155,9 @@ AC_CONFIG_FILES([Makefile
                  bin/Makefile
                  CitcomS/Makefile
                  etc/Makefile
-                 examples/Makefile
                  lib/Makefile
                  module/Makefile
                  module/Exchanger/Makefile
-                 tests/Makefile
                  visual/Makefile
                  visual/OpenDXMacro/Makefile])
 

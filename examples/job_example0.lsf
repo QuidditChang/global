@@ -1,5 +1,0 @@
-module load module load intel/2018.4 mpi/intel/2018.4
-
-cd /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/examples
-
-CitcomSRegional example0

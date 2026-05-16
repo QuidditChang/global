@@ -19311,7 +19311,7 @@ $as_echo "$as_me: WARNING: GZip library not found; disabling gzip support; try s
 fi
 
 
-ac_config_files="$ac_config_files Makefile bin/Makefile CitcomS/Makefile etc/Makefile examples/Makefile lib/Makefile module/Makefile module/Exchanger/Makefile tests/Makefile visual/Makefile visual/OpenDXMacro/Makefile"
+ac_config_files="$ac_config_files Makefile bin/Makefile CitcomS/Makefile etc/Makefile lib/Makefile module/Makefile module/Exchanger/Makefile visual/Makefile visual/OpenDXMacro/Makefile"
 
 
 cat >confcache <<\_ACEOF
@@ -20048,11 +20048,9 @@ do
     "bin/Makefile") CONFIG_FILES="$CONFIG_FILES bin/Makefile" ;;
     "CitcomS/Makefile") CONFIG_FILES="$CONFIG_FILES CitcomS/Makefile" ;;
     "etc/Makefile") CONFIG_FILES="$CONFIG_FILES etc/Makefile" ;;
-    "examples/Makefile") CONFIG_FILES="$CONFIG_FILES examples/Makefile" ;;
     "lib/Makefile") CONFIG_FILES="$CONFIG_FILES lib/Makefile" ;;
     "module/Makefile") CONFIG_FILES="$CONFIG_FILES module/Makefile" ;;
     "module/Exchanger/Makefile") CONFIG_FILES="$CONFIG_FILES module/Exchanger/Makefile" ;;
-    "tests/Makefile") CONFIG_FILES="$CONFIG_FILES tests/Makefile" ;;
     "visual/Makefile") CONFIG_FILES="$CONFIG_FILES visual/Makefile" ;;
     "visual/OpenDXMacro/Makefile") CONFIG_FILES="$CONFIG_FILES visual/OpenDXMacro/Makefile" ;;
 
