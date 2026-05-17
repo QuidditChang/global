@@ -25,8 +25,8 @@
 
 
 ACLOCAL_AMFLAGS = -I ./m4
-AM_CFLAGS = -O3 -march=native -funroll-loops
-AM_CXXFLAGS = -O3 -march=native -funroll-loops
+AM_CFLAGS = -O3 -march=skylake-avx512 -funroll-loops
+AM_CXXFLAGS = -O3 -march=skylake-avx512 -funroll-loops
 
 if COND_PYRE
     MAYBE_PYRE = CitcomS etc module visual
