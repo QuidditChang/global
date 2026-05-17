@@ -5,22 +5,22 @@
 //
 //
 //
-// macro reference (indirect): RTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/RTFtoXYZ.net
+// macro reference (indirect): RTFtoXYZ OpenDXMacro/RTFtoXYZ.net
 //
-// macro reference (indirect): CitcomSTemperature /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSTemperature.net
+// macro reference (indirect): CitcomSTemperature OpenDXMacro/CitcomSTemperature.net
 //
-// macro reference (indirect): VelocityRTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/VelocityRTFtoXYZ.net
+// macro reference (indirect): VelocityRTFtoXYZ OpenDXMacro/VelocityRTFtoXYZ.net
 //
-// macro reference (indirect): CitcomSVelocity /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSVelocity.net
+// macro reference (indirect): CitcomSVelocity OpenDXMacro/CitcomSVelocity.net
 //
-// macro reference (indirect): CitcomSViscosity /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSViscosity.net
+// macro reference (indirect): CitcomSViscosity OpenDXMacro/CitcomSViscosity.net
 //
-// macro reference (indirect): CitcomSImport /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSImport.net
+// macro reference (indirect): CitcomSImport OpenDXMacro/CitcomSImport.net
 //
-// macro reference (direct): CitcomSFullImport /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSFullImport.net
+// macro reference (direct): CitcomSFullImport OpenDXMacro/CitcomSFullImport.net
 include "CitcomSFullImport.net"
 //
-// macro reference (direct): ShowSphere /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/ShowSphere.net
+// macro reference (direct): ShowSphere OpenDXMacro/ShowSphere.net
 include "ShowSphere.net"
 //
 // MODULE main

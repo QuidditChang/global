@@ -5,7 +5,7 @@
 //
 //
 //
-// macro reference (direct): RTFtoXYZ2D /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/RTFtoXYZ2D.net
+// macro reference (direct): RTFtoXYZ2D RTFtoXYZ2D.net
 include "RTFtoXYZ2D.net"
 //
 // Begin MDF

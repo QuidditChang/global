@@ -5,20 +5,20 @@
 //
 //
 //
-// macro reference (indirect): RTFtoXYZ2D /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/RTFtoXYZ2D.net
+// macro reference (indirect): RTFtoXYZ2D OpenDXMacro/RTFtoXYZ2D.net
 //
-// macro reference (indirect): CitcomSSurfaceHeatflux /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSSurfaceHeatflux.net
+// macro reference (indirect): CitcomSSurfaceHeatflux OpenDXMacro/CitcomSSurfaceHeatflux.net
 //
-// macro reference (indirect): CitcomSSurfaceTopo /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSSurfaceTopo.net
+// macro reference (indirect): CitcomSSurfaceTopo OpenDXMacro/CitcomSSurfaceTopo.net
 //
-// macro reference (indirect): VelocityRTFtoXYZ2D /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/VelocityRTFtoXYZ2D.net
+// macro reference (indirect): VelocityRTFtoXYZ2D OpenDXMacro/VelocityRTFtoXYZ2D.net
 //
-// macro reference (indirect): CitcomSSurfaceVelocity /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSSurfaceVelocity.net
+// macro reference (indirect): CitcomSSurfaceVelocity OpenDXMacro/CitcomSSurfaceVelocity.net
 //
-// macro reference (direct): CitcomSSurfaceImport /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSSurfaceImport.net
+// macro reference (direct): CitcomSSurfaceImport OpenDXMacro/CitcomSSurfaceImport.net
 include "CitcomSSurfaceImport.net"
 //
-// macro reference (direct): ShowSphere /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/ShowSphere.net
+// macro reference (direct): ShowSphere OpenDXMacro/ShowSphere.net
 include "ShowSphere.net"
 //
 // MODULE main

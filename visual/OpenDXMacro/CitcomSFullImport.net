@@ -5,17 +5,17 @@
 //
 //
 //
-// macro reference (indirect): RTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/RTFtoXYZ.net
+// macro reference (indirect): RTFtoXYZ RTFtoXYZ.net
 //
-// macro reference (indirect): CitcomSTemperature /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSTemperature.net
+// macro reference (indirect): CitcomSTemperature CitcomSTemperature.net
 //
-// macro reference (indirect): VelocityRTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/VelocityRTFtoXYZ.net
+// macro reference (indirect): VelocityRTFtoXYZ VelocityRTFtoXYZ.net
 //
-// macro reference (indirect): CitcomSVelocity /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSVelocity.net
+// macro reference (indirect): CitcomSVelocity CitcomSVelocity.net
 //
-// macro reference (indirect): CitcomSViscosity /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSViscosity.net
+// macro reference (indirect): CitcomSViscosity CitcomSViscosity.net
 //
-// macro reference (direct): CitcomSImport /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/CitcomSImport.net
+// macro reference (direct): CitcomSImport CitcomSImport.net
 include "CitcomSImport.net"
 //
 // Begin MDF

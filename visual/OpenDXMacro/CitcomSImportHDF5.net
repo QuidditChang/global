@@ -5,10 +5,10 @@
 //
 //
 //
-// macro reference (direct): RTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/RTFtoXYZ.net
+// macro reference (direct): RTFtoXYZ RTFtoXYZ.net
 include "RTFtoXYZ.net"
 //
-// macro reference (direct): VelocityRTFtoXYZ /work/ess-zhangj/code/global_assimilation_phd_initial_slabs_craton_lower_mantle/visual/OpenDXMacro/VelocityRTFtoXYZ.net
+// macro reference (direct): VelocityRTFtoXYZ VelocityRTFtoXYZ.net
 include "VelocityRTFtoXYZ.net"
 //
 // Begin MDF
