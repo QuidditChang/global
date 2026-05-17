@@ -1,5 +1,6 @@
 # ltmain.sh - Provide generalized library-building support services.
 # NOTE: Changing this file will not affect anything until you rerun configure.
+echo="echo"
 #
 # Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005
 # Free Software Foundation, Inc.
