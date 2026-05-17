@@ -48,3 +48,9 @@ temp.out
 # -------------------------------------------------------
 ._*
 .DS_Store
+bin/mpipycitcoms
+bin/pycitcoms
+configure
+python/CitcomS.egg-link
+python/merlin-install.pth
+check_cpu.*
