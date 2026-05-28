@@ -125,9 +125,11 @@ void ggrd_init_tracer_flavors(struct All_variables *E)
 	else
 	  indbl = 1.0;
 	E->trace.extraq[j][0][kk]= indbl;
+        E->trace.extraq[j][1][kk]= indbl;
       }else{
 	/* below */
 	E->trace.extraq[j][0][kk]=0.0;
+        E->trace.extraq[j][1][kk]=0.0;
       }
     }
   }

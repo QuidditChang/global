@@ -30,7 +30,8 @@ def template():
 	    print >>out, "#SBATCH -N %d" % (scheduler.nodes)
             print >>out, "#SBATCH -n %d" % (scheduler.cores)
             # Lijun add temporally
-            print >>out, "#SBATCH -A TG-EAR160027"
+            print >>out, "#SBATCH -A FTA-SUB-CalTech"
+            #print >>out, "#SBATCH -A TG-EAR160027"
             #print >>out, "#SBATCH -A EAR100021"
 
             print >>out

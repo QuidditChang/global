@@ -114,7 +114,6 @@ void full_temperature_boundary_conditions(E)
   void temperatures_conform_bcs();
   void temperature_imposed_vert_bcs();
   int j,lev,noz;
-
   lev = E->mesh.levmax;
   for (j=1;j<=E->sphere.caps_per_proc;j++)    {
     noz = E->mesh.noz;

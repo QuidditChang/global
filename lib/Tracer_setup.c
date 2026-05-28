@@ -75,6 +75,7 @@ static void make_tracer_array(struct All_variables *E);
 static void generate_random_tracers(struct All_variables *E,
                                     int tracers_cap, int j);
 static void read_tracer_file(struct All_variables *E);
+static void read_tracer_file2(struct All_variables *E, int j);
 static void read_old_tracer_file(struct All_variables *E);
 static void check_sum(struct All_variables *E);
 static int isum_tracers(struct All_variables *E);
@@ -122,7 +123,8 @@ void tracer_input(struct All_variables *E)
 
         if (E->trace.ic_method==0){
             input_int("tracers_per_element",&(E->trace.itperel),"10,0,nomax",m);
-	}
+	    input_string("tracer_file",E->trace.tracer_file,"tracer.dat",m);
+        }
         else if (E->trace.ic_method==1)
             input_string("tracer_file",E->trace.tracer_file,"tracer.dat",m);
         else if (E->trace.ic_method==2) {
@@ -349,7 +351,6 @@ static void predict_tracers(struct All_variables *E)
 
     void cart_to_sphere();
 
-
     dt=E->advection.timestep;
 
 
@@ -370,14 +371,15 @@ static void predict_tracers(struct All_variables *E)
             (E->trace.get_velocity)(E,j,nelem,theta0,phi0,rad0,velocity_vector);
 
             /* Liu: smooth VV if too large */
-            /*t1 = sqrt(pow(velocity_vector[1],2)+pow(velocity_vector[2],2)+pow(velocity_vector[3],2));
+            t1 = sqrt(pow(velocity_vector[1],2)+pow(velocity_vector[2],2)+pow(velocity_vector[3],2));
             if(t1>100*E->data.scalev) {
                t2 = (100*E->data.scalev)/t1;
                velocity_vector[1] *= t2;
                velocity_vector[2] *= t2;
                velocity_vector[3] *= t2;
-            }*/
-
+            }
+            //if(E->trace.extraq[j][0][kk]==19)
+            //   velocity_vector[3]=0.0e-300; 
 
 
             x_pred=x0+velocity_vector[1]*dt;
@@ -456,7 +458,7 @@ static void correct_tracers(struct All_variables *E)
     double Vx_pred,Vy_pred,Vz_pred;
 
     void cart_to_sphere();
-
+    void sphere_to_cart();
 
     dt=E->advection.timestep;
 
@@ -487,11 +489,19 @@ static void correct_tracers(struct All_variables *E)
             Vy_pred=velocity_vector[2];
             Vz_pred=velocity_vector[3];
 
+            //if(E->trace.extraq[j][0][kk]==19)
+            //   Vz_pred=0.0e-300;
+
             x_cor=x0 + dt * 0.5*(Vx0+Vx_pred);
             y_cor=y0 + dt * 0.5*(Vy0+Vy_pred);
             z_cor=z0 + dt * 0.5*(Vz0+Vz_pred);
 
             cart_to_sphere(E,x_cor,y_cor,z_cor,&theta_cor,&phi_cor,&rad_cor);
+
+            if(E->trace.extraq[j][0][kk]==19){
+               rad_cor=0.550100;
+               sphere_to_cart(E,theta_cor,phi_cor,rad_cor,&x_cor,&y_cor,&z_cor);}
+
             (E->trace.keep_within_bounds)(E,&x_cor,&y_cor,&z_cor,&theta_cor,&phi_cor,&rad_cor);
 
             /* Fill in Current Positions (other positions are no longer important) */
@@ -647,12 +657,12 @@ static void find_tracers(struct All_variables *E)
 /* of extraq. How to interprete "flavor" is left for the application.  */
 void count_tracers_of_flavors(struct All_variables *E)
 {
-
+    int index;
     int j, flavor, e, kk, i;
     int numtracers,nox,noy,intage,num1,num2,num3;;
     int ii,jj,zz,node,nodeg;
     float rad, phi, theta, age, age1, dist, dist2, new_flag_depth, flag_depth1, flag_depth2, r_craton, dge_wid, craton_depth;
-    const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17,chem=18;
+    const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17,chem=18,chem2=19;
     double PI=3.1415926;
     double inputdata,tmp1,tmp2,*geomx1,*geomy1,*geomx2,*geomy2,*geomx3,*geomy3;
     double temp1,temp2,temp3,temp4;
@@ -661,14 +671,13 @@ void count_tracers_of_flavors(struct All_variables *E)
     float find_age_in_MY();
     int isptin(double *gx, double *gy, int num, double x, double y);
     void create_new_trench(struct All_variables *E, char *file_name, float *flag_depth, double maxdist);
-
+    
+    //index = 0;
     for (j=1; j<=E->sphere.caps_per_proc; j++) {
-
 	age=find_age_in_MY(E);
         intage=age;
 	if(E->parallel.me==0)
             fprintf(stderr,"age_tracer=%f,visit_age=%d,solution_cycles=%d\n",age,E->trench_visit_age,E->monitor.solution_cycles);
-
         /* first zero arrays */
         for (flavor=0; flavor<E->trace.nflavors; flavor++)
             for (e=1; e<=E->lmesh.nel; e++)
@@ -764,23 +773,23 @@ void count_tracers_of_flavors(struct All_variables *E)
 	    flag_depth2 = E->flag_depth2[nodeg]*1000.0/6371.0;
 
 	    /* initialize tracer flavors (for 3D model only) */
-            if(E->monitor.solution_cycles >= 0 && age1>180.0) {
-               if(dist>0.1 && E->trace.extraq[j][0][kk]==0.0 && E->monitor.solution_cycles == 0) {
-		    if(rad>0.992)
+            if(E->monitor.solution_cycles >= 0 && age1>380.0) {
+               if(dist>0.1 && E->trace.extraq[j][0][kk]==0.0 && age1>1000.0 && E->monitor.solution_cycles == 0) {
+		    if(rad>0.997)
                       E->trace.extraq[j][0][kk]=cratuc;
-                    else if(rad>0.99)
+                    else if(rad>0.994)
                       E->trace.extraq[j][0][kk]=cratlc;
                     else if(rad>0.989)
                       E->trace.extraq[j][0][kk]=cratul;
-                    else if(rad>0.985)
-                      E->trace.extraq[j][0][kk]=cratml;
                     else if(rad>0.98)
+                      E->trace.extraq[j][0][kk]=cratml;
+                    else if(rad>0.97)
                       E->trace.extraq[j][0][kk]=cratll;
                }
 	       else if(rad>0.98 && E->trace.extraq[j][0][kk]==0.0 && E->monitor.solution_cycles == 0) {
-		    if(rad>0.992)
+		    if(rad>0.997)
                       E->trace.extraq[j][0][kk]=cuc;
-                    else if(rad>0.99)
+                    else if(rad>0.994)
                       E->trace.extraq[j][0][kk]=clc;
                     else if(rad>0.989)
                       E->trace.extraq[j][0][kk]=cul;
@@ -857,7 +866,7 @@ void count_tracers_of_flavors(struct All_variables *E)
 	    }*/
 
 	    /* enforce oceanic crust tracer flavor every time step */
-	    if(age1>0.0 && age1<180.0 && (flag_depth2>=0.0 || dist>=0.08)) { // && E->sx[j][2][node]<0.23) {
+	    if(age1>0.0 && age1<380.0 && (flag_depth2>=0.0 || dist>=0.08)) { // && E->sx[j][2][node]<0.23) {
                if(rad>0.996) {
                   //if(flag_depth2>=0.02)
                      //E->trace.extraq[j][0][kk]=5.0;
@@ -872,7 +881,7 @@ void count_tracers_of_flavors(struct All_variables *E)
                   E->trace.extraq[j][0][kk]=ol;
             }
 
-	   if(E->monitor.solution_cycles==0 && age1>0.0 && age1<180.0 && flag_depth2<0.0 && flag_depth2>-0.08 && dist>0.0 && dist<0.08) {
+	   if(E->monitor.solution_cycles==0 && age1>0.0 && age1<380.0 && flag_depth2<0.0 && flag_depth2>-0.08 && dist>0.0 && dist<0.08) {
                if(dist>0.02 && rad>0.98 && rad>0.997+(0.98-0.997)*(dist-0.02)/(0.05-0.02)) {
                    if(rad>0.997)
                       E->trace.extraq[j][0][kk]=cuc;
@@ -890,11 +899,11 @@ void count_tracers_of_flavors(struct All_variables *E)
            }
 
 	   /* create pre-existing weak zone when model starts */
-           if(E->monitor.solution_cycles==0 && flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
-		temp1=0.0009-flag_depth2*flag_depth2;
-                temp2=0.026*0.026-flag_depth2*flag_depth2;
-                temp3=0.0001-flag_depth2*flag_depth2;
-                temp4=(rad-0.97)*(rad-0.97);
+           if(E->monitor.solution_cycles==0 && flag_depth2<0.0 && flag_depth2>-0.05 && rad>=0.95) {
+		temp1=0.0025-flag_depth2*flag_depth2;
+                temp2=0.046*0.046-flag_depth2*flag_depth2;
+                temp3=0.0009-flag_depth2*flag_depth2;
+                temp4=(rad-0.95)*(rad-0.95);
                 if(temp4<=temp1 && temp4>=temp3) {
                     if(temp4>temp2)
                         E->trace.extraq[j][0][kk]=oc;
@@ -927,7 +936,7 @@ void count_tracers_of_flavors(struct All_variables *E)
                 }
 
 		/* create new weakzone when new trench forms */
-		if(flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
+		/*if(flag_depth2<0.0 && flag_depth2>-0.03 && rad>=0.97) {
                 temp1=0.0009-flag_depth2*flag_depth2;
                 temp2=0.026*0.026-flag_depth2*flag_depth2;
                 temp3=0.0001-flag_depth2*flag_depth2;
@@ -938,7 +947,7 @@ void count_tracers_of_flavors(struct All_variables *E)
                     else
                         E->trace.extraq[j][0][kk]=ol;
                 }
-           }
+           	}*/
             }
 
 	    /* define oceanic plateau if necessary */
@@ -972,17 +981,25 @@ void count_tracers_of_flavors(struct All_variables *E)
 	      }*/
 
 	    /* add a chemical layer above CMB */
-            if(rad<E->sphere.ri+100.0/6371.0 && E->monitor.solution_cycles==0)
+            if(rad < E->sphere.ri+100.0/6371.0 && E->monitor.solution_cycles==0)
                  E->trace.extraq[j][0][kk]=chem;
+            if(E->trace.extraq[j][1][kk]!=-999.0 && E->monitor.solution_cycles==0){
+                 E->trace.extraq[j][0][kk]=chem2;
+                 }
 
 	    flavor = E->trace.extraq[j][0][kk];
-            E->trace.ntracer_flavor[j][flavor][e]++;
-        } /* end of kk loop */
+            if (flavor == chem2 && E->monitor.solution_cycles==0){
+            E->trace.extraq[j][2][kk]=E->sx[j][1][node];;
+            }
+            if(flavor != chem2 && E->monitor.solution_cycles==0)
+               E->trace.extraq[j][2][kk]=-999.0;
 
+            E->trace.ntracer_flavor[j][flavor][e]++;
+
+        } /* end of kk loop */
         if(intage<E->trench_visit_age && E->monitor.solution_cycles>0)
 	    E->trench_visit_age=intage;
     } /* end of j loop */
-
     return;
 }
 
@@ -991,8 +1008,9 @@ void count_tracers_of_flavors(struct All_variables *E)
 void initialize_tracers(struct All_variables *E)
 {
 
-    if (E->trace.ic_method==0)
-        make_tracer_array(E);
+    if (E->trace.ic_method==0){
+        make_tracer_array(E);}
+        //read_tracer_file(E);}
     else if (E->trace.ic_method==1)
         read_tracer_file(E);
     else if (E->trace.ic_method==2)
@@ -1017,7 +1035,6 @@ void initialize_tracers(struct All_variables *E)
 
 
     /* count # of tracers of each flavor */
-
     if (E->trace.nflavors > 0)
         count_tracers_of_flavors(E);
 
@@ -1033,11 +1050,25 @@ static void make_tracer_array(struct All_variables *E)
 {
 
     int tracers_cap;
-    int j;
     double processor_fraction;
 
     void generate_random_tracers();
     void init_tracer_flavors();
+    int icheck_processor_shell();
+    void sphere_to_cart();
+    void expand_tracer_arrays();
+
+    double x,y,z;
+    double theta,phi,rad;
+    double extra[100];
+
+    
+    int kk;
+    int icheck;
+    int iestimate;
+    int icushion;
+    int i, j;
+    FILE *fptracer;
 
     if (E->parallel.me==0) fprintf(stderr,"Making Tracer Array\n");
 
@@ -1056,8 +1087,6 @@ static void make_tracer_array(struct All_variables *E)
 
         generate_random_tracers(E, tracers_cap, j);
 
-
-
     }/* end j */
 
 
@@ -1073,26 +1102,41 @@ static void generate_random_tracers(struct All_variables *E,
                                     int tracers_cap, int j)
 {
     void cart_to_sphere();
+    int icheck_processor_shell();
+    int isum_tracers();
+    void sphere_to_cart();
+    void cart_to_sphere();
+    void expand_tracer_arrays();
     int kk;
     int ival;
     int number_of_tries=0;
     int max_tries;
-    int tracers_el,ntracers_el,nel,node;
+    int tracers_el,ntracers_el,nel,node,tracers_el_new,tracers_cap_new;
 
     double x,y,z;
     double theta,phi,rad;
     double xmin,xmax,ymin,ymax,zmin,zmax;
-    double random1,random2,random3;
+    double random1,random2,random3;   
 
+    int icheck;
+    int i;
+    
 
-    allocate_tracer_arrays(E,j,tracers_cap);
+    char input_s[1000],tracer_file[200];
+    int number_of_tracers, ncolumns;
+    double extra[100];
+    FILE *fptracer;
+    void read_tracer_file2();
 
+    tracers_cap_new = tracers_cap+1000;
+    allocate_tracer_arrays(E,j,tracers_cap_new);
     /* Jiashun has made some modifications */
     /* Finding the min/max of the cartesian coordinates. */
     /* One must loop over E->X to find the min/max, since the 8 corner */
     /* nodes may not be the min/max. */
     for(nel=1; nel<=E->lmesh.nel; nel++) {
     tracers_el = E->trace.itperel;
+    tracers_el_new = tracers_el -1.0;
     xmin = ymin = zmin = E->sphere.ro;
     xmax = ymax = zmax = -E->sphere.ro;
     for (kk=1; kk<=8; kk++) {
@@ -1114,7 +1158,7 @@ static void generate_random_tracers(struct All_variables *E,
 
     ntracers_el = 0;
 
-    while (ntracers_el < tracers_el) {
+    while (ntracers_el < tracers_el_new) {
 
         number_of_tries++;
         max_tries=100*tracers_cap;
@@ -1170,10 +1214,12 @@ static void generate_random_tracers(struct All_variables *E,
         E->trace.basicq[j][3][kk]=x;
         E->trace.basicq[j][4][kk]=y;
         E->trace.basicq[j][5][kk]=z;
+        E->trace.extraq[j][1][kk]=-999;
 
     } /* end while */
-    }
 
+    }
+    read_tracer_file2(E,j);
     return;
 }
 
@@ -1210,7 +1256,7 @@ static void read_tracer_file(struct All_variables *E)
 
     for (j=1;j<=E->sphere.caps_per_proc;j++) {
 
-    sprintf(tracer_file,"%s/tracer.%d.dat",E->trace.tracer_file,E->parallel.me);
+    sprintf(tracer_file,"%s",E->trace.tracer_file);
     fptracer=fopen(tracer_file,"r");
     fprintf(E->trace.fpt,"Opening %s\n",E->trace.tracer_file);
 
@@ -1311,6 +1357,124 @@ static void read_tracer_file(struct All_variables *E)
     return;
 }
 
+static void read_tracer_file2(struct All_variables *E, int j)
+{
+
+    char input_s[1000],tracer_file[200];
+
+    int number_of_tracers, ncolumns;
+    int kk;
+    int icheck;
+    int iestimate;
+    int icushion;
+    int i;
+
+    int icheck_processor_shell();
+    int isum_tracers();
+    void sphere_to_cart();
+    void cart_to_sphere();
+    void expand_tracer_arrays();
+
+    double x,y,z;
+    double theta,phi,rad;
+    double extra[100];
+
+    FILE *fptracer;
+
+
+    sprintf(tracer_file,"%s",E->trace.tracer_file);
+    fptracer=fopen(tracer_file,"r");
+    fprintf(E->trace.fpt,"Opening %s\n",E->trace.tracer_file);
+
+    fgets(input_s,200,fptracer);
+    sscanf(input_s,"%d %d",&number_of_tracers,&ncolumns);
+    fprintf(E->trace.fpt,"%d Tracers, %d columns in file \n",
+            number_of_tracers, ncolumns);
+
+    /* some error control */
+    //if (E->trace.number_of_extra_quantities+3 != ncolumns) {
+    if (E->trace.number_of_extra_quantities+1 != ncolumns) {
+        fprintf(E->trace.fpt,"ERROR(read tracer file)-wrong # of columns\n");
+        fflush(E->trace.fpt);
+        exit(10);
+    }
+
+
+    /* initially size tracer arrays to number of tracers divided by processors */
+
+        for (kk=1;kk<=number_of_tracers;kk++) {
+            fgets(input_s,200,fptracer);
+            if (E->trace.number_of_extra_quantities==0) {
+                sscanf(input_s,"%lf %lf %lf\n",&theta,&phi,&rad);
+            }
+            else if (E->trace.number_of_extra_quantities>0) {
+                sscanf(input_s,"%lf %lf %lf %lf\n",&theta,&phi,&rad,&extra[0]);
+            }
+            /* XXX: if E->trace.number_of_extra_quantities is greater than 1 */
+            /* this part has to be changed... */
+            else {
+                fprintf(E->trace.fpt,"ERROR(read tracer file)-huh?\n");
+                fflush(E->trace.fpt);
+                exit(10);
+            }
+
+            sphere_to_cart(E,theta,phi,rad,&x,&y,&z);
+
+
+            /* make sure theta, phi is in range, and radius is within bounds */
+
+            (E->trace.keep_within_bounds)(E,&x,&y,&z,&theta,&phi,&rad);
+
+            /* check whether tracer is within processor domain */
+
+            icheck=1;
+            if (E->parallel.nprocz>1) icheck=icheck_processor_shell(E,j,rad);
+            if (icheck!=1) continue;
+
+            if (E->parallel.nprocxy==1)
+                icheck=regional_icheck_cap(E,0,theta,phi,rad,rad);
+            else
+                icheck=full_icheck_cap2(E,0,x,y,z,rad);
+
+            if (icheck==0) continue;
+
+            /* if still here, tracer is in processor domain */
+
+
+            E->trace.ntracers[j]++;
+
+            if (E->trace.ntracers[j]>=(E->trace.max_ntracers[j]-5)) expand_tracer_arrays(E,j);
+
+            E->trace.basicq[j][0][E->trace.ntracers[j]]=theta;
+            E->trace.basicq[j][1][E->trace.ntracers[j]]=phi;
+            E->trace.basicq[j][2][E->trace.ntracers[j]]=rad;
+            E->trace.basicq[j][3][E->trace.ntracers[j]]=x;
+            E->trace.basicq[j][4][E->trace.ntracers[j]]=y;
+            E->trace.basicq[j][5][E->trace.ntracers[j]]=z;
+            E->trace.extraq[j][1][E->trace.ntracers[j]]=extra[0];
+            /*for (i=0; i<E->trace.number_of_extra_quantities-0; i++)
+                E->trace.extraq[j][i][E->trace.ntracers[j]]=extra[i];*/
+
+        } /* end kk, number of tracers */
+
+        fprintf(E->trace.fpt,"Number of tracers in this cap is: %d\n",
+                E->trace.ntracers[j]);
+
+
+    fclose(fptracer);
+
+    //icheck=isum_tracers(E);
+
+    /*if (icheck!=number_of_tracers) {
+        fprintf(E->trace.fpt,"ERROR(read_tracer_file) - tracers != number in file\n");
+        fprintf(E->trace.fpt,"Tracers in system: %d\n", icheck);
+        fprintf(E->trace.fpt,"Tracers in file: %d\n", number_of_tracers);
+        fflush(E->trace.fpt);
+        exit(10);
+    }*/
+
+    return;
+}
 
 /************** READ OLD TRACER FILE *************************************/
 /*                                                                       */

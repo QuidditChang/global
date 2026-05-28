@@ -50,6 +50,7 @@ struct TRACE{
     int number_of_basic_quantities;
     int number_of_extra_quantities;
     int number_of_tracer_quantities;
+    int tracers_index;   /* Jie defined for tracer index*/
 
     double *basicq[13][100];
     double *extraq[13][100];

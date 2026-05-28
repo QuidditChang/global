@@ -206,6 +206,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
 
     int i,j,m;
     float temp1,temp2,*vvvis;
+    float rad;
     double *TG;
 
     const int vpts = vpoints[E->mesh.nsd];
@@ -235,7 +236,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
        record_tracer_visc(E,E->oldEVI[E->mesh.levmax]); */
 
     /* Lijun add plate boundary features*/
-    //visc_from_PB(E,evisc,propogate);
+    visc_from_PB(E,evisc,propogate);
 
     //if(E->monitor.solution_cycles < 4000) {
         //weak_slab_hinge_wedge(E,evisc);
@@ -252,10 +253,18 @@ void get_system_viscosity(E,propogate,evisc,visc)
     /* min/max cut-off */
     if(E->viscosity.MAX) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(i=1;i<=E->lmesh.nel;i++)
+            for(i=1;i<=E->lmesh.nel;i++) {
+		rad = 0.5*(E->sx[m][3][E->ien[m][i].node[1]]+E->sx[m][3][E->ien[m][i].node[8]]);
                 for(j=1;j<=vpts;j++)
-                    if(evisc[m][(i-1)*vpts + j] > E->viscosity.max_value)
-                        evisc[m][(i-1)*vpts + j] = E->viscosity.max_value;
+		    if(rad>0.89641) {
+                        if(evisc[m][(i-1)*vpts + j] > E->viscosity.max_value)
+                            evisc[m][(i-1)*vpts + j] = E->viscosity.max_value;
+		    }
+		    else {
+                        if(evisc[m][(i-1)*vpts + j] > 5*E->viscosity.max_value)
+                            evisc[m][(i-1)*vpts + j] = 5*E->viscosity.max_value;
+		    }
+	    }
     }
 
     if(E->viscosity.MIN) {
@@ -284,7 +293,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
        visc_from_gint_to_nodes(E,evisc,visc,E->mesh.levmax);
        visc_from_nodes_to_gint(E,visc,evisc,E->mesh.levmax);
        /* viscosity filtering */
-       //viscosity_filter(E,evisc);
+       viscosity_filter(E,evisc);
     }
 
     /* update internal VBC */
@@ -459,14 +468,31 @@ void visc_from_T(E,EEta,propogate)
                     r = E->sx[m][3][node];
 
                     l = E->mat[m][i];
-                    tempa = E->viscosity.N0[l-1];
-
-                    if(r>0.993){
-                        tempa = E->viscosity.N0[0] + (E->viscosity.N0[1]-E->viscosity.N0[0])*(cos((r-0.993)/0.007*3.14159)+1)/2;
-                        viscE = E->viscosity.E[0] + (E->viscosity.E[1]-E->viscosity.E[0])*(cos((r-0.993)/0.007*3.14159)+1)/2;
-                        viscT = E->viscosity.T[0] + (E->viscosity.T[1]-E->viscosity.T[0])*(cos((r-0.993)/0.007*3.14159)+1)/2;
+                    //tempa = E->viscosity.N0[l-1];//
+                    if(r<0.8430387 && r>=0.55){
+                        tempa = 100; //- (100-0.1)*(cos((r-0.55)/(0.6075969-0.55)*3.14159)+1)/2;
+                        viscE = E->viscosity.E[l-1];
+                        viscT = E->viscosity.T[l-1];
+                        }
+                   /* else if(r<0.8430387 && r>=0.6075969) {
+                        tempa = 100; //10 + (100-10)*(cos((r-0.6075969)/(0.874431-0.6075969)*3.14159)+1)/2;
+                        viscE = E->viscosity.E[l-1];
+                        viscT = E->viscosity.T[l-1];
+                    }*/
+                    else if(r<0.89640558 && r>=0.8430387) {
+                        tempa = 0.5; //1 + (10-1)*45.5071428*(0.89640558-r);
+                        viscE = E->viscosity.E[l-1];
+                        viscT = E->viscosity.T[l-1];
                     }
-                    else if(r<0.95 && r>=0.92) {
+
+
+                     
+                   /* if(r<0.6075969 && r>=0.55){
+                        tempa = 100- (100-0.1)*(cos((r-0.55)/(0.6075969-0.55)*3.14159)+1)/2;
+		        viscE = E->viscosity.E[l-1];
+		        viscT = E->viscosity.T[l-1];
+                        }*/
+                    /*else if(r<0.95 && r>=0.92) {
                         tempa = E->viscosity.N0[1] + (E->viscosity.N0[2]-E->viscosity.N0[1])*(cos((r-0.92)/0.03*3.14159)+1)/2;
                         viscE = E->viscosity.E[1] + (E->viscosity.E[2]-E->viscosity.E[1])*(cos((r-0.92)/0.03*3.14159)+1)/2;
                         viscT = E->viscosity.T[1] + (E->viscosity.T[2]-E->viscosity.T[1])*(cos((r-0.92)/0.03*3.14159)+1)/2;
@@ -476,18 +502,13 @@ void visc_from_T(E,EEta,propogate)
                         viscE = E->viscosity.E[2] + (E->viscosity.E[3]-E->viscosity.E[2])*(cos((r-0.85)/0.06*3.14159)+1)/2;
                         viscT = E->viscosity.T[2] + (E->viscosity.T[3]-E->viscosity.T[2])*(cos((r-0.85)/0.06*3.14159)+1)/2;
                     }
-		    /*else if(r<=0.85 && r>0.80) {
-                        tempa = E->viscosity.N0[3] + (50.0-E->viscosity.N0[3])*(cos((r-0.80)/0.05*3.14159)+1)/2;
+		    else if(r<=0.85 && r>0.80) {
+                        tempa = E->viscosity.N0[3] + (100.0-E->viscosity.N0[3])*(cos((r-0.80)/0.05*3.14159)+1)/2;
                         viscE = E->viscosity.E[3] + (E->viscosity.E[3]-E->viscosity.E[3])*(cos((r-0.80)/0.05*3.14159)+1)/2;
                         viscT = E->viscosity.T[3] + (E->viscosity.T[3]-E->viscosity.T[3])*(cos((r-0.80)/0.05*3.14159)+1)/2;
                     }
-                    else if(r<=0.80 && r>0.65) {
-                        tempa = 50.0;
-                        viscE = E->viscosity.E[3];
-                        viscT = E->viscosity.T[3];
-                    }
-                    else if(r<=0.65 && r>0.60) {
-                        tempa = 50.0+ (E->viscosity.N0[3]-50.0)*(cos((r-0.60)/0.05*3.14159)+1)/2;
+                    else if(r<=0.80 && r>0.70) {
+                        tempa = 100.0+ (E->viscosity.N0[3]-100.0)*(cos((r-0.70)/0.10*3.14159)+1)/2;
                         viscE = E->viscosity.E[3] + (E->viscosity.E[3]-E->viscosity.E[3])*(cos((r-0.60)/0.05*3.14159)+1)/2;
                         viscT = E->viscosity.T[3] + (E->viscosity.T[3]-E->viscosity.T[3])*(cos((r-0.60)/0.05*3.14159)+1)/2;
                     }*/
@@ -495,7 +516,14 @@ void visc_from_T(E,EEta,propogate)
                         tempa = E->viscosity.N0[l-1];
                         viscE = E->viscosity.E[l-1];
                         viscT = E->viscosity.T[l-1];
-                    }
+                         }
+		    /* superplasticity layer */
+		    /*if(r<0.895 && r>=0.88) {
+		         tempa = tempa * 0.01;
+		         viscE = viscE/3.0;
+		    }*/
+		    /*if(fabs(E->flag_depth2[nodeg])<0.5 && r>0.978)
+			viscE = 1.0 + (viscE-1.0)*fabs(E->flag_depth2[nodeg])/0.5;*/
 
                     j = 0;
 
@@ -529,28 +557,25 @@ void visc_from_T(E,EEta,propogate)
                             zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
                         }
 
-                        if(E->control.mat_control==0) {
- 			   /* no TDEPV inside the air layer*/
-			   if(E->control.tracer && r>0.95 && E->trace.ntracer_flavor[m][oc][i]>0.0) {
-			      if(fabs(E->flag_depth2[nodeg])*1000.0/6371.0<0.02 || (E->age_t[nodeg]>180.0/E->data.scalet && (fabs(E->flag_depth2[nodeg])<0.98 || r<0.985)) || (E->age_t[nodeg]<195.0/E->data.scalet && r<0.992))
-				if(temp<one)
-				    temp = one;
-                           }
-			   for(kk=weakarc;kk<=cecl;kk++) {
-                               if(r>0.896 && temp<one && E->trace.ntracer_flavor[m][kk][i]>0.0)
-                                    temp = one;
-                           }
+	                one = E->control.lith_age_mantle_temp + slope * (zzz - E->control.lith_age_depth);
 
-			   /*if(r>0.97 && fabs(E->flag_depth2[nodeg])*1000.0>200) { // && E->age_t[nodeg]>180.0/E->data.scalet) {
+                        if(E->control.mat_control==0) {
+			   /*if(r>0.97 && fabs(E->flag_depth2[nodeg])*1000.0>200) { // && E->age_t[nodeg]>380.0/E->data.scalet) {
 				temp1=10;
 				if(r<0.98)
 				    temp1=tempa+(temp1-tempa)*cos((0.98-r)/0.02*3.1415926);
 				tempa=temp1;
 			   }*/
 
-	                   one = E->control.lith_age_mantle_temp + slope * (zzz - E->control.lith_age_depth);
-
-                           EEta[m][ (i-1)*vpts + jj ] = tempa*exp(viscE/(temp+viscT) - viscE/(one+viscT) );
+			   if(temp < one)  /* enhance the weak viscosity of plume */
+			      // if(r<0.9364)
+                                EEta[m][ (i-1)*vpts + jj ] = tempa*exp(2.8/(temp+viscT) - 2.8/(one+viscT) );
+                           
+			      // else
+                              //     EEta[m][ (i-1)*vpts + jj ] = tempa*exp(viscE/(temp+viscT) - viscE/(one+viscT) );
+			  // }
+			   else
+                               EEta[m][ (i-1)*vpts + jj ] = tempa*exp(viscE/(temp+viscT) - viscE/(one+viscT) );
 
                            /*temp1 = 25.0; flag=1.0;
                            if(EEta[m][(i-1)*vpts+jj]>temp1 && flag && r>0.92 && r<1.1 && fabs(E->flag_depth2[nodeg])*1000.0/6371.0<0.1)
@@ -628,8 +653,8 @@ void visc_from_PB(E,EEta,propogate)
     int m,i,j,k,l,z,jj,kk,imark,iii,jjj,kkk,intage,node,nodeg,nnn,ttt,count,bd_i,bd_j,bd_k;
     int theta_start,fi_start,rheo_trick,cap,flag,flag1,flag2,*PB3[4],cut_ocean_plate;
     int ie,el,lv,start_lev,start_node,node_coarse,node_fine;
-    float zero,e_6,one,eta0,Tave,depth,temp,tempa,temp1,temp2,TT[9],lon_inc,lon_inc1,lon_dcr;
-    float zzz,zz[9],lon_temp,r_temp,r_min,lon_max,guide_dep,dip,dist1,d_wdg;
+    float zero,e_6,one,eta0,Tave,depth,temp,tempa,temp1,temp2,temp3,TT[9],lon_inc,lon_inc1,lon_dcr;
+    float zzz,zz[9],lon_temp,r_temp,r_min,lon_max,guide_dep,dip,dist1,dist2,dist_max,d_wdg;
     float visc1, visc2, tempa_exp,*PB1[4],*PB2[4];
     float phi, theta, rad, fi, r, fi_trench, the_trench, v_trench;
     float find_age_in_MY();
@@ -806,155 +831,29 @@ void visc_from_PB(E,EEta,propogate)
                     j = 0;
 
                     for(jj=1;jj<=vpts;jj++) {
+			temp1 = 100.0;
+                        temp2 = 1.0;
 
-			if(rheo_trick == 1) { //a strong slab in the upper mantle as a stress guide
-                                temp1 = 100.0;
-                                temp2 = 0.1;
-                                if(flag > 0 && E->sphere.caps > 1) {
-                                        fi = PB1[2][flag]+2*3.1415926;
-                                        lon_inc = 0.7;
-                                        if (E->sx[m][2][node]>fi-0.1 && E->sx[m][2][node]<fi+lon_inc && r>0.91) {
-                                            if (E->sx[m][2][node]>fi && E->sx[m][2][node]<fi+0.06 && r>0.99)
-                                                EEta[m][ (i-1)*vpts + jj ] = temp2;
-                                            if (E->sx[m][2][node]>fi-0.1 && temp<0.9*E->control.TBCbotval && r<0.975)
-                                                if (E->sx[m][2][node]<fi-0.02 && flag2<=1*vpts || E->sx[m][2][node]>fi-0.02 && E->sx[m][2][node]<fi+0.03 && flag2<=2*vpts || E->sx[m][2][node]>fi+0.03 && flag2<=3*vpts) {
-                                                    flag2 += 1;
-                                                    EEta[m][ (i-0)*vpts + jj ] = temp2;
-                                                }
-                                            if (EEta[m][ (i+1)*vpts + jj ] == temp2 && EEta[m][ (i)*vpts + jj ] != temp2) {
-                                                EEta[m][ (i-1)*vpts + jj ] = temp1;
-                                                EEta[m][ (i-2)*vpts + jj ] = temp1;
-                                            }
-                                        }
-                                }
+                        tempa = E->viscosity.N0[l-1];
+                        viscE = E->viscosity.E[l-1];
+                        viscT = E->viscosity.T[l-1];
+
+                        dist_max=0.03;
+                        dist1 = -E->flag_depth2[nodeg]*1000.0/6371.0+dist_max/2.0;
+                        dist2 = -E->flag_depth2[nodeg]*1000.0/6371.0-2.5*(1.0-r);
+                        if(r>=0.97 && fabs(dist1)<=dist_max && dist2<=0) {
+                            temp3 = temp2+(1.0-cos(fabs(dist1)/dist_max*3.1415926/2.0))*(temp1-temp2);
+                            if(EEta[m][ (i-1)*vpts + jj ]>temp3)
+                                EEta[m][ (i-1)*vpts + jj ] = temp3;
                         }
 
-			else if(rheo_trick == 2) { //lateral viscosity variation underneath continent
-                                temp1 = 100.0;
-                                temp2 = 0.1;
-                                fi = PB1[2][flag]+2*3.1415926;
-                                if(r>0.97 && E->sx[m][2][node]>=fi && E->sx[m][2][node]<=fi+PB1[3][flag] && age >50) {
-                                        EEta[m][ (i)*vpts + jj ] = temp1;
-                                }
+			//dist_max=0.01+(1.0-r)*2.0;
+                        dist_max=0.015;
+			if(r>=0.97 && fabs(dist2)<=2*dist_max) {
+                            temp3 = temp2+(1.0-cos(pow(fabs(dist2)/(2*dist_max),3.0)*3.1415926/2.0))*(temp1-temp2);
+                            if(EEta[m][ (i-1)*vpts + jj ]>temp3)
+                                EEta[m][ (i-1)*vpts + jj ] = temp3;
                         }
-			
-			else if(rheo_trick >= 3) { // stress guide + lateral viscosity variation
-                                temp1 = 100.0;
-                                temp2 = 0.1;
-                                if(flag > 0 && E->sphere.caps > 1) {
-                                        fi = PB1[2][flag]+2*3.1415926-0.06;
-                                        lon_inc = 1.5;
-                                        //lon_inc = 0.5;
-                                        lon_inc1 = lon_inc;
-                                        lon_dcr = 0.15;
-                                        guide_dep = 0.91;
-
-
-					if (E->sx[m][2][node]>fi-lon_dcr && E->sx[m][2][node]<fi+0.5) {
-					    if(r > 0.98)
-                                                EEta[m][ (i-1)*vpts + jj ] = temp1;	
-					    if(E->sphere.cap[m].V[3][node] > 500.0 && E->T[m][node] <= 1.0 && r > 0.95)
-					            E->T[m][node] += (1.0-E->control.TBCbotval)*(E->sphere.cap[m].V[3][node]/10000.0)*(0.001); //melt ~ vertical velo. * timestep
-                                        }
-
-			
-					if (E->sx[m][2][node]>fi && E->sx[m][2][node]<fi+lon_inc1+0.03 && r>0.99){
-                                                EEta[m][ (i-1)*vpts + jj ] = temp2;
-                                        } //end of weak layer definition
-
-                                } //end of caps > 1
-
-				else if(E->sphere.caps == 1) {
-					    temp2 = 7.0; 
-					    //temp2 = 3.0;
-					    fi = 0.52+v_trench*(3.14159/(11.1*180.0))*(E->control.start_age-age);
-					    //if(age<191.0) 
-						//fi -= 2.0*(3.14159/(11.1*180.0))*(191.0-age);
-                                            //temp1 = phi-((fi+0.02)+temp2*(1.0-r));
-                                            temp1 = phi-((fi+0.02)+temp2*(1.0-r));
-                                            dist1 = 0.02; //0.03
-                                            if(temp1>-dist1 && temp1<dist1 && r>0.99 && phi<fi+0.02) { // && theta<=lat_max+0.015 && theta>=lat_min+0.005) {
-                                                //temp2 = 1.0 - cos((r-0.98)/0.02*1.57); //smooth in depth
-                                                //temp2 = 0.01+(1.0-(1*cos((pow(temp1/dist1,1)*1.57)))); //in fi
-						temp2 = 0.001+(1.0-(1*cos((pow(temp1/dist1,0.3)*1.57))));
-                                                if(EEta[m][(i-1)*vpts+jj]>temp2) { // && theta<=lat_max-0.005 && theta>=lat_min+0.0) {
-                                                  if(r>0.99)
-                                                     EEta[m][(i-1)*vpts+jj]=temp2*1*cos((r-0.99)/0.01*1.57);
-                                                  else {
-                                                     temp1 = EEta[m][(i-1)*vpts+jj];
-                                                     temp2 = temp2*1+ (temp1-temp2*1)*(0.99-r)/(0.99-0.98);
-                                                     EEta[m][(i-1)*vpts+jj] = temp2;
-                                                  }
-                                                }
-                                            } //end of weak top
-
-					    temp2 = 5.0;
-					    if(v_trench>-2.0) temp2 = 5.0;
-                                            temp1 = phi-((fi-0.0)+temp2*(1.0-r));
-                                            dist1 = 0.02;
-                                            if(temp1>0.0-dist1 && temp1<dist1 && r>0.99 && phi>fi-0.03){
-                                                if(temp1<0.0) temp2 = (cos(pow(temp1/dist1,1)*3.1416)+1)/2;
-                                                if(temp1>=0.0) temp2 = (cos(pow(temp1/dist1,1)*3.1416)+1)/2;
-                                                temp2 = 0.001 + (1.0 - temp2);
-                                                if(EEta[m][(i-1)*vpts+jj]>temp2) { // && theta<=lat_max-0.005 && theta>=lat_min+0.0) {
-                                                  if(temp1>0.0-dist1 && r>0.99)
-						    /*if(E->control.tracer && E->trace.ntracer_flavor[m][0][i] > 0.0 
-							|| E->control.tracer && E->trace.ntracer_flavor[m][1][i] > 0.0 
-							|| !E->control.tracer) */
-                                                       EEta[m][(i-1)*vpts+jj]=temp2; // + (EEta[m][(i-1)*vpts+jj]-temp2)*((1-r)/0.01);
-                                                  /*if(phi>fi && phi<fi+0.05 && r>0.99 && phi-((fi-0.0)+1*(1.0-r))>0.0) {
-                                                     dist1 = 1.0 - cos(pow((1.0-r)/0.01,2)*1.57);
-                                                     if(EEta[m][(i-1)*vpts+jj]>temp2) EEta[m][(i-1)*vpts+jj] = dist1;
-                                                  }*/
-                                                }
-                                            }  //end of weak subduction zone
-
-					    /* add a weak mantle wedge atop slab */
-                                            temp1 = phi-fi;
-                                            dist1 = 0.05;
-                                            dip = 1; d_wdg = 0.975;
-					    if(phi-(fi+dip*(1.0-r))>0.0){
-                                                if(temp1>=0.0 && temp1<dist1 && r>d_wdg && r<1.0) {
-                                                  if(E->T[m][node]>=0.7*E->control.lith_age_mantle_temp && flag2==0) {
-                                                    temp2 = (1.0-E->T[m][node]/E->control.lith_age_mantle_temp)*EEta[m][(i-1)*vpts+jj];
-                                                    temp2 += (EEta[m][(i-1)*vpts+jj]-temp2)*cos(pow((r-d_wdg)/(1.0-d_wdg),0.2)*1.57);
-                                                    if(temp1>dist1*3/4.0)
-                                                        temp2 += (EEta[m][(i-1)*vpts+jj]-temp2)*cos(pow((dist1-temp1)/(dist1/4.0),1)*1.57);
-                                                    if(temp2 < 0.01)
-                                                        temp2 = 0.01;
-						    if(E->control.tracer && E->trace.ntracer_flavor[m][0][i] > 0.0
-						        || E->control.tracer && E->trace.ntracer_flavor[m][1][i] > 0.0
-							|| !E->control.tracer) 
-                                                        EEta[m][(i-1)*vpts+jj] = temp2;
-                                                  }
-                                                  else if(E->T[m][node]>=E->T[m][node-1]) /* T decreases downward */
-						     if(E->T[m][node]<0.7*E->control.lith_age_mantle_temp)
-                                                        flag2 = 1; 
-                                                }
-                                              } //end of mantle wedge
-
-					      /* add a weak layer atop slab */
-					      /*temp1 = phi-(fi+1.0*(1.0-r));
-                                              if(flag1<=3*vpts && temp1>0.0 && temp1<0.1 && r<0.99 && r>0.97) {
-                                                if(E->T[m][node]<=0.95*E->control.lith_age_mantle_temp && (E->T[m][node]>=E->T[m][node-1] && iii>1)) {
-                                                    EEta[m][(i-1)*vpts+jj] *= 0.001;
-						    if(iii<=E->lmesh.noz-1)
-                                                    	EEta[m][(i)*vpts+jj] *= 0.001;
-						    if(iii<=E->lmesh.noz-2)
-                                                    	EEta[m][(i+1)*vpts+jj] *= 0.001; 
-                                                    flag1 += 1;
-                                                }
-                                              } */  /* end of weak layer */
-
-					      /* add strong overriding plate */
-                                              /*if(phi>fi+0.03) // && E->age_t[nodeg]>180.0/E->data.scalet)
-                                                if(phi-((fi+0.03)+2.0*(1.0-r))>0.0 && r>0.98 && E->T[m][node]>0.95*E->control.lith_age_mantle_temp) {
-                                                    EEta[m][(i-1)*vpts+jj] = 50.0;
-                                                }*/ // end of strong continent
-
-                                    } // end of caps == 1
-
-                              } // end of rheo_trick >= 3
 
 		       /* add a weak boundary surrounding the box */
                         /*temp1 = E->viscosity.N0[l-1];
@@ -1541,7 +1440,7 @@ void visc_from_P(E,EEta,oldEEta)
     float theta,phi,rad,age,v_trench,dist,age1;
     float find_age_in_MY();
     double t1,t2;
-    int m,e,l,z,jj,kk,p,iii,jjj,node,nodeg;
+    int m,e,l,z,ii,jj,kk,p,iii,jjj,node,nodeg;
     const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17,chem=18;
     FILE *fp1;
 
@@ -1637,26 +1536,6 @@ void visc_from_P(E,EEta,oldEEta)
           /* min of depth dep. and constant yield stress */
           tau = E->viscosity.pdepv_y[l];
 
-	  /* reduced yld stress on both sides of subduction zones */
-          for(p=cuc; p<=cll; p++) {
-             if(E->trace.ntracer_flavor[m][p][e]>0.0 && rad>0.95)
-               tau = pow(3,6-p) * E->viscosity.pdepv_y[l];
-          }
-
-          /* reduced yld stress in the cratonic root */
-          for(p=cratuc; p<=cecl; p++) {
-              if(E->trace.ntracer_flavor[m][p][e]>0.0 && rad>0.95)
-                 tau = pow(3,11-p) * E->viscosity.pdepv_y[l];
-          }
-
-	  /* reduced yld stress in the weakarc */
-          if(E->trace.ntracer_flavor[m][weakarc][e]>0.0 && rad>0.95)
-                 tau = pow(3,-3) * E->viscosity.pdepv_y[l];
-
-	  /* increased yld stress if within the cold slab */
-	  if(E->T[m][E->ien[m][e].node[1]]<E->control.lith_age_mantle_temp)
-	     tau = 1.0 * E->viscosity.pdepv_y[l];
-
           /* yield viscosity */
 	  eta_p = tau/(2.0 * eedot[e] + 1e-7); /* + E->viscosity.pdepv_offset; */
 
@@ -1672,22 +1551,14 @@ void visc_from_P(E,EEta,oldEEta)
 	   oldEEta[m][ (e-1)*vpts + jj ] =  EEta[m][ (e-1)*vpts + jj ];
 
 	   /* yielding within the cold slab */
-            if(E->T[m][E->ien[m][e].node[1]]<E->control.lith_age_mantle_temp && rad>0.9 && rad<=0.998) {
-		if(dist<0.1 || age1>180.0 || E->flag_depth2[nodeg]<-0.2) {
-		    //EEta[m][(e-1)*vpts + jj] = eta_new+(EEta[m][(e-1)*vpts+jj]-eta_new)*(1.0-cos(pow(fabs(dist+0.015)/t2,3)*1.57));
-		    if(E->trace.ntracer_flavor[m][cuc][e]<=0.0 && E->trace.ntracer_flavor[m][cratuc][e]<=0.0 && EEta[m][(e-1)*vpts + jj]>eta_new)
-		        EEta[m][(e-1)*vpts + jj] = eta_new;
+            if(E->T[m][E->ien[m][e].node[1]]<E->control.lith_age_mantle_temp && rad>0.9) {
+		if(dist<0.1) {
+		    for(ii=oc;ii<=oecl;ii++) {
+		        if(E->trace.ntracer_flavor[m][ii][e]>0.0 && EEta[m][(e-1)*vpts + jj]>eta_new)
+		            EEta[m][(e-1)*vpts + jj] = eta_new;
+		    }
 		}
             }
-	    /* Yielding within compostional field (background p=0) */
-            /*for(p=cuc; p<=cratll; p++) {
-                if(E->trace.ntracer_flavor[m][p][e] > 0.0 && rad>0.95) {
-                   if(fabs(dist)<0.05 || (rad<0.999 && age1>180.0)) {
-		      if(EEta[m][(e-1)*vpts + jj]>eta_new)
-                          EEta[m][(e-1)*vpts + jj] = eta_new;
-		   }
-                }
-            }*/
 	  
 	    /* calculate viscosity change due to plasticity */
 	    oldEEta[m][ (e-1)*vpts + jj ] =  EEta[m][(e-1)*vpts+jj]/oldEEta[m][(e-1)*vpts+jj];
@@ -2035,7 +1906,7 @@ void visc_from_C(E,EEta,oldEEta)
             /* geometric mean of viscosity */
             vmean = cbackground * E->viscosity.cdepv_ff[0];
             for(p=0; p<E->composition.ncomp; p++) {
-		if(p==0 && age>180.0 && dist>0.05 && rad>0.985)
+		if(p==0 && age>380.0 && dist>0.05 && rad>0.985)
 		    continue;
                 vmean += cc_loc[p] * E->viscosity.cdepv_ff[p+1];
             }
@@ -2043,21 +1914,21 @@ void visc_from_C(E,EEta,oldEEta)
             v_now = EEta[m][ (i-1)*vpts + jj ]*vmean;
 
 	    /* multiply the viscosity with this prefactor */
-            if(E->trace.ntracer_flavor[m][oc][i]>0.0) {
-               if(dist<0.01 || (age>180.0 && (dist<0.05 || rad<0.985))) {
-                if(rad>0.95) {
+            /*if(E->trace.ntracer_flavor[m][oc][i]>0.0) {
+               if(dist<0.01 || (age>380.0 && (dist<0.05 || rad<0.985))) {
+                if(rad>0.97) {
                       EEta[m][ (i-1)*vpts + jj ] *= vmean;
                       if(EEta[m][ (i-1)*vpts +jj]>0.05) EEta[m][(i-1)*vpts+jj] = 0.05;
                    }
                 }
-               else if(dist<0.01 || (age<180.0 && E->flag_depth2[nodeg]*1000.0/6371.0>-0.05 && E->flag_depth2[nodeg]*1000.0/6371.0<0.0) || (age<180.0 && dist>=0.05 && rad<0.985)) {
-                if(rad>0.95) {
+               else if(dist<0.01 || (age<380.0 && E->flag_depth2[nodeg]*1000.0/6371.0>-0.05 && E->flag_depth2[nodeg]*1000.0/6371.0<0.0) || (age<380.0 && dist>=0.05 && rad<0.985)) {
+                if(rad>0.97) {
                       EEta[m][ (i-1)*vpts + jj ] *= vmean;
                       if(EEta[m][ (i-1)*vpts +jj]>0.05) EEta[m][(i-1)*vpts+jj] = 0.05;
                 }
                }
-            }
-            //else if(rad>0.96 && (dist>0.03 && age>180.0)) //(dist>0.05 && age>180.0))
+            }*/
+            //else if(rad>0.96 && (dist>0.03 && age>380.0)) //(dist>0.05 && age>380.0))
 	    /*else if(E->trace.ntracer_flavor[m][3][i]>0.0) {
 	       if(rad>0.97)
 		EEta[m][ (i-1)*vpts + jj ] *= vmean;
@@ -2066,8 +1937,8 @@ void visc_from_C(E,EEta,oldEEta)
                 EEta[m][ (i-1)*vpts + jj ] *= vmean;
             else if(rad<0.997)
                 EEta[m][ (i-1)*vpts + jj ] *= vmean;*/
-	    else if(rad>0.896)
-                EEta[m][ (i-1)*vpts + jj ] *= vmean;
+	   // else if(rad>0.896)
+            EEta[m][ (i-1)*vpts + jj ] *= vmean;
 		    
 	    /* read in tracer-recorded low-viscosity structure in continent */
             /*for(p=10;p<E->composition.ncomp;p++) {
@@ -2342,7 +2213,7 @@ static void low_viscosity_channel_factor1(struct All_variables *E, float *F, flo
                     }
 
                 /* add a low viscosity channel above slab */
-                if(flag == 1.0 && (dist<0.02 || age>180.0)) {
+                if(flag == 1.0 && (dist<0.02 || age>380.0)) {
                   /* loop over elements above e */
                   //for(ii=i; ii<=E->lmesh.elz-0; ii++) {
                   for(ii=i; ii<=nz_max[m]; ii++) {
@@ -2379,8 +2250,8 @@ static void low_viscosity_channel_factor1(struct All_variables *E, float *F, flo
                              F[ee-1] = visc2;
 			     if(E->trace.ntracer_flavor[m][flavor][ee-2] > 0.0 )F[ee-2] = visc2; 
 			     if(E->trace.ntracer_flavor[m][flavor][ee-3] > 0.0) F[ee-3] = visc2;
-                             //if(dist>0.01 && age>180.0) F[ee-2] = visc2; 
-			     //if(dist>0.02 && age>180.0) F[ee-3] = visc2;
+                             //if(dist>0.01 && age>380.0) F[ee-2] = visc2; 
+			     //if(dist>0.02 && age>380.0) F[ee-3] = visc2;
                              count1 += 1;
                              flag = 0.0;
                            }
@@ -2741,7 +2612,8 @@ void viscosity_filter(E,EEta)
 		       +  EEta[m][(n13-1)*vpts+jj] + EEta[m][(n31-1)*vpts+jj])/6.0;
 
 		 /* EEta[m][(el-1)*vpts+jj] = EEta[m][(el-1)*vpts+jj]*(1.0-temp2) + temp1*1/10.0;*/  /* Arithmetic mean*/
-		 EEta[m][(el-1)*vpts+jj] = pow((temp1*EEta[m][(el-1)*vpts+jj]),0.5);	/* Geometric mean */
+		 if(E->sx[m][3][n11]>0.93565)
+		     EEta[m][(el-1)*vpts+jj] = pow((temp1*EEta[m][(el-1)*vpts+jj]),0.5);	/* Geometric mean */
                }
              } /* end of i */
 
@@ -2787,7 +2659,7 @@ static void record_tracer_visc(E,oldEEta)
 	     //fprintf(stderr, "visc_tracer = %f\n",visc_tracer);
 
              /* assign this element's viscosity as the 2nd extra property of tracer */
-             E->trace.extraq[m][1][kk] = visc_tracer;
+             E->trace.extraq[m][3][kk] = visc_tracer;
 
 	     //fprintf(stderr, "record: tracer_visc = %f\n",E->trace.extraq[m][1][kk]);
 
@@ -2827,7 +2699,7 @@ static void read_tracer_visc(E,EEta)
       for(kk=1;kk<=E->trace.ntracers[m];kk++) { /* loop through all tracers in serial */
           /* find the corresponding element of each tracer */
           e = E->trace.ielement[m][kk];
-	  visc_mean = E->trace.extraq[m][1][kk];
+	  visc_mean = E->trace.extraq[m][3][kk];
 
           el_count[e] += 1;
           visc_count[e] += visc_mean;
@@ -2878,7 +2750,7 @@ static void read_tracer_visc22(E,oldEEta,oldVI)
       for(kk=1;kk<=E->trace.ntracers[m];kk++) { /* loop through all tracers in serial */
           /* find the corresponding element of each tracer */
           e = E->trace.ielement[m][kk];
-          visc_mean = E->trace.extraq[m][1][kk];
+          visc_mean = E->trace.extraq[m][3][kk];
           if(e > 0) { /* if element is within this cap */
             el_count[e] += 1;
             visc_count[e] += visc_mean;
@@ -3223,7 +3095,7 @@ void weak_slab_hinge_wedge(E,EEta)
 	      } /* end of mantle wedge */
 
 	      /* add a weak layer atop slab below continents*/
-              /*if(flag<=2*vpts && age>180.0 && dist2>0.02 && E->monitor.solution_cycles>20) {
+              /*if(flag<=2*vpts && age>380.0 && dist2>0.02 && E->monitor.solution_cycles>20) {
                  if(E->T[m][node]<=0.95*E->control.lith_age_mantle_temp && E->T[m][node]>=0.6*E->control.lith_age_mantle_temp && rad>0.95) {
                     mark=0;
                     for(ii=cuc;ii<=cratll;ii++)

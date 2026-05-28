@@ -626,6 +626,8 @@ PyObject * pyCitcom_Tracer_set_properties(PyObject *self, PyObject *args)
     if (E->trace.ic_method==0) {
         getIntProperty(properties, "tracers_per_element",
                        E->trace.itperel, fp);
+        getStringProperty(properties, "tracer_file",
+                       E->trace.tracer_file, fp);
     }
     else if (E->trace.ic_method==1) {
         getStringProperty(properties, "tracer_file",

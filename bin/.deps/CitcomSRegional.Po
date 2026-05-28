@@ -1,1 +1,3 @@
-CitcomSRegional.o: CitcomSRegional.c
+CitcomSRegional.o: CitcomSRegional.c /usr/include/stdc-predef.h
+
+/usr/include/stdc-predef.h:

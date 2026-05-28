@@ -1,0 +1,85 @@
+Binary file ./CitcomS/Components/Param.pyc matches
+./CitcomS/Components/Param.py:	assim_depth_file = pyre.inventory.str("assim_depth_file",default="assm_depth.dat")
+./module/setProperties.c:    getStringProperty(properties, "assim_depth_file", E->control.assim_depth_file, fp);
+./lib/7-27-11-Lith_age.c:  float ttt2,ttt3,fff2,fff3,assim_depth;
+./lib/7-27-11-Lith_age.c:    assim_depth = E->control.lith_age_depth;
+./lib/7-27-11-Lith_age.c:	//assim_depth = E->control.lith_age_depth;
+./lib/7-27-11-Lith_age.c://	assim_depth = 0.002;
+./lib/7-27-11-Lith_age.c:		    assim_depth = 0.003 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/7-27-11-Lith_age.c:		if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/7-27-11-Lith_age.c:  float depth, daf, assimilate_new_temp,assim_depth,fi,phi;
+./lib/7-27-11-Lith_age.c:	      assim_depth = E->control.lith_age_depth;
+./lib/7-27-11-Lith_age.c:		    assim_depth = 0.003 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/7-27-11-Lith_age.c:	      if(depth <= assim_depth) {
+./lib/7-27-11-Lith_age.c:		    daf = 0.5*depth/assim_depth;
+./lib/global_defs.h:    char assim_depth_file[1000];
+./lib/Lith_age.c:  float age,theta,phi,assim_depth;
+./lib/Lith_age.c:	  assim_depth = /*E->asm_depth[nodeg]**/E->control.lith_age_depth;
+./lib/Lith_age.c:	  if( r1 >= E->sphere.ro-assim_depth)
+./lib/Lith_age.c:  float tt1,tt2,ttt1,ttt2,ttt3,fff2,fff3,*PB1[4],*PB2[4],fi,fi_1,fi_2,gap,assim_depth,asm_depth;
+./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Lith_age.c:                if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/Lith_age.c:  float depth,assim_depth,asm_depth;
+./lib/Lith_age.c:	      assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Lith_age.c:	      if(  E->sx[m][3][node]>=E->sphere.ro-assim_depth ) {
+./lib/Lith_age.c:  float depth, daf, assimilate_new_temp,temp1,temp2,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth;
+./lib/Lith_age.c:                assim_depth=asm_depth*E->control.lith_age_depth;
+./lib/Lith_age.c:                if(depth <= assim_depth) {
+./lib/Lith_age.c:                        daf = 0.5*depth/assim_depth;
+./lib/3-8-2013-Lith_age.c:  float ttt2,ttt3,fff2,fff3,assim_depth,v_trench;
+./lib/3-8-2013-Lith_age.c:    assim_depth = E->control.lith_age_depth;
+./lib/3-8-2013-Lith_age.c:	//assim_depth = E->control.lith_age_depth;
+./lib/3-8-2013-Lith_age.c://	assim_depth = 0.002;
+./lib/3-8-2013-Lith_age.c:		    assim_depth = 0.0 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/3-8-2013-Lith_age.c:		//if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/3-8-2013-Lith_age.c:	  	    if(E->age_t[nodeg]>1.0/E->data.scalet && E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/3-8-2013-Lith_age.c:  float depth, daf, assimilate_new_temp,assim_depth,fi,phi;
+./lib/3-8-2013-Lith_age.c:	      assim_depth = E->control.lith_age_depth;
+./lib/3-8-2013-Lith_age.c:		    assim_depth = 0.0 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/3-8-2013-Lith_age.c:	      if(depth <= assim_depth) {
+./lib/3-8-2013-Lith_age.c:		    //daf = 0.5*depth/assim_depth;
+./lib/Lith_age_1-5-2014.c:  float age,assim_depth;
+./lib/Lith_age_1-5-2014.c:          assim_depth = E->control.lith_age_depth;
+./lib/Lith_age_1-5-2014.c:             assim_depth = E->control.lith_age_depth*0.2; */
+./lib/Lith_age_1-5-2014.c:	    // assim_depth = E->control.lith_age_depth*cos((fi-phi+0.08)*1.5708/0.03);
+./lib/Lith_age_1-5-2014.c:	  if( r1 >= E->sphere.ro-assim_depth ) {
+./lib/Lith_age_1-5-2014.c:  float ttt2,ttt3,fff2,fff3,assim_depth;
+./lib/Lith_age_1-5-2014.c:    assim_depth = E->control.lith_age_depth;
+./lib/Lith_age_1-5-2014.c:    if(E->convection.tic_method == -1) assim_depth = E->control.lith_age_depth/2.0; 
+./lib/Lith_age_1-5-2014.c:	assim_depth = E->control.lith_age_depth/10.0; */
+./lib/Lith_age_1-5-2014.c://	assim_depth = 0.002;
+./lib/Lith_age_1-5-2014.c:		   assim_depth = E->control.lith_age_depth/2.0;*/
+./lib/Lith_age_1-5-2014.c:		  //  assim_depth = 0.003 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.05*1.57));
+./lib/Lith_age_1-5-2014.c:		//if(E->age_t[nodeg]>180.0/E->data.scalet) assim_depth = E->control.lith_age_depth/10.0;
+./lib/Lith_age_1-5-2014.c:		if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/Lith_age_1-5-2014.c:  float depth, daf, assimilate_new_temp,assim_depth,fi,phi,temp1;
+./lib/Lith_age_1-5-2014.c:	      assim_depth = E->control.lith_age_depth;
+./lib/Lith_age_1-5-2014.c:	          assim_depth = E->control.lith_age_depth/10.0;*/
+./lib/Lith_age_1-5-2014.c:	     /* if(depth <= assim_depth) {
+./lib/Lith_age_1-5-2014.c:		    daf = 0.5*depth/assim_depth;
+./lib/Lith_age_1-5-2014.c:		    daf = 0.5*depth/assim_depth;
+./lib/Regional_read_input_from_files.c:	sprintf(output_file3,"%s%0.0f%s",E->control.assim_depth_file,newage1,".xyz");
+./lib/Regional_read_input_from_files.c:        sprintf(output_file4,"%s%0.0f%s",E->control.assim_depth_file,newage2,".xyz");
+./lib/7-29-11-Lith_age.c:  float ttt2,ttt3,fff2,fff3,assim_depth;
+./lib/7-29-11-Lith_age.c:    assim_depth = E->control.lith_age_depth;
+./lib/7-29-11-Lith_age.c:	//assim_depth = E->control.lith_age_depth;
+./lib/7-29-11-Lith_age.c://	assim_depth = 0.002;
+./lib/7-29-11-Lith_age.c:		  //  assim_depth = 0.003 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.05*1.57));
+./lib/7-29-11-Lith_age.c:		if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/7-29-11-Lith_age.c:  float depth, daf, assimilate_new_temp,assim_depth,fi,phi;
+./lib/7-29-11-Lith_age.c:	      assim_depth = E->control.lith_age_depth;
+./lib/7-29-11-Lith_age.c:		//    assim_depth = 0.003 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.05*1.57));
+./lib/7-29-11-Lith_age.c:	      if(depth <= assim_depth) {
+./lib/7-29-11-Lith_age.c:		    daf = 0.5*depth/assim_depth;
+./lib/9-26-Lith_age.c:  float ttt2,ttt3,fff2,fff3,assim_depth,v_trench;
+./lib/9-26-Lith_age.c:    assim_depth = E->control.lith_age_depth;
+./lib/9-26-Lith_age.c:	//assim_depth = E->control.lith_age_depth;
+./lib/9-26-Lith_age.c://	assim_depth = 0.002;
+./lib/9-26-Lith_age.c:		    assim_depth = 0.0 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/9-26-Lith_age.c:		//if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/9-26-Lith_age.c:	  	    if(E->age_t[nodeg]>1.0/E->data.scalet && E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+./lib/9-26-Lith_age.c:  float depth, daf, assimilate_new_temp,assim_depth,fi,phi;
+./lib/9-26-Lith_age.c:	      assim_depth = E->control.lith_age_depth;
+./lib/9-26-Lith_age.c:		    assim_depth = 0.0 + E->control.lith_age_depth*(1.0-cos((fi-phi)/0.02*1.57));
+./lib/9-26-Lith_age.c:	      if(depth <= assim_depth) {
+./lib/9-26-Lith_age.c:		    //daf = 0.5*depth/assim_depth;

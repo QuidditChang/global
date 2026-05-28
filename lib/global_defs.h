@@ -542,6 +542,8 @@ struct REF_STATE {
     double *heat_capacity;
     /*double *thermal_conductivity;*/
     double *gravity;
+    // DJB EBA
+    double *dis;
     /*double *Tadi;*/
 };
 
@@ -765,6 +767,7 @@ struct All_variables {
 
     float *age[NCS];	/* nodal weightings */
     float *age_t;
+    float *LLVP_H;
     float *flag_depth;
     float *flag_depth1;
     float *flag_depth2;

@@ -93,6 +93,14 @@ int full_icheck_cap(struct All_variables *E, int icap,
                     double x, double y, double z, double rad);
 
 
+static int icheck_bounds2(struct All_variables *E,
+                         double *test_point,
+                         double *rnode1, double *rnode2,
+                         double *rnode3, double *rnode4);
+
+int full_icheck_cap2(struct All_variables *E, int icap,
+                    double x, double y, double z, double rad);
+
 
 /******* FULL TRACER INPUT *********************/
 
@@ -154,7 +162,7 @@ void full_tracer_setup(struct All_variables *E)
 
     /* some obscure initial parameters */
     /* This parameter specifies how close a tracer can get to the boundary */
-    E->trace.box_cushion=0.00001;
+    E->trace.box_cushion=0.00001; // ZJ changed
 
     /* Determine number of tracer quantities */
 
@@ -165,8 +173,9 @@ void full_tracer_setup(struct All_variables *E)
     /* (can be increased for additional science i.e. tracing chemistry */
 
     E->trace.number_of_extra_quantities = 0;
+   // E->trace.tracers_index = 0; //Jie defined
     if (E->trace.nflavors > 0)
-        E->trace.number_of_extra_quantities += 1;
+        E->trace.number_of_extra_quantities += 3;
 
 
     E->trace.number_of_tracer_quantities =
@@ -3463,3 +3472,187 @@ void pdebug(struct All_variables *E, int i)
 
     return;
 }
+
+// change the icheck cap
+
+int full_icheck_cap2(struct All_variables *E, int icap,
+                    double x, double y, double z, double rad)
+{
+
+    double test_point[4];
+    double rnode[5][10];
+
+    int ival;
+    int kk;
+
+    /* surface coords of cap nodes */
+
+
+    for (kk=1;kk<=4;kk++)
+        {
+
+            rnode[kk][1]=E->trace.xcap[icap][kk];
+            rnode[kk][2]=E->trace.ycap[icap][kk];
+            rnode[kk][3]=E->trace.zcap[icap][kk];
+            rnode[kk][4]=E->trace.theta_cap[icap][kk];
+            rnode[kk][5]=E->trace.phi_cap[icap][kk];
+            rnode[kk][6]=E->trace.cos_theta[icap][kk];
+            rnode[kk][7]=E->trace.sin_theta[icap][kk];
+            rnode[kk][8]=E->trace.cos_phi[icap][kk];
+            rnode[kk][9]=E->trace.sin_phi[icap][kk];
+        }
+
+
+    /* test_point - project to outer radius */
+
+    test_point[1]=x/rad;
+    test_point[2]=y/rad;
+    test_point[3]=z/rad;
+
+    ival=icheck_bounds2(E,test_point,rnode[1],rnode[2],rnode[3],rnode[4]);
+
+
+    return ival;
+}
+
+/***** ICHECK BOUNDS ******************************/
+/*                                                */
+/* This function check if a test_point is bounded */
+/* by 4 nodes                                     */
+/* This is done by:                               */
+/* 1) generate vectors from node to node          */
+/* 2) generate vectors from each node to point    */
+/*    in question                                 */
+/* 3) for each node, take cross product of vector */
+/*    pointing to it from previous node and       */
+/*    vector from node to point in question       */
+/* 4) Find radial components of all the cross     */
+/*    products.                                   */
+/* 5) If all radial components are positive,      */
+/*    point is bounded by the 4 nodes             */
+/* 6) If some radial components are negative      */
+/*    point is on a boundary - adjust it an       */
+/*    epsilon amount for this analysis only       */
+/*    which will force it to lie in one element   */
+/*    or cap                                      */
+
+static int icheck_bounds2(struct All_variables *E,
+                         double *test_point,
+                         double *rnode1, double *rnode2,
+                         double *rnode3, double *rnode4)
+{
+
+    int number_of_tries=0;
+    int icheck;
+
+    double v12[4];
+    double v23[4];
+    double v34[4];
+    double v41[4];
+    double v1p[4];
+    double v2p[4];
+    double v3p[4];
+    double v4p[4];
+    double cross1[4];
+    double cross2[4];
+    double cross3[4];
+    double cross4[4];
+    double rad1,rad2,rad3,rad4;
+    double theta, phi;
+    double tiny, eps;
+    double x,y,z;
+
+    double myatan();
+
+    /* make vectors from node to node */
+
+    makevector(v12,rnode2[1],rnode2[2],rnode2[3],rnode1[1],rnode1[2],rnode1[3]);
+    makevector(v23,rnode3[1],rnode3[2],rnode3[3],rnode2[1],rnode2[2],rnode2[3]);
+    makevector(v34,rnode4[1],rnode4[2],rnode4[3],rnode3[1],rnode3[2],rnode3[3]);
+    makevector(v41,rnode1[1],rnode1[2],rnode1[3],rnode4[1],rnode4[2],rnode4[3]);
+
+ try_again:
+
+    number_of_tries++;
+
+    /* make vectors from test point to node */
+
+    makevector(v1p,test_point[1],test_point[2],test_point[3],rnode1[1],rnode1[2],rnode1[3]);
+    makevector(v2p,test_point[1],test_point[2],test_point[3],rnode2[1],rnode2[2],rnode2[3]);
+    makevector(v3p,test_point[1],test_point[2],test_point[3],rnode3[1],rnode3[2],rnode3[3]);
+    makevector(v4p,test_point[1],test_point[2],test_point[3],rnode4[1],rnode4[2],rnode4[3]);
+
+    /* Calculate cross products */
+
+    crossit(cross2,v12,v2p);
+    crossit(cross3,v23,v3p);
+    crossit(cross4,v34,v4p);
+    crossit(cross1,v41,v1p);
+
+    /* Calculate radial component of cross products */
+
+    rad1=findradial(E,cross1,rnode1[6],rnode1[7],rnode1[8],rnode1[9]);
+    rad2=findradial(E,cross2,rnode2[6],rnode2[7],rnode2[8],rnode2[9]);
+    rad3=findradial(E,cross3,rnode3[6],rnode3[7],rnode3[8],rnode3[9]);
+    rad4=findradial(E,cross4,rnode4[6],rnode4[7],rnode4[8],rnode4[9]);
+
+    /*  Check if any radial components is zero (along a boundary), adjust if so */
+    /*  Hopefully, this doesn't happen often, may be expensive                  */
+
+    tiny=1e-15;
+    eps=1e-6;
+
+    if (number_of_tries>3)
+        {
+            fprintf(E->trace.fpt,"Error(icheck_bounds)-too many tries\n");
+            fprintf(E->trace.fpt,"Rads: %f %f %f %f\n",rad1,rad2,rad3,rad4);
+            fprintf(E->trace.fpt,"Test Point: %f %f %f  \n",test_point[1],test_point[2],test_point[3]);
+            fprintf(E->trace.fpt,"Nodal points: 1: %f %f %f\n",rnode1[1],rnode1[2],rnode1[3]);
+            fprintf(E->trace.fpt,"Nodal points: 2: %f %f %f\n",rnode2[1],rnode2[2],rnode2[3]);
+            fprintf(E->trace.fpt,"Nodal points: 3: %f %f %f\n",rnode3[1],rnode3[2],rnode3[3]);
+            fprintf(E->trace.fpt,"Nodal points: 4: %f %f %f\n",rnode4[1],rnode4[2],rnode4[3]);
+            fflush(E->trace.fpt);
+            exit(10);
+        }
+
+    if (fabs(rad1)<=tiny||fabs(rad2)<=tiny||fabs(rad3)<=tiny||fabs(rad4)<=tiny)
+        {
+            x=test_point[1];
+            y=test_point[2];
+            z=test_point[3];
+            theta=myatan(sqrt(x*x+y*y),z);
+            phi=myatan(y,x);
+
+            if (theta<=M_PI/2.0)
+                {
+                    theta=theta+eps;
+                }
+            else
+                {
+                    theta=theta-eps;
+                }
+            phi=phi+eps;
+            x=sin(theta)*cos(phi);
+            y=sin(theta)*sin(phi);
+            z=cos(theta);
+            test_point[1]=x;
+            test_point[2]=y;
+            test_point[3]=z;
+
+            number_of_tries++;
+            goto try_again;
+
+        }
+
+    icheck=0;
+    if (rad1>0.0&&rad2>0.0&&rad3>0.0&&rad4>0.0) icheck=1;
+
+    /*
+ *       fprintf(stderr,"%d: icheck: %d\n",E->parallel.me,icheck);
+ *             fprintf(stderr,"%d: rads: %f %f %f %f\n",E->parallel.me,rad1,rad2,rad3,rad4);
+ *                 */
+
+    return icheck;
+
+}
+
