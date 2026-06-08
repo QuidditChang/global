@@ -73,4 +73,3 @@ bin/merlin
 # Visual scripts (generated)
 visual/autocombine.py
 visual/*.net
-visual/OpenDXMacro/
