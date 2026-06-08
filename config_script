@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# To install Python2.6
+# Currently Loaded Modules:
+#   1) git/2.21.0      3) cmake/3.13.4   5) pmix/3.1.2      7) xalt/2.7.1   9) intel/18.0.5     11) impi/18.0.5
+#   2) autotools/1.2   4) ucx/1.5.1      6) hwloc/1.11.12   8) TACC        10) libfabric/1.7.1  12) python2/2.7.16
+# Use intel/18 instead of intel/19
+
+export PATH=/work/ess-zhangkd/CitcomS/vendor/python2.6.9/bin:$PATH
+export PATH=$PATH:$(pwd)
+module load intel/2018.4 mpi/intel/2018.4
+module load hdf5/1.8.18-parallel-intel-18.4
+
+# Clean previous build
+make distclean 2>/dev/null || true
+
+./configure --prefix=$(pwd) --with-hdf5=$HDF5ROOT \
+      CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
+        LDFLAGS="-L$HDF5ROOT/lib"
+
+touch config.status configure Makefile
+chmod +x aux-config/install-sh aux-config/py-compile
+sed -i 's|MKDIR_P = @MKDIR_P@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
+
+make -j4
+make install SUBDIRS="lib CitcomS etc bin module" -i
+
+#./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
+#CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
+#LDFLAGS=-pie
