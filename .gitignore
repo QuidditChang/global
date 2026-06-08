@@ -12,3 +12,65 @@ __pycache__/
 *.pyc
 ._*
 .DS_Store
+
+# Dependency tracking
+**/.deps/
+
+# Libtool
+libtool
+
+# Autoconf generated
+config.h
+config.h.in~
+config.status
+configure~
+config_script~
+
+# Build binaries
+bin/CitcomSFull
+bin/CitcomSRegional
+bin/citcoms
+bin/mpipycitcoms
+bin/pycitcoms
+
+# Python eggs
+python/merlin-*.egg/
+python/pythia-*.egg/
+python/site.pyc
+python/merlin-install.pth
+python/CitcomS.egg-link
+
+# Visual binaries
+visual/h5tocap
+visual/h5tovelo
+visual/project_geoid
+visual/*.pyc
+
+# Misc
+*.un~
+*.in~
+lib/python2.6/
+etc/CitcomS/
+
+# Autoconf/automake generated
+Makefile
+Makefile.in
+configure
+config.h.in
+config_script
+aux-config/install-sh
+aux-config/py-compile
+pyconfig
+
+# Python install artifacts
+CitcomS.egg-info/
+CitcomS/config.py
+bin/idd.py
+bin/ipad.py
+bin/journald.py
+bin/merlin
+
+# Visual scripts (generated)
+visual/autocombine.py
+visual/*.net
+visual/OpenDXMacro/
