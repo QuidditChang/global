@@ -10,7 +10,8 @@
 '''
 Cut-paste and combine Citcom botm data
 
-usage: combinebotm.py modelname timestep nodex nodey nodez n_surf_proc nprocx nprocy nprocz
+usage (explicit):  combinebotm.py modelname timestep nodex nodey nodez n_surf_proc nprocx nprocy nprocz
+usage (cfg mode):  combinebotm.py localhost inputfile timestep
 '''
 
 class CombineBotm(object):
@@ -99,39 +100,79 @@ class CombineBotm(object):
 
 
 
-if __name__ == '__main__':
-
-    import sys
-
-    if not len(sys.argv) == 10:
-        print __doc__
-        sys.exit(1)
-
-    prefix = sys.argv[1]
-    step = int(sys.argv[2])
-
-    grid = {}
-    grid['nox'] = int(sys.argv[3])
-    grid['noy'] = int(sys.argv[4])
-    grid['noz'] = int(sys.argv[5])
-
-    nprocxy = int(sys.argv[6])
-    cap = {}
-    cap['nprocx'] = int(sys.argv[7])
-    cap['nprocy'] = int(sys.argv[8])
-    cap['nprocz'] = int(sys.argv[9])
-
+def combine(prefix, step, grid, cap, nprocxy, datadir=None):
     nproc_per_cap = cap['nprocx'] * cap['nprocy'] * cap['nprocz']
-    # botm: only bottom-layer procs (rank % nprocz == 0)
     for i in range(nprocxy):
         cb = CombineBotm(grid)
         for n in range(i * nproc_per_cap, (i+1) * nproc_per_cap, cap['nprocz']):
+            if datadir:
+                import shutil
+                shutil.copy('%s/%d/%s.coord.%d' % (datadir, n, prefix, n), '.')
+                shutil.copy('%s/%d/%s.botm.%d.%d' % (datadir, n, prefix, n, step), '.')
             crdfilename  = '%s.coord.%d' % (prefix, n)
             botmfilename = '%s.botm.%d.%d' % (prefix, n, step)
             print 'reading', botmfilename
             data = cb.readData(crdfilename, botmfilename, grid, cap)
             cb.join(data, n, grid, cap)
+            if datadir:
+                import os
+                os.remove(crdfilename)
+                os.remove(botmfilename)
 
         filename = '%s.botm%02d.%d' % (prefix, i, step)
         print 'writing', filename
         cb.write(filename, grid, cb.saved)
+
+
+if __name__ == '__main__':
+
+    import sys
+
+    if len(sys.argv) == 4 and sys.argv[1] == 'localhost':
+        # cfg mode: combinebotm.py localhost inputfile timestep
+        inputfile = sys.argv[2]
+        step = int(sys.argv[3])
+
+        from parser import Parser
+        defaults = {'nprocx': 1, 'nprocy': 1, 'nprocz': 1,
+                    'nodex': 9, 'nodey': 9, 'nodez': 9}
+        parser = Parser(defaults)
+        parser.read(inputfile)
+
+        datadir  = parser.getstr('datadir').replace('/%RANK', '')
+        prefix   = parser.getstr('datafile')
+        nprocxy  = parser.getint('nproc_surf')
+
+        grid = {}
+        grid['nox'] = parser.getint('nodex')
+        grid['noy'] = parser.getint('nodey')
+        grid['noz'] = parser.getint('nodez')
+
+        cap = {}
+        cap['nprocx'] = parser.getint('nprocx')
+        cap['nprocy'] = parser.getint('nprocy')
+        cap['nprocz'] = parser.getint('nprocz')
+
+        combine(prefix, step, grid, cap, nprocxy, datadir=datadir)
+
+    elif len(sys.argv) == 10:
+        # explicit mode: combinebotm.py modelname timestep nodex nodey nodez n_surf_proc nprocx nprocy nprocz
+        prefix = sys.argv[1]
+        step   = int(sys.argv[2])
+
+        grid = {}
+        grid['nox'] = int(sys.argv[3])
+        grid['noy'] = int(sys.argv[4])
+        grid['noz'] = int(sys.argv[5])
+
+        nprocxy = int(sys.argv[6])
+        cap = {}
+        cap['nprocx'] = int(sys.argv[7])
+        cap['nprocy'] = int(sys.argv[8])
+        cap['nprocz'] = int(sys.argv[9])
+
+        combine(prefix, step, grid, cap, nprocxy)
+
+    else:
+        print __doc__
+        sys.exit(1)
