@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
@@ -50,7 +51,7 @@ class CombineBotm(object):
         if not (len(crd) == snodes*mynoz):
             print '"%s" file size incorrect' % crdfilename
 
-        # paste data — botm uses first z-node (index i*mynoz), surf uses last
+        # paste data: botm uses first z-node (index i*mynoz), surf uses last
         data = range(snodes)
         for i in range(len(data)):
             x, y, z = crd[i*mynoz].split()
