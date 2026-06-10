@@ -10,8 +10,7 @@
 '''
 Cut-paste and combine Citcom botm data
 
-usage (explicit):  combinebotm.py modelname timestep nodex nodey nodez n_surf_proc nprocx nprocy nprocz
-usage (cfg mode):  combinebotm.py localhost inputfile timestep
+usage: combinebotm.py localhost inputfile timestep
 '''
 
 class CombineBotm(object):
@@ -154,24 +153,6 @@ if __name__ == '__main__':
         cap['nprocz'] = parser.getint('nprocz')
 
         combine(prefix, step, grid, cap, nprocxy, datadir=datadir)
-
-    elif len(sys.argv) == 10:
-        # explicit mode: combinebotm.py modelname timestep nodex nodey nodez n_surf_proc nprocx nprocy nprocz
-        prefix = sys.argv[1]
-        step   = int(sys.argv[2])
-
-        grid = {}
-        grid['nox'] = int(sys.argv[3])
-        grid['noy'] = int(sys.argv[4])
-        grid['noz'] = int(sys.argv[5])
-
-        nprocxy = int(sys.argv[6])
-        cap = {}
-        cap['nprocx'] = int(sys.argv[7])
-        cap['nprocy'] = int(sys.argv[8])
-        cap['nprocz'] = int(sys.argv[9])
-
-        combine(prefix, step, grid, cap, nprocxy)
 
     else:
         print __doc__
