@@ -263,9 +263,11 @@ void heat_flux_CBF(struct All_variables *E)
     const int sphere_key = 1;
 
     /* Q_SCALE = k * DeltaT / R_earth  ~2.59e-3 W/m^2
-       k = kappa * rho * Cp  (thermal conductivity)                          */
+       k = kappa * rho * Cp  (thermal conductivity)
+       E->data.ref_temperature = DeltaT (K)
+       E->data.radius_km * 1e3 = R_earth (m)                                 */
     Q_SCALE = (E->data.therm_diff * E->data.density * E->data.Cp)
-              * E->data.temp_delta / E->data.radius;
+              * E->data.ref_temperature / (E->data.radius_km * 1.0e3);
 
     /* allocate per-cap arrays */
     sum_h = (float *)malloc(5 * sizeof(float));
