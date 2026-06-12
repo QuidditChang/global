@@ -100,6 +100,7 @@ void gzdir_output_horiz_avg(struct All_variables *, int);
 void gzdir_output_tracer(struct All_variables *, int);
 void gzdir_output_pressure(struct All_variables *, int);
 void gzdir_output_heating(struct All_variables *, int);
+void gzdir_output_cmbhf_CBF(struct All_variables *, int);
 
 
 void sub_netr(float, float, float, float *, float *, double *);
@@ -1122,6 +1123,45 @@ void gzdir_output_heating(struct All_variables *E, int cycles)
             gzprintf(fp1, "%.4e %.4e %.4e\n", E->heating_adi[j][e],
                       E->heating_visc[j][e], E->heating_latent[j][e]);
     }
+    gzclose(fp1);
+
+    return;
+}
+
+
+/* =========================================================================
+   Write CMB heat flux computed by the CBF method to a per-step gzip file.
+   Output: {datadir}/{cycles}/cmbhf_CBF.{proc}.{cycles}.gz
+   Format: elapsed_time header \n cap# nsf \n q[i] \n ...
+   Only the bottom-layer processes write (me_loc[3]==0).
+   ========================================================================= */
+void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
+{
+    int i, j;
+    char output_dir[255], output_file[255];
+    gzFile *fp1;
+
+    void heat_flux_CBF();
+
+    if(E->parallel.me_loc[3] != 0) return;
+
+    snprintf(output_dir, 255, "%s/%d", E->control.data_dir, cycles);
+    mkdatadir(output_dir);
+
+    heat_flux_CBF(E);
+
+    snprintf(output_file, 255, "%s/%d/cmbhf_CBF.%d.%d.gz",
+             E->control.data_dir, cycles, E->parallel.me, cycles);
+    fp1 = gzdir_output_open(output_file, "w");
+
+    gzprintf(fp1, "%.5e\n", E->monitor.elapsed_time);
+
+    for(j = 1; j <= E->sphere.caps_per_proc; j++) {
+        gzprintf(fp1, "%3d %7d\n", j, E->lmesh.nsf);
+        for(i = 1; i <= E->lmesh.nsf; i++)
+            gzprintf(fp1, "%.6e\n", E->slice.bhflux_CBF[j][i]);
+    }
+
     gzclose(fp1);
 
     return;

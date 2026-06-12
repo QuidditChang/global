@@ -44,6 +44,10 @@ extern char pyCitcom_output_checkpoint__name__[];
 extern char pyCitcom_output_checkpoint__doc__[];
 PyObject * pyCitcom_output_checkpoint(PyObject *, PyObject *);
 
+extern char pyCitcom_output_cmbhf_CBF__name__[];
+extern char pyCitcom_output_cmbhf_CBF__doc__[];
+PyObject * pyCitcom_output_cmbhf_CBF(PyObject *, PyObject *);
+
 #endif
 
 /* $Id: outputs.h 7837 2007-08-16 21:36:18Z tan2 $ */

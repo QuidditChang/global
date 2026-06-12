@@ -124,6 +124,29 @@ PyObject * pyCitcom_output_checkpoint(PyObject *self, PyObject *args)
 }
 
 
+char pyCitcom_output_cmbhf_CBF__doc__[] = "";
+char pyCitcom_output_cmbhf_CBF__name__[] = "output_cmbhf_CBF";
+
+PyObject * pyCitcom_output_cmbhf_CBF(PyObject *self, PyObject *args)
+{
+    PyObject *obj;
+    struct All_variables* E;
+    int cycles;
+
+    void gzdir_output_cmbhf_CBF();
+
+    if (!PyArg_ParseTuple(args, "Oi:output_cmbhf_CBF", &obj, &cycles))
+        return NULL;
+
+    E = (struct All_variables*)(PyCObject_AsVoidPtr(obj));
+
+    gzdir_output_cmbhf_CBF(E, cycles);
+
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+
 /* $Id: outputs.c 7837 2007-08-16 21:36:18Z tan2 $ */
 
 /* End of file */

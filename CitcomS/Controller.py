@@ -147,6 +147,7 @@ class Controller(Component):
     def save(self):
         self.solver.save(self.inventory.monitoringFrequency)
         self.solver.checkpoint(self.inventory.checkpointFrequency)
+        self.solver.save_cmbhf_CBF(self.inventory.monitoringFrequency_cmbhf_CBF)
         return
 
 
@@ -157,3 +158,4 @@ class Controller(Component):
 
         monitoringFrequency = pyre.inventory.int("monitoringFrequency", default=100)
         checkpointFrequency = pyre.inventory.int("checkpointFrequency", default=100)
+        monitoringFrequency_cmbhf_CBF = pyre.inventory.int("monitoringFrequency_cmbhf_CBF", default=0)

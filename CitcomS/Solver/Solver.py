@@ -233,6 +233,16 @@ class Solver(Component):
         return
 
 
+    def save_cmbhf_CBF(self, freq):
+        if freq <= 0:
+            return
+        step = self.step
+        if not (step % freq):
+            from CitcomSLib import output_cmbhf_CBF
+            output_cmbhf_CBF(self.all_variables, step)
+        return
+
+
     def checkpoint(self, checkpointFrequency):
         step = self.step
 

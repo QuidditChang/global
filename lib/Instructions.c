@@ -464,6 +464,11 @@ void read_initial_settings(struct All_variables *E)
     E->output.write_q_files = min(E->output.write_q_files,E->control.record_every);
   }
 
+  input_int("cmbhf_CBF_freq",&(E->output.cmbhf_CBF_freq),"0",m); /* CBF CMB heat flux output
+                                                                      frequency (0 = disabled) */
+  input_boolean("cbf_use_advection",&(E->output.cbf_use_advection),"off",m); /* include u.gradT
+                                                                                 in CBF (default off) */
+
 
   input_boolean("precond",&(E->control.precondition),"off",m);
   input_int("mg_cycle",&(E->control.mg_cycle),"2,0,nomax",m);
@@ -587,8 +592,9 @@ void allocate_common_vars(E)
   E->slice.tpgb[j]     = (float *)malloc((nsf+2)*sizeof(float));
   E->slice.divg[j]     = (float *)malloc((nsf+2)*sizeof(float));
   E->slice.vort[j]     = (float *)malloc((nsf+2)*sizeof(float));
-  E->slice.shflux[j]    = (float *)malloc((nsf+2)*sizeof(float));
-  E->slice.bhflux[j]    = (float *)malloc((nsf+2)*sizeof(float));
+  E->slice.shflux[j]      = (float *)malloc((nsf+2)*sizeof(float));
+  E->slice.bhflux[j]      = (float *)malloc((nsf+2)*sizeof(float));
+  E->slice.bhflux_CBF[j]  = (float *)malloc((nsf+2)*sizeof(float));
   /*  if(E->mesh.topvbc==2 && E->control.pseudo_free_surf) */
   E->slice.freesurf[j]    = (float *)malloc((nsf+2)*sizeof(float));
 

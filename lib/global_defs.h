@@ -362,6 +362,7 @@ struct SLICE {    /* horizontally sliced data, including topography */
     float *tpgb[NCS];
     float *shflux[NCS];
     float *bhflux[NCS];
+    float *bhflux_CBF[NCS];   /* CMB heat flux via Consistent Boundary Flux method */
     float *divg[NCS];
     float *vort[NCS];
     float *freesurf[NCS];
@@ -634,6 +635,9 @@ struct Output {
 
   int write_q_files;
   FILE *fpqt,*fpqb;		/* additional heat flux output */
+
+  int cmbhf_CBF_freq;          /* output frequency for CBF CMB heat flux (0 = disabled) */
+  int cbf_use_advection;       /* 1 = include u.gradT term in CBF (default 0) */
 };
 
 
