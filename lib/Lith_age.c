@@ -340,7 +340,7 @@ all three get set to true. CPC 6/20/00 */
                             E->node[j][node]=E->node[j][node] & (~FBZ);
 		    }*/
 		//}
-		else {
+		else if(E->sx[j][3][node] > E->sphere.ri + 1.e-4) {
                         E->node[j][node]=E->node[j][node] | FBX;
                         E->node[j][node]=E->node[j][node] & (~TBX);
                         E->node[j][node]=E->node[j][node] | FBY;
