@@ -55,5 +55,10 @@ struct All_variables* citcom_init(MPI_Comm *world)
   E->control.total_iteration_cycles=0;
   E->control.total_v_solver_calls=0;
 
+  E->control.use_PICES = 0;         //PICES
+  E->control.pices_initialized = 0; //PICES
+  E->trace.itracer_pices_temp = -1; //PICES
+  E->trace.pices_dtsub_idx    = -1; //PICES
+
   return(E);
 }

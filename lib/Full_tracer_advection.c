@@ -32,6 +32,7 @@
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
+#include "PICES.h"                //PICES: declares all PICES_* prototypes for type-checking
 
 static void get_2dshape(struct All_variables *E,
                         int j, int nelem,
@@ -168,6 +169,12 @@ void full_tracer_setup(struct All_variables *E)
     if (E->trace.nflavors > 0)
         E->trace.number_of_extra_quantities += 1;
 
+    if (E->control.use_PICES) {                                           //PICES
+        E->trace.itracer_pices_temp = E->trace.number_of_extra_quantities; //PICES: slot for particle T
+        E->trace.number_of_extra_quantities += 1;                         //PICES
+        E->trace.pices_dtsub_idx = E->trace.number_of_extra_quantities;   //PICES: slot for δT_remain workspace
+        E->trace.number_of_extra_quantities += 1;                         //PICES
+    }                                                                     //PICES
 
     E->trace.number_of_tracer_quantities =
         E->trace.number_of_basic_quantities +
@@ -3463,3 +3470,363 @@ void pdebug(struct All_variables *E, int i)
 
     return;
 }
+
+
+/* ======================================================================
+   PICES: Particle-In-Cell Energy Solver
+   Dong et al. (2024), Earth Planet. Phys., doi:10.26464/epp2024021
+
+   Functions in this block have access to the file-static helper functions
+   spherical_to_uv(), get_2dshape(), get_radial_shape() defined above.
+   All PICES symbols are declared in PICES.h.
+   ====================================================================== */
+
+
+/****** PICES_init_particle_T *********************************************
+ * One-time initialization: interpolate node temperatures E->T to each
+ * particle's extraq[itracer_pices_temp] slot using gnomonic-wedge shape
+ * functions (same scheme as full_get_velocity).
+ * Called on the first PG_timestep_solve when use_PICES=1, after tracers
+ * and E->T are both initialized.
+ **************************************************************************/
+
+void PICES_init_particle_T(struct All_variables *E)  //PICES
+{
+    /* wedge-to-element local node index (1-based), see full_get_velocity */
+    static const int wedge1_enode[7] = {0, 1, 2, 3, 5, 6, 7};  //PICES
+    static const int wedge2_enode[7] = {0, 1, 3, 4, 5, 7, 8};  //PICES
+
+    int j, kk, nelem, iwedge, inum, a;           //PICES
+    int pT = E->trace.itracer_pices_temp;         //PICES: extraq slot index
+    double theta, phi, rad, u, v;                 //PICES
+    double shape2d[4], shaperad[3], shape[7];     //PICES
+    double T_interp;                              //PICES
+    const double eps = -1e-4;                     //PICES: shape-fn negativity threshold
+    const int *wn;                                //PICES
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {             //PICES
+        for (kk = 1; kk <= E->trace.ntracers[j]; kk++) {        //PICES
+
+            nelem = E->trace.ielement[j][kk];                    //PICES
+            theta = E->trace.basicq[j][0][kk];                   //PICES
+            phi   = E->trace.basicq[j][1][kk];                   //PICES
+            rad   = E->trace.basicq[j][2][kk];                   //PICES
+
+            spherical_to_uv(E, j, theta, phi, &u, &v);           //PICES
+
+            /* wedge selection: try wedge 1, fall back to wedge 2 */
+            inum   = 0;                                           //PICES
+            iwedge = 1;                                           //PICES
+
+        pices_next_wedge:                                         //PICES
+            get_2dshape(E, j, nelem, u, v, iwedge, shape2d);     //PICES
+
+            if (shape2d[1] < eps || shape2d[2] < eps || shape2d[3] < eps) {  //PICES
+                inum++;                                           //PICES
+                if (inum > 1) {                                   //PICES
+                    /* both wedges failed: fall back to equal-weight node average */
+                    T_interp = 0.0;                               //PICES
+                    for (a = 1; a <= ENODES3D; a++)               //PICES
+                        T_interp += E->T[j][E->ien[j][nelem].node[a]]; //PICES
+                    T_interp /= (double)ENODES3D;                 //PICES
+                    E->trace.extraq[j][pT][kk] = T_interp;       //PICES
+                    continue;                                     //PICES
+                }                                                 //PICES
+                iwedge = 2;                                       //PICES
+                goto pices_next_wedge;                            //PICES
+            }                                                     //PICES
+
+            get_radial_shape(E, j, nelem, rad, shaperad);         //PICES
+
+            shape[1] = shaperad[1] * shape2d[1];                  //PICES
+            shape[2] = shaperad[1] * shape2d[2];                  //PICES
+            shape[3] = shaperad[1] * shape2d[3];                  //PICES
+            shape[4] = shaperad[2] * shape2d[1];                  //PICES
+            shape[5] = shaperad[2] * shape2d[2];                  //PICES
+            shape[6] = shaperad[2] * shape2d[3];                  //PICES
+
+            wn = (iwedge == 1) ? wedge1_enode : wedge2_enode;    //PICES
+
+            T_interp = 0.0;                                       //PICES
+            for (a = 1; a <= 6; a++)                              //PICES
+                T_interp += shape[a] * E->T[j][E->ien[j][nelem].node[wn[a]]];  //PICES
+
+            E->trace.extraq[j][pT][kk] = T_interp;               //PICES
+
+        }  /* end tracer loop */                                  //PICES
+    }  /* end cap loop */                                         //PICES
+
+    return;                                                       //PICES
+}  /* end PICES_init_particle_T */                                //PICES
+
+
+/****** PICES_particles_to_nodes ******************************************
+ * Interpolate particle temperatures to nodes (paper Eq. 13).
+ * For each particle, shape-function weights are distributed to the 6
+ * wedge nodes.  Caller must:
+ *   1. MPI-exchange both T_num and W_den via exchange_node_d
+ *   2. Normalize: E->T[m][i] = T_num[m][i] / W_den[m][i]
+ *      (keep original E->T[m][i] where W_den[m][i] == 0)
+ * T_num and W_den must be pre-allocated to size (nno+1) per cap.
+ **************************************************************************/
+
+void PICES_particles_to_nodes(struct All_variables *E,           //PICES
+                               double **T_num,                   //PICES: Σ(T_p * w)
+                               double **W_den)                   //PICES: Σ(w)
+{
+    static const int wedge1_enode[7] = {0, 1, 2, 3, 5, 6, 7};  //PICES
+    static const int wedge2_enode[7] = {0, 1, 3, 4, 5, 7, 8};  //PICES
+
+    int j, i, kk, nelem, iwedge, inum, a, gnode;                //PICES
+    int pT = E->trace.itracer_pices_temp;                        //PICES
+    double theta, phi, rad, u, v, T_p, w_equal;                 //PICES
+    double shape2d[4], shaperad[3], shape[7];                    //PICES
+    const double eps = -1e-4;                                    //PICES
+    const int *wn;                                               //PICES
+
+    /* zero the accumulators */
+    for (j = 1; j <= E->sphere.caps_per_proc; j++)              //PICES
+        for (i = 1; i <= E->lmesh.nno; i++) {                   //PICES
+            T_num[j][i] = 0.0;                                  //PICES
+            W_den[j][i] = 0.0;                                  //PICES
+        }                                                        //PICES
+
+    w_equal = 1.0 / (double)ENODES3D;                           //PICES: fallback equal weight
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {            //PICES
+        for (kk = 1; kk <= E->trace.ntracers[j]; kk++) {       //PICES
+
+            nelem = E->trace.ielement[j][kk];                   //PICES
+            theta = E->trace.basicq[j][0][kk];                  //PICES
+            phi   = E->trace.basicq[j][1][kk];                  //PICES
+            rad   = E->trace.basicq[j][2][kk];                  //PICES
+            T_p   = E->trace.extraq[j][pT][kk];                 //PICES
+
+            spherical_to_uv(E, j, theta, phi, &u, &v);          //PICES
+
+            inum   = 0;                                          //PICES
+            iwedge = 1;                                          //PICES
+
+        pices_p2n_next_wedge:                                    //PICES
+            get_2dshape(E, j, nelem, u, v, iwedge, shape2d);    //PICES
+
+            if (shape2d[1] < eps || shape2d[2] < eps || shape2d[3] < eps) {  //PICES
+                inum++;                                          //PICES
+                if (inum > 1) {                                  //PICES
+                    /* both wedges failed: distribute equally to all 8 nodes */
+                    for (a = 1; a <= ENODES3D; a++) {           //PICES
+                        gnode = E->ien[j][nelem].node[a];       //PICES
+                        T_num[j][gnode] += w_equal * T_p;       //PICES
+                        W_den[j][gnode] += w_equal;             //PICES
+                    }                                            //PICES
+                    continue;                                    //PICES
+                }                                               //PICES
+                iwedge = 2;                                     //PICES
+                goto pices_p2n_next_wedge;                      //PICES
+            }                                                   //PICES
+
+            get_radial_shape(E, j, nelem, rad, shaperad);       //PICES
+
+            shape[1] = shaperad[1] * shape2d[1];                //PICES
+            shape[2] = shaperad[1] * shape2d[2];                //PICES
+            shape[3] = shaperad[1] * shape2d[3];                //PICES
+            shape[4] = shaperad[2] * shape2d[1];                //PICES
+            shape[5] = shaperad[2] * shape2d[2];                //PICES
+            shape[6] = shaperad[2] * shape2d[3];                //PICES
+
+            wn = (iwedge == 1) ? wedge1_enode : wedge2_enode;  //PICES
+
+            for (a = 1; a <= 6; a++) {                          //PICES
+                gnode = E->ien[j][nelem].node[wn[a]];           //PICES
+                T_num[j][gnode] += shape[a] * T_p;              //PICES
+                W_den[j][gnode] += shape[a];                    //PICES
+            }                                                    //PICES
+
+        }  /* end tracer loop */                                 //PICES
+    }  /* end cap loop */                                        //PICES
+
+    return;                                                      //PICES
+}  /* end PICES_particles_to_nodes */                            //PICES
+
+
+/****** PICES_nodes_to_particles ******************************************
+ * Interpolate a nodal field to all particles (paper Eq. 14).
+ * Because wedge shape functions sum to 1, no denominator is needed.
+ * T_node: source nodal field (e.g. E->T after diffusion, or dT_sub_node)
+ * dest_extraq_idx: extraq slot index to write the interpolated values into.
+ **************************************************************************/
+
+void PICES_nodes_to_particles(struct All_variables *E,           //PICES
+                               double **T_node,                  //PICES: source nodal field
+                               int dest_extraq_idx)              //PICES: destination extraq slot
+{
+    static const int wedge1_enode[7] = {0, 1, 2, 3, 5, 6, 7};  //PICES
+    static const int wedge2_enode[7] = {0, 1, 3, 4, 5, 7, 8};  //PICES
+
+    int j, kk, nelem, iwedge, inum, a;                          //PICES
+    double theta, phi, rad, u, v, T_interp;                     //PICES
+    double shape2d[4], shaperad[3], shape[7];                    //PICES
+    const double eps = -1e-4;                                    //PICES
+    const int *wn;                                               //PICES
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {            //PICES
+        for (kk = 1; kk <= E->trace.ntracers[j]; kk++) {       //PICES
+
+            nelem = E->trace.ielement[j][kk];                   //PICES
+            theta = E->trace.basicq[j][0][kk];                  //PICES
+            phi   = E->trace.basicq[j][1][kk];                  //PICES
+            rad   = E->trace.basicq[j][2][kk];                  //PICES
+
+            spherical_to_uv(E, j, theta, phi, &u, &v);          //PICES
+
+            inum   = 0;                                          //PICES
+            iwedge = 1;                                          //PICES
+
+        pices_n2p_next_wedge:                                    //PICES
+            get_2dshape(E, j, nelem, u, v, iwedge, shape2d);    //PICES
+
+            if (shape2d[1] < eps || shape2d[2] < eps || shape2d[3] < eps) {  //PICES
+                inum++;                                          //PICES
+                if (inum > 1) {                                  //PICES
+                    /* both wedges failed: equal-weight average of 8 nodes */
+                    T_interp = 0.0;                              //PICES
+                    for (a = 1; a <= ENODES3D; a++)              //PICES
+                        T_interp += T_node[j][E->ien[j][nelem].node[a]]; //PICES
+                    T_interp /= (double)ENODES3D;                //PICES
+                    E->trace.extraq[j][dest_extraq_idx][kk] = T_interp; //PICES
+                    continue;                                    //PICES
+                }                                               //PICES
+                iwedge = 2;                                     //PICES
+                goto pices_n2p_next_wedge;                      //PICES
+            }                                                   //PICES
+
+            get_radial_shape(E, j, nelem, rad, shaperad);       //PICES
+
+            shape[1] = shaperad[1] * shape2d[1];                //PICES
+            shape[2] = shaperad[1] * shape2d[2];                //PICES
+            shape[3] = shaperad[1] * shape2d[3];                //PICES
+            shape[4] = shaperad[2] * shape2d[1];                //PICES
+            shape[5] = shaperad[2] * shape2d[2];                //PICES
+            shape[6] = shaperad[2] * shape2d[3];                //PICES
+
+            wn = (iwedge == 1) ? wedge1_enode : wedge2_enode;  //PICES
+
+            T_interp = 0.0;                                     //PICES
+            for (a = 1; a <= 6; a++)                            //PICES
+                T_interp += shape[a] * T_node[j][E->ien[j][nelem].node[wn[a]]]; //PICES
+
+            E->trace.extraq[j][dest_extraq_idx][kk] = T_interp; //PICES
+
+        }  /* end tracer loop */                                 //PICES
+    }  /* end cap loop */                                        //PICES
+
+    return;                                                      //PICES
+}  /* end PICES_nodes_to_particles */                            //PICES
+
+
+/****** PICES_subgrid_diffusion *******************************************
+ * Single-pass: for each particle, interpolate T_env from E->T, compute
+ * δT_sub (paper Eq. 11), then accumulate weighted δT_sub back to nodes.
+ *
+ * Eq. 11:  δT_sub = (T_env - T_s) * (1 - exp(-dt / t_feature))
+ *          t_feature = Le² / kappa,   Le = cbrt(element volume)
+ *
+ * Outputs (caller must pre-zero, MPI-exchange, then normalize num/den):
+ *   dT_sub_node_num[m][i] += shape[a] * δT_sub
+ *   dT_sub_node_den[m][i] += shape[a]
+ **************************************************************************/
+
+void PICES_subgrid_diffusion(struct All_variables *E,            //PICES
+                              double **dT_sub_node_num,          //PICES: Σ(δT_sub * w), pre-zeroed
+                              double **dT_sub_node_den,          //PICES: Σ(w),           pre-zeroed
+                              double dt)                         //PICES: current timestep
+{
+    static const int wedge1_enode[7] = {0, 1, 2, 3, 5, 6, 7};  //PICES
+    static const int wedge2_enode[7] = {0, 1, 3, 4, 5, 7, 8};  //PICES
+
+    int j, kk, nelem, iwedge, inum, a, gnode;                   //PICES
+    int pT = E->trace.itracer_pices_temp;                        //PICES
+    double theta, phi, rad, u, v;                                //PICES
+    double shape2d[4], shaperad[3], shape[7];                    //PICES
+    double T_env, T_s, Le, t_feature, dT_sub;                   //PICES
+    double kappa = (double)E->control.inputdiff;                 //PICES: dimensionless thermal diffusivity
+    const double eps = -1e-4;                                    //PICES
+    const int *wn;                                               //PICES
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {            //PICES
+        for (kk = 1; kk <= E->trace.ntracers[j]; kk++) {       //PICES
+
+            nelem = E->trace.ielement[j][kk];                   //PICES
+            theta = E->trace.basicq[j][0][kk];                  //PICES
+            phi   = E->trace.basicq[j][1][kk];                  //PICES
+            rad   = E->trace.basicq[j][2][kk];                  //PICES
+            T_s   = E->trace.extraq[j][pT][kk];                 //PICES: current particle T
+
+            spherical_to_uv(E, j, theta, phi, &u, &v);          //PICES
+
+            inum   = 0;                                          //PICES
+            iwedge = 1;                                          //PICES
+
+        pices_sub_next_wedge:                                    //PICES
+            get_2dshape(E, j, nelem, u, v, iwedge, shape2d);    //PICES
+
+            if (shape2d[1] < eps || shape2d[2] < eps || shape2d[3] < eps) {  //PICES
+                inum++;                                          //PICES
+                if (inum > 1) {                                  //PICES
+                    /* fallback: equal-weight average for T_env, distribute δT_sub equally */
+                    T_env = 0.0;                                 //PICES
+                    for (a = 1; a <= ENODES3D; a++)              //PICES
+                        T_env += E->T[j][E->ien[j][nelem].node[a]]; //PICES
+                    T_env /= (double)ENODES3D;                   //PICES
+
+                    Le       = cbrt(E->eco[j][nelem].area);     //PICES
+                    t_feature = Le * Le / kappa;                 //PICES
+                    dT_sub   = (T_env - T_s) * (1.0 - exp(-dt / t_feature)); //PICES
+
+                    for (a = 1; a <= ENODES3D; a++) {            //PICES
+                        double w = 1.0 / (double)ENODES3D;      //PICES
+                        gnode = E->ien[j][nelem].node[a];        //PICES
+                        dT_sub_node_num[j][gnode] += w * dT_sub; //PICES
+                        dT_sub_node_den[j][gnode] += w;          //PICES
+                    }                                            //PICES
+                    continue;                                    //PICES
+                }                                               //PICES
+                iwedge = 2;                                     //PICES
+                goto pices_sub_next_wedge;                      //PICES
+            }                                                   //PICES
+
+            get_radial_shape(E, j, nelem, rad, shaperad);       //PICES
+
+            shape[1] = shaperad[1] * shape2d[1];                //PICES
+            shape[2] = shaperad[1] * shape2d[2];                //PICES
+            shape[3] = shaperad[1] * shape2d[3];                //PICES
+            shape[4] = shaperad[2] * shape2d[1];                //PICES
+            shape[5] = shaperad[2] * shape2d[2];                //PICES
+            shape[6] = shaperad[2] * shape2d[3];                //PICES
+
+            wn = (iwedge == 1) ? wedge1_enode : wedge2_enode;  //PICES
+
+            /* interpolate T_env from nodes to particle position */
+            T_env = 0.0;                                        //PICES
+            for (a = 1; a <= 6; a++)                            //PICES
+                T_env += shape[a] * E->T[j][E->ien[j][nelem].node[wn[a]]]; //PICES
+
+            /* compute element characteristic length and relaxation time */
+            Le        = cbrt(E->eco[j][nelem].area);            //PICES
+            t_feature = Le * Le / kappa;                        //PICES
+
+            /* paper Eq. 11: subgrid diffusion temperature change */
+            dT_sub = (T_env - T_s) * (1.0 - exp(-dt / t_feature)); //PICES
+
+            /* accumulate δT_sub to nodes with same shape weights */
+            for (a = 1; a <= 6; a++) {                          //PICES
+                gnode = E->ien[j][nelem].node[wn[a]];           //PICES
+                dT_sub_node_num[j][gnode] += shape[a] * dT_sub; //PICES
+                dT_sub_node_den[j][gnode] += shape[a];          //PICES
+            }                                                    //PICES
+
+        }  /* end tracer loop */                                 //PICES
+    }  /* end cap loop */                                        //PICES
+
+    return;                                                      //PICES
+}  /* end PICES_subgrid_diffusion */                             //PICES

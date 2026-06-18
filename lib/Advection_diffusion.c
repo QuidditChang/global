@@ -37,6 +37,7 @@
 #include "advection_diffusion.h"
 #include "parsing.h"
 #include "lith_age.h"
+#include "PICES.h"                                                     //PICES
 
 static void set_diffusion_timestep(struct All_variables *E);
 static void predictor(struct All_variables *E, double **field,
@@ -47,6 +48,10 @@ static void pg_solver(struct All_variables *E,
                       double **T, double **Tdot, double **DTdot,
                       struct SOURCES Q0,
                       double diff, int bc, unsigned int **FLAGS);
+static void pg_diffusion_solver(struct All_variables *E,             //PICES
+                      double **T, double **Tdot, double **DTdot,     //PICES
+                      struct SOURCES Q0,                             //PICES
+                      double diff, int bc, unsigned int **FLAGS);    //PICES
 static void pg_shape_fn(struct All_variables *E, int el,
                         struct Shape_function *PG,
                         struct Shape_function_dx *GNx,
@@ -93,6 +98,7 @@ void advection_diffusion_parameters(struct All_variables *E)
 
     input_float("inputdiffusivity",&(E->control.inputdiff),"1.0",m);
 
+    input_boolean("use_PICES",&(E->control.use_PICES),"off",m);     //PICES
 
     return;
 }
@@ -108,6 +114,14 @@ void advection_diffusion_allocate_memory(struct All_variables *E)
     for(i=1;i<=E->lmesh.nno;i++)
       E->Tdot[m][i]=0.0;
     }
+
+  if (E->control.use_PICES) {                                        //PICES
+    for (m=1; m<=E->sphere.caps_per_proc; m++) {                     //PICES
+      E->PICES_W[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
+      for (i=1; i<=E->lmesh.nno; i++)                                //PICES
+        E->PICES_W[m][i] = 0.0;                                      //PICES
+    }                                                                 //PICES
+  }                                                                   //PICES
 
   return;
 }
@@ -254,6 +268,76 @@ void PG_timestep_solve(struct All_variables *E)
     iredo = 0;
     if (E->advection.ADVECTION) {
 
+      if (E->control.use_PICES) {                                    //PICES: PICES path replaces predictor+pg_solver+corrector
+
+        /* --- one-time particle T initialisation -------------------- */
+        if (!E->control.pices_initialized) {                         //PICES
+          PICES_init_particle_T(E);                                  //PICES
+          E->control.pices_initialized = 1;                          //PICES
+        }                                                            //PICES
+
+        /* --- CELL PART -------------------------------------------- */
+        /* Step 2: accumulate particle T → E->T (numerator) and
+         *         particle weights → E->PICES_W (denominator).
+         *         PICES_particles_to_nodes pre-zeros both arrays.    */
+        PICES_particles_to_nodes(E, E->T, E->PICES_W);              //PICES
+
+        /* Step 3: MPI exchange numerator and denominator */
+        (E->exchange_node_d)(E, E->T,       E->mesh.levmax);        //PICES
+        (E->exchange_node_d)(E, E->PICES_W, E->mesh.levmax);        //PICES
+
+        /* Step 4: normalise → nodal T from particles */
+        for (m=1; m<=E->sphere.caps_per_proc; m++)                  //PICES
+          for (i=1; i<=E->lmesh.nno; i++)                           //PICES
+            if (E->PICES_W[m][i] > 0.0)                             //PICES
+              E->T[m][i] /= E->PICES_W[m][i];                       //PICES
+
+        /* Step 5: apply boundary conditions before diffusion solve */
+        temperatures_conform_bcs(E);                                 //PICES
+
+        /* Step 6: diffusion-only solve (VV=0 inside) */
+        pg_diffusion_solver(E, E->T, E->Tdot, DTdot,                //PICES
+                            E->convection.heat_sources,              //PICES
+                            E->control.inputdiff, 1, E->node);      //PICES
+
+        /* Step 7: corrector + BCs */
+        corrector(E, E->T, E->Tdot, DTdot);                         //PICES
+        temperatures_conform_bcs(E);                                 //PICES
+
+        /* --- PARTICLE PART ---------------------------------------- */
+        {                                                            //PICES
+          double *dT_sub_num[NCS], *dT_sub_den[NCS];                //PICES
+
+          /* Step 8: allocate per-cap subgrid diffusion accumulators */
+          for (m=1; m<=E->sphere.caps_per_proc; m++) {              //PICES
+            dT_sub_num[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
+            dT_sub_den[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
+            for (i=1; i<=E->lmesh.nno; i++) {                       //PICES
+              dT_sub_num[m][i] = 0.0;                               //PICES
+              dT_sub_den[m][i] = 0.0;                               //PICES
+            }                                                        //PICES
+          }                                                          //PICES
+
+          /* Step 9: compute subgrid diffusion (Eq. 11) */
+          PICES_subgrid_diffusion(E, dT_sub_num, dT_sub_den,        //PICES
+                                  E->advection.timestep);           //PICES
+
+          /* Step 10: MPI exchange subgrid diffusion accumulators */
+          (E->exchange_node_d)(E, dT_sub_num, E->mesh.levmax);      //PICES
+          (E->exchange_node_d)(E, dT_sub_den, E->mesh.levmax);      //PICES
+
+          /* Step 11: update particle T (Eq. 8 + 12) */
+          PICES_update_particle_T(E, E->T, dT_sub_num, dT_sub_den); //PICES
+
+          /* Step 12: free accumulators */
+          for (m=1; m<=E->sphere.caps_per_proc; m++) {              //PICES
+            free(dT_sub_num[m]);                                     //PICES
+            free(dT_sub_den[m]);                                     //PICES
+          }                                                          //PICES
+        }                                                            //PICES
+
+      } else {                                                       //PICES: original path, bit-for-bit unchanged
+
       predictor(E,E->T,E->Tdot);
 
       for(psc_pass=0;psc_pass<E->advection.temp_iterations;psc_pass++)   {
@@ -267,6 +351,8 @@ void PG_timestep_solve(struct All_variables *E)
 	temperatures_conform_bcs(E);
 	//if(E->sphere.caps==1)  apply_smooth_sideTbc(E);
       }
+
+      }  /* end use_PICES / original branch */                       //PICES
 
       if(E->advection.monitor_max_T) {
           /* get the max temperature for new T */
@@ -693,6 +779,80 @@ static void pg_solver(struct All_variables *E,
     return;
 }
 
+
+/****** pg_diffusion_solver ************************************************** //PICES
+ * PICES: identical to pg_solver except all velocity components VV are zeroed  //PICES
+ * after velo_from_element(), so the residual contains only the diffusion term. //PICES
+ * Called in the PICES cell part instead of pg_solver.                          //PICES
+ ****************************************************************************/ //PICES
+
+static void pg_diffusion_solver(struct All_variables *E,             //PICES
+                                double **T, double **Tdot,           //PICES
+                                double **DTdot,                      //PICES
+                                struct SOURCES Q0,                   //PICES
+                                double diff, int bc,                 //PICES
+                                unsigned int **FLAGS)                //PICES
+{
+    void get_global_shape_fn();                                      //PICES
+    void velo_from_element();                                        //PICES
+
+    int el, a, a1, m, i;                                            //PICES
+    double Eres[9], rtf[4][9], t1, t2;                              //PICES
+    float VV[4][9];                                                  //PICES
+
+    struct Shape_function PG;                                        //PICES
+    struct Shape_function GN;                                        //PICES
+    struct Shape_function_dA dOmega;                                 //PICES
+    struct Shape_function_dx GNx;                                    //PICES
+
+    const int dims = E->mesh.nsd;                                    //PICES
+    const int ends = enodes[dims];                                   //PICES
+    const int sphere_key = 1;                                        //PICES
+
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)                  //PICES
+        for (i = 1; i <= E->lmesh.nno; i++)                         //PICES
+            DTdot[m][i] = 0.0;                                       //PICES
+
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)                  //PICES
+        for (el = 1; el <= E->lmesh.nel; el++) {                    //PICES
+
+            velo_from_element(E, VV, m, el, sphere_key);            //PICES
+
+            /* PICES: zero all velocity components — diffusion only */
+            for (a = 1; a <= ends; a++) {                           //PICES
+                VV[1][a] = 0.0f;                                    //PICES
+                VV[2][a] = 0.0f;                                    //PICES
+                VV[3][a] = 0.0f;                                    //PICES
+            }                                                        //PICES
+
+            get_global_shape_fn(E, el, &GN, &GNx, &dOmega, 0,      //PICES
+                                sphere_key, rtf, E->mesh.levmax, m); //PICES
+
+            pg_shape_fn(E, el, &PG, &GNx, VV,                      //PICES
+                        rtf, diff, m);                               //PICES
+            element_residual(E, el, PG, GNx, dOmega, VV, T, Tdot,  //PICES
+                             Q0, Eres, rtf, diff,                   //PICES
+                             E->sphere.cap[m].TB, FLAGS, m);        //PICES
+
+            for (a = 1; a <= ends; a++) {                           //PICES
+                a1 = E->ien[m][el].node[a];                         //PICES
+                DTdot[m][a1] += Eres[a];                            //PICES
+            }                                                        //PICES
+
+        }  /* end element loop */                                    //PICES
+
+    (E->exchange_node_d)(E, DTdot, E->mesh.levmax);                 //PICES
+
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)                  //PICES
+        for (i = 1; i <= E->lmesh.nno; i++) {                       //PICES
+            if (!(E->node[m][i] & (TBX | TBY | TBZ)))               //PICES
+                DTdot[m][i] *= E->TMass[m][i];                      //PICES
+            else                                                     //PICES
+                DTdot[m][i] = 0.0;                                   //PICES
+        }                                                            //PICES
+
+    return;                                                          //PICES
+}  /* end pg_diffusion_solver */                                     //PICES
 
 
 /* ===================================================

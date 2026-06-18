@@ -144,6 +144,9 @@ struct TRACE{
 
 
 
+    int itracer_pices_temp;  //PICES: index of particle temperature in extraq (-1 if disabled)
+    int pices_dtsub_idx;     //PICES: index of per-particle δT_remain workspace in extraq (-1 if disabled)
+
     /*********************/
     /* function pointers */
     /*********************/

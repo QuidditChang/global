@@ -532,6 +532,9 @@ struct CONTROL {
     int print_convergence;
     int sdepv_print_convergence;
 
+    int use_PICES;          //PICES: enable particle-in-cell energy solver
+    int pices_initialized;  //PICES: particle T initialized from E->T on first call
+
 };
 
 
@@ -738,6 +741,7 @@ struct All_variables {
 
     double *P[NCS],*F[NCS],*H[NCS],*S[NCS],*U[NCS];
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
+    double *PICES_W[NCS];  //PICES: nodal weight accumulator for particle→node mapping
     double *u1[NCS];
     double *temp[NCS],*temp1[NCS];
     float *NP[NCS],*edot[NCS],*Mass[NCS];

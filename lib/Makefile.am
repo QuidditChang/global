@@ -96,6 +96,8 @@ sources = \
 	output_h5.h \
 	Pan_problem_misc_functions.c \
 	parallel_related.h \
+	PICES.c \
+	PICES.h \
 	Parallel_util.c \
 	Parsing.c \
 	parsing.h \
