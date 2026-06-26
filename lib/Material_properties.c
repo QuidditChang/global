@@ -63,8 +63,10 @@ void mat_prop_allocate(struct All_variables *E)
     /* dissipation scaling */
     E->refstate.dis = (double *) malloc((noz+1)*sizeof(double));
 
-    /* reference profile of thermal conductivity */
-    /*E->refstate.thermal_conductivity = (double *) malloc((noz+1)*sizeof(double));*/
+    /* reference profile of thermal conductivity (k~_d depth factor, refstate col 6).
+       Allocated [noz+1] exactly like rho/heat_capacity so the 0.5*(arr[nz]+arr[nz+1])
+       element average in element_residual never reads past the top radial node. */
+    E->refstate.thermal_conductivity = (double *) malloc((noz+1)*sizeof(double));
 
     /* reference profile of temperature */
     /*E->refstate.Tadi = (double *) malloc((noz+1)*sizeof(double));*/
@@ -117,7 +119,7 @@ static void read_refstate(struct All_variables *E)
     FILE *fp;
     int i;
     char buffer[255];
-    double not_used1, not_used2; // DJB EBA
+    double not_used2; // DJB EBA  (col 7 still unused; col 6 now = thermal_conductivity)
 
     fp = fopen(E->refstate.filename, "r");
     if(fp == NULL) {
@@ -139,7 +141,7 @@ static void read_refstate(struct All_variables *E)
                &(E->refstate.thermal_expansivity[i]),
                &(E->refstate.heat_capacity[i]),
 	       &(E->refstate.dis[i]), // DJB EBA
-               &not_used1,
+               &(E->refstate.thermal_conductivity[i]),  // col 6 = k~_d depth factor
                &not_used2) != 7) {
 		fprintf(stderr,"Error while reading file '%s'\n", E->refstate.filename);
             exit(8);
@@ -175,7 +177,7 @@ static void adams_williamson_eos(struct All_variables *E)
 	E->refstate.thermal_expansivity[i] = 1;
 	E->refstate.heat_capacity[i] = 1;
 	E->refstate.dis[i] = 1; // DJB EBA
-	/*E->refstate.thermal_conductivity[i] = 1;*/
+	E->refstate.thermal_conductivity[i] = 1; /* k~_d: analytic EoS path -> constant (no depth dep) */
 	/*E->refstate.Tadi[i] = (E->control.adiabaticT0 + E->control.surface_temp) * exp(E->control.disptn_number * z) - E->control.surface_temp;*/
     }
 

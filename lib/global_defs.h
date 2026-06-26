@@ -541,7 +541,7 @@ struct REF_STATE {
     double *rho;
     double *thermal_expansivity;
     double *heat_capacity;
-    /*double *thermal_conductivity;*/
+    double *thermal_conductivity;   /* k~_d : non-dim depth conductivity factor (refstate col 6) */
     double *gravity;
     // DJB EBA
     double *dis;

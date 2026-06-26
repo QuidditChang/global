@@ -801,6 +801,7 @@ static void element_residual(struct All_variables *E, int el,
     struct Shape_function1 GM;
     struct Shape_function1_dA dGamma;
     double temp,rho,cp,heating;
+    double kd_el;   /* Phase 1: element k~_d (refstate depth factor, nz average) */
     int nz;
 
     void get_global_1d_shape_fn();
@@ -864,6 +865,10 @@ static void element_residual(struct All_variables *E, int el,
     nz = ((el-1) % E->lmesh.elz) + 1;
     rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
     cp = 0.5 * (E->refstate.heat_capacity[nz] + E->refstate.heat_capacity[nz+1]);
+    /* Phase 1: element depth conductivity factor k~_d, same [nz] average as
+       rho/cp (thermal_conductivity is [noz+1], so nz+1 is in-bounds at the top
+       radial element). Element-constant in radius; both z Gauss points share it. */
+    kd_el = 0.5 * (E->refstate.thermal_conductivity[nz] + E->refstate.thermal_conductivity[nz+1]);
 
     if(E->control.disptn_number == 0)
         heating = rho * Q;
@@ -874,13 +879,18 @@ static void element_residual(struct All_variables *E, int el,
 
     /* construct residual from this information */
 
-    /* Phase 0: non-dimensional conductivity k~ at each Gauss point.
-       For now k~ is identically the constant scalar diff, so the discrete
-       operator is mathematically unchanged.  This loop is the SINGLE entry
-       point where Phase 1+ will inject the Deschamps et al. (2026) law
-       k~ = k~_d(d) * k~_T(T) * k~_C(C_prim) evaluated per Gauss point. */
+    /* Phase 1: non-dimensional conductivity k~ at each Gauss point.
+       This SINGLE injection point carries the Deschamps et al. (2026) law
+       k~ = k~_d(d) * k~_T(T) * k~_C(C_prim).  THIS ROUND adds only the DEPTH
+       factor k~_d (refstate, element-constant via the nz average above); the
+       temperature factor k~_T(T_i) and composition factor k~_C(C_i) are Phase 2
+       and are deliberately NOT applied yet -> conductivity is depth-dependent but
+       temperature/composition-independent.
+       DEGENERACY SAFETY-NET: if refstate col 6 (k~_d) is set identically to 1
+       (and later a=0 so k~_T=1, R_C=1 so k~_C=1), then kd_el=1 and kgp[i]=1=diff,
+       recovering the constant-kappa Phase-0 operator bit-for-bit. */
     for(i=1;i<=vpts;i++)
-        kgp[i] = diff;
+        kgp[i] = kd_el;
 
     if(diffusion){
       for(j=1;j<=ends;j++) {
