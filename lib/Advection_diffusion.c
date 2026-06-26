@@ -785,6 +785,15 @@ static void element_residual(struct All_variables *E, int el,
     double dT[9];
     double tx1[9],tx2[9],tx3[9],sint[9];
     double v1[9],v2[9],v3[9];
+    double kgp[9];   /* Phase 0: per-Gauss-point NON-DIMENSIONAL thermal
+                        CONDUCTIVITY k~ ( = k / k_S ), NOT diffusivity kappa.
+                        Under the current pure-Boussinesq setup rho*cp = 1, so
+                        k~ == kappa~ and the identity assignment kgp[i]=diff
+                        below is exact (zero regression).  NB: if EBA is ever
+                        enabled (disptn_number != 0), the quantity that rides
+                        with the temperature gradient here is k~, while rho*cp
+                        belongs to the time-derivative / heating terms -- this
+                        block must then be re-examined. */
     double adv_dT,t2[4];
     double T,DT;
 
@@ -865,6 +874,13 @@ static void element_residual(struct All_variables *E, int el,
 
     /* construct residual from this information */
 
+    /* Phase 0: non-dimensional conductivity k~ at each Gauss point.
+       For now k~ is identically the constant scalar diff, so the discrete
+       operator is mathematically unchanged.  This loop is the SINGLE entry
+       point where Phase 1+ will inject the Deschamps et al. (2026) law
+       k~ = k~_d(d) * k~_T(T) * k~_C(C_prim) evaluated per Gauss point. */
+    for(i=1;i<=vpts;i++)
+        kgp[i] = diff;
 
     if(diffusion){
       for(j=1;j<=ends;j++) {
@@ -874,7 +890,7 @@ static void element_residual(struct All_variables *E, int el,
 	    PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
               * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])*rho*cp
                  - heating )
-              + diff * dOmega.vpt[i] * E->heating_latent[m][el]
+              + kgp[i] * dOmega.vpt[i] * E->heating_latent[m][el]
               * (GNx.vpt[GNVXINDEX(0,j,i)]*tx1[i]*rtf[3][i] +
                  GNx.vpt[GNVXINDEX(1,j,i)]*tx2[i]*sint[i] +
                  GNx.vpt[GNVXINDEX(2,j,i)]*tx3[i] );
