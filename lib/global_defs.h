@@ -470,6 +470,8 @@ struct CONTROL {
     char uzawa[20];
 
     float inputdiff;
+    float kT_exponent;   /* Deschamps k~_T temperature exponent a (default 0 = degenerate leg) */
+    float kC_ratio;      /* Deschamps k~_C composition conductivity ratio R_C (default 1 = off) */
     float VBXtopval;
     float VBXbotval;
     float VBYtopval;

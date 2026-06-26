@@ -1212,7 +1212,11 @@ static void read_tracer_file(struct All_variables *E)
 
     for (j=1;j<=E->sphere.caps_per_proc;j++) {
 
-    sprintf(tracer_file,"%s/tracer.%d.dat",E->trace.tracer_file,E->parallel.me);
+    /* Shared single tracer file: all ranks read the same file and the icheck
+       filtering below keeps only tracers in each rank's domain (ported from the
+       clennett2019 branch). The flavor=0 override (init_tracer_flavors) is on the
+       random-IC path only and is not reached here. */
+    sprintf(tracer_file,"%s",E->trace.tracer_file);
     fptracer=fopen(tracer_file,"r");
     fprintf(E->trace.fpt,"Opening %s\n",E->trace.tracer_file);
 

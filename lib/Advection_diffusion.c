@@ -93,6 +93,12 @@ void advection_diffusion_parameters(struct All_variables *E)
 
     input_float("inputdiffusivity",&(E->control.inputdiff),"1.0",m);
 
+    /* Deschamps (2026) conductivity factors k~ = k~_d * k~_T(T) * k~_C(C):
+       kT_exponent = a in k~_T = (300/T_dim)^a  (0 = degenerate, k~_T=1)
+       kC_ratio    = R_C in k~_C = 1+(R_C-1)*C_prim  (1 = off, k~_C=1) */
+    input_float("kT_exponent",&(E->control.kT_exponent),"0.0",m);
+    input_float("kC_ratio",&(E->control.kC_ratio),"1.0",m);
+
 
     return;
 }
@@ -794,6 +800,7 @@ static void element_residual(struct All_variables *E, int el,
                         with the temperature gradient here is k~, while rho*cp
                         belongs to the time-derivative / heating terms -- this
                         block must then be re-examined. */
+    double tgp[9];   /* Phase 2: temperature at each Gauss point (for k~_T) */
     double adv_dT,t2[4];
     double T,DT;
 
@@ -816,6 +823,7 @@ static void element_residual(struct All_variables *E, int el,
 
     for(i=1;i<=vpts;i++)	{
       dT[i]=0.0;
+      tgp[i]=0.0;
       v1[i] = tx1[i]=  0.0;
       v2[i] = tx2[i]=  0.0;
       v3[i] = tx3[i]=  0.0;
@@ -838,6 +846,7 @@ static void element_residual(struct All_variables *E, int el,
           tx2[i] += GNx.vpt[GNVXINDEX(1,j,i)] * T * sint[i];
           tx3[i] += GNx.vpt[GNVXINDEX(2,j,i)] * T;
           sfn = E->N.vpt[GNVINDEX(j,i)];
+          tgp[i] += T * sfn;   /* Phase 2: interpolate T to Gauss point i */
           v1[i] += VV[1][j] * sfn;
           v2[i] += VV[2][j] * sfn;
           v3[i] += VV[3][j] * sfn;
@@ -869,6 +878,13 @@ static void element_residual(struct All_variables *E, int el,
        rho/cp (thermal_conductivity is [noz+1], so nz+1 is in-bounds at the top
        radial element). Element-constant in radius; both z Gauss points share it. */
     kd_el = 0.5 * (E->refstate.thermal_conductivity[nz] + E->refstate.thermal_conductivity[nz+1]);
+    /* Phase 2: element composition factor k~_C = 1 + (R_C-1)*C_prim.
+       R_C = kC_ratio defaults to 1 -> k~_C = 1 (off). C_prim has no physical
+       object until the primordial flavor is added (route P), so it is held at
+       0 here. TODO: kC = 1.0 + (E->control.kC_ratio - 1.0) *
+       E->composition.comp_el[m][PRIM_IDX][el] once primordial is in. */
+    double kC = 1.0;
+    double kE = kd_el * kC;   /* per-element part of k~ (depth * composition) */
 
     if(E->control.disptn_number == 0)
         heating = rho * Q;
@@ -879,18 +895,26 @@ static void element_residual(struct All_variables *E, int el,
 
     /* construct residual from this information */
 
-    /* Phase 1: non-dimensional conductivity k~ at each Gauss point.
-       This SINGLE injection point carries the Deschamps et al. (2026) law
-       k~ = k~_d(d) * k~_T(T) * k~_C(C_prim).  THIS ROUND adds only the DEPTH
-       factor k~_d (refstate, element-constant via the nz average above); the
-       temperature factor k~_T(T_i) and composition factor k~_C(C_i) are Phase 2
-       and are deliberately NOT applied yet -> conductivity is depth-dependent but
-       temperature/composition-independent.
-       DEGENERACY SAFETY-NET: if refstate col 6 (k~_d) is set identically to 1
-       (and later a=0 so k~_T=1, R_C=1 so k~_C=1), then kd_el=1 and kgp[i]=1=diff,
-       recovering the constant-kappa Phase-0 operator bit-for-bit. */
-    for(i=1;i<=vpts;i++)
-        kgp[i] = kd_el;
+    /* Phase 2: non-dimensional conductivity k~ at each Gauss point, the SINGLE
+       injection point for the Deschamps et al. (2026) law
+       k~ = k~_d(d) * k~_T(T) * k~_C(C_prim).  k~_d (depth) and k~_C (composition)
+       are per-element (kE above); k~_T is per-Gauss-point in T.
+       T_dim[K] = (T_nd + surface_temp) * ref_temperature is the CitcomS non-dim
+       -> absolute temperature reduction (surface_temp non-dim offset,
+       ref_temperature = DeltaT in K). 300 K is the Deschamps reference T_surf.
+
+       THREE-LAYER DEGENERACY:
+         a=0 (kT_exponent=0) -> kT=1 -> kgp[i]=kd_el         (Phase 1)
+         + col6 == 1         -> kd_el=1 -> kgp[i]=diff=const kappa (Phase 0)
+         R_C=1 (kC_ratio=1)  -> kC=1 -> composition factor off
+       TODO: wire k~_C to comp_el[m][PRIM_IDX][el] once primordial exists. */
+    for(i=1;i<=vpts;i++) {
+        double T_dim = (tgp[i] + E->control.surface_temp)
+                       * E->data.ref_temperature;
+        double kT = (E->control.kT_exponent == 0.0) ? 1.0
+                    : pow(300.0 / T_dim, (double)E->control.kT_exponent);
+        kgp[i] = kE * kT;
+    }
 
     if(diffusion){
       for(j=1;j<=ends;j++) {
