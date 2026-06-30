@@ -12,7 +12,7 @@ AC_DEFUN([CIT_ARG_HDF5], [
 # $Id: cit_hdf.m4 5189 2006-11-07 02:29:23Z leif $
 AC_ARG_VAR(PHDF5_HOME, [home path to HDF5 library])
 AC_ARG_WITH([hdf5],
-    [AC_HELP_STRING([--with-hdf5],
+    [AS_HELP_STRING([--with-hdf5],
         [enable HDF5 output @<:@default=$1@:>@])],
     [want_hdf5="$withval"],
     [want_hdf5=$1])

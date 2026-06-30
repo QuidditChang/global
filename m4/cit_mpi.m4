@@ -320,12 +320,13 @@ AC_LANG_CASE(
         AC_CHECK_HEADER([mpi.h], [], [AC_MSG_ERROR([header 'mpi.h' not found])])
     ],
     [C++], [
-        CIT_MPI_CHECK_CXX_LINK(cit_MPI_CPPFLAGS, [],
-                               _CIT_TRIVIAL_MPI_PROGRAM,
-                               [whether we can link a trivial C++ MPI program],
-                               [],
-                               AC_MSG_FAILURE([cannot link a trivial C++ MPI program using $CXX]))
-        CPPFLAGS="$cit_MPI_CPPFLAGS $CPPFLAGS"
+        AC_MSG_CHECKING([whether we can link a trivial C++ MPI program])
+        AC_LINK_IFELSE(
+            [AC_LANG_PROGRAM([[#include <mpi.h>]],
+                             [[MPI_Init(0,0); MPI_Finalize();]])],
+            [AC_MSG_RESULT([yes])],
+            [AC_MSG_RESULT([no])
+             AC_MSG_FAILURE([cannot link a trivial C++ MPI program using $CXX])])
 ])
 ])dnl CIT_HEADER_MPI
 
