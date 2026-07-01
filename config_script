@@ -27,6 +27,10 @@ fi
 
 [ -e aux-config/install-sh ] && chmod +x aux-config/install-sh
 [ -e aux-config/py-compile ] && chmod +x aux-config/py-compile
+if [ -f libtool ]; then
+    perl -0pi -e 's/^ECHO=.*$/ECHO="printf %s\\\\n"/m; s/^objdir=.*$/objdir=".libs"/m' libtool
+    chmod +x libtool
+fi
 if [ -f examples/Makefile ]; then
     perl -0pi -e 's|MKDIR_P = \@MKDIR_P\@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
 fi
