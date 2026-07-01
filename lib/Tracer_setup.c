@@ -1565,8 +1565,8 @@ static void init_tracer_flavors(struct All_variables *E)
                   break;
               }
           }
-	  /* Jiashun changed */
-	  flavor = 0;
+		  /* Jiashun changed */
+		  /* flavor = 0; */
 
           E->trace.extraq[j][0][kk] = flavor;
 	}
