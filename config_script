@@ -28,7 +28,7 @@ fi
 [ -e aux-config/install-sh ] && chmod +x aux-config/install-sh
 [ -e aux-config/py-compile ] && chmod +x aux-config/py-compile
 if [ -f libtool ]; then
-    perl -0pi -e 's/^ECHO=.*$/ECHO="printf %s\\\\n"/m; s/^objdir=.*$/objdir=".libs"/m' libtool
+    perl -0pi -e 's/^ECHO=.*$/ECHO=echo/m; s/^echo=.*$/echo=echo/m; s/^objdir=.*$/objdir=.libs/m; if (!/^echo=/m) { s/^(ECHO=.*)$/$1\necho=echo/m; }' libtool
     chmod +x libtool
 fi
 if [ -f examples/Makefile ]; then
