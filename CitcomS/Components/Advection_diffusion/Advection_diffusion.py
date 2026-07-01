@@ -95,6 +95,8 @@ class Advection_diffusion(CitcomComponent):
         adv_sub_iterations = prop.int("adv_sub_iterations", default=2)
 
         inputdiffusivity = prop.float("inputdiffusivity", default=1)
+        kT_exponent = prop.float("kT_exponent", default=0.0)
+        kC_ratio = prop.float("kC_ratio", default=1.0)
 
 
 

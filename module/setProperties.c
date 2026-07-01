@@ -110,6 +110,8 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     getIntProperty(properties, "adv_sub_iterations", E->advection.temp_iterations, fp);
 
     getFloatProperty(properties, "inputdiffusivity", E->control.inputdiff, fp);
+    getFloatProperty(properties, "kT_exponent", E->control.kT_exponent, fp);
+    getFloatProperty(properties, "kC_ratio", E->control.kC_ratio, fp);
 
 
     PUTS(("\n"));
