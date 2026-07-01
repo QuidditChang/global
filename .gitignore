@@ -70,6 +70,5 @@ bin/ipad.py
 bin/journald.py
 bin/merlin
 
-# Visual scripts (generated)
-visual/autocombine.py
+# Visual outputs (generated)
 visual/*.net
