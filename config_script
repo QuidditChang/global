@@ -17,9 +17,7 @@ fi
 # Clean previous build
 make distclean 2>/dev/null || true
 
-if [ ! -s ./configure ]; then
-    autoreconf -fi
-fi
+autoreconf -fi
 
 ./configure --prefix=$(pwd) --with-hdf5=$HDF5ROOT \
       CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
@@ -36,7 +34,7 @@ if [ -f examples/Makefile ]; then
 fi
 
 make -j4
-make install SUBDIRS="lib CitcomS etc bin module" -i
+make install SUBDIRS="lib CitcomS etc bin module visual"
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
