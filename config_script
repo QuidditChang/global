@@ -34,7 +34,7 @@ if [ -f examples/Makefile ]; then
 fi
 
 make -j4
-make install SUBDIRS="lib CitcomS etc bin module visual"
+make install SUBDIRS="lib CitcomS etc bin module visual" -i
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
