@@ -28,7 +28,7 @@ AC_PREREQ(2.59)
 AC_INIT([CitcomS], [3.0.3], [cig-mc@geodynamics.org], [CitcomS])
 AC_CONFIG_AUX_DIR([./aux-config])
 AC_CONFIG_SRCDIR([bin/Citcom.c])
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign])
 
@@ -36,20 +36,20 @@ AM_INIT_AUTOMAKE([foreign])
 AC_ARG_VAR(PYTHON, [Python interpreter])
 AC_ARG_VAR(PYTHONPATH, [Python module search path])
 AC_ARG_WITH([pyre],
-    [AC_HELP_STRING([--with-pyre],
+    [AS_HELP_STRING([--with-pyre],
         [build Pyre modules @<:@default=yes@:>@])],
     [want_pyre="$withval"],
     [want_pyre=yes])
 AM_CONDITIONAL([COND_PYRE], [test "$want_pyre" = yes])
 AC_ARG_ENABLE([embedding],
-    [AC_HELP_STRING([--enable-embedding],
+    [AS_HELP_STRING([--enable-embedding],
         [embed Python with CitcomS in a single executable @<:@default=yes@:>@])],
     [want_embedding="$enableval"],
     [want_embedding=yes])
 AM_CONDITIONAL([COND_EMBEDDING], [test "$want_embedding" = yes])
 CIT_ARG_HDF5([auto])
 AC_ARG_WITH([exchanger],
-    [AC_HELP_STRING([--with-exchanger],
+    [AS_HELP_STRING([--with-exchanger],
         [use Exchanger @<:@default=auto@:>@])],
     [want_exchanger="$withval"],
     [want_exchanger=auto])
@@ -81,7 +81,7 @@ if test "$want_pyre" = yes; then
 fi
 # We don't need Fortran.
 AC_PROVIDE([AC_PROG_F77])
-AC_PROG_LIBTOOL
+LT_INIT
 
 # Checks for libraries.
 AC_SEARCH_LIBS([MPI_Init], [mpi mpich], [], [AC_MSG_ERROR([MPI library not found])])
