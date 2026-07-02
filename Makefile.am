@@ -24,7 +24,7 @@
 # $Id: Makefile.am 5636 2007-01-05 00:06:11Z leif $
 
 
-ACLOCAL_AMFLAGS = -I ./m4
+ACLOCAL_AMFLAGS = -I m4
 
 if COND_PYRE
     MAYBE_PYRE = CitcomS etc examples module tests visual
