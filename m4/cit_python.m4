@@ -302,7 +302,8 @@ f.close()
 makefile_vars = parse_makefile(makefile)
 keys = makefile_vars.keys()
 for key in keys:
-    makefile_vars[key] = expand_makefile_vars(makefile_vars[key], makefile_vars)
+    if isinstance(makefile_vars[key], basestring):
+        makefile_vars[key] = expand_makefile_vars(makefile_vars[key], makefile_vars)
 
 f = open(output, 'w')
 print >>f, "#!/usr/bin/env python"
