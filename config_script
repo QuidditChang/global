@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # To install Python2.6
 # Currently Loaded Modules:
@@ -8,19 +9,31 @@
 
 export PATH=/work/ess-zhangkd/CitcomS/vendor/python2.6.9/bin:$PATH
 export PATH=$PATH:$(pwd)
-module load intel/2018.4 mpi/intel/2018.4
-module load hdf5/1.8.18-parallel-intel-18.4
+if command -v module >/dev/null 2>&1; then
+    module load intel/2018.4 mpi/intel/2018.4
+    module load hdf5/1.8.18-parallel-intel-18.4
+fi
 
 # Clean previous build
 make distclean 2>/dev/null || true
+
+if [ ! -s ./configure ]; then
+    autoreconf -fi
+fi
 
 ./configure --prefix=$(pwd) --with-hdf5=$HDF5ROOT \
       CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
         LDFLAGS="-L$HDF5ROOT/lib"
 
-touch config.status configure Makefile
-chmod +x aux-config/install-sh aux-config/py-compile
-sed -i 's|MKDIR_P = @MKDIR_P@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
+[ -e aux-config/install-sh ] && chmod +x aux-config/install-sh
+[ -e aux-config/py-compile ] && chmod +x aux-config/py-compile
+if [ -f libtool ]; then
+    perl -0pi -e 's/^ECHO=.*$/ECHO=echo/m; s/^echo=.*$/echo=echo/m; s/^objdir=.*$/objdir=.libs/m; if (!/^echo=/m) { s/^(ECHO=.*)$/$1\necho=echo/m; }' libtool
+    chmod +x libtool
+fi
+if [ -f examples/Makefile ]; then
+    perl -0pi -e 's|MKDIR_P = \@MKDIR_P\@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
+fi
 
 make -j4
 make install SUBDIRS="lib CitcomS etc bin module" -i
