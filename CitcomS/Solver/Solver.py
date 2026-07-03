@@ -192,13 +192,8 @@ class Solver(Component):
 
 
     def advance(self, dt):
-        use_PICES = getattr(self.inventory.tsolver.inventory, "use_PICES", False)
-        if use_PICES:
-            self.advectTracers()
-            self.advectTemperature(dt)
-        else:
-            self.advectTemperature(dt)
-            self.advectTracers()
+        self.advectTemperature(dt)
+        self.advectTracers()
         self.solveVelocities()
         return
 

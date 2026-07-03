@@ -44,6 +44,7 @@
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
+#include "PICES.h"
 
 #ifdef USE_GGRD
 void ggrd_init_tracer_flavors(struct All_variables *);
@@ -61,6 +62,7 @@ void tracer_post_processing(struct All_variables *E);
 void allocate_tracer_arrays(struct All_variables *E,
                             int j, int number_of_tracers);
 void count_tracers_of_flavors(struct All_variables *E);
+void temperatures_conform_bcs(struct All_variables *E);
 
 int full_icheck_cap(struct All_variables *E, int icap,
                     double x, double y, double z, double rad);
@@ -235,6 +237,8 @@ void tracer_initial_settings(struct All_variables *E)
 
 void tracer_advection(struct All_variables *E)
 {
+  int i,m;
+
   if(E->control.verbose)
     fprintf(E->trace.fpt,"STEP %d\n",E->monitor.solution_cycles);
 
@@ -252,6 +256,17 @@ void tracer_advection(struct All_variables *E)
     /* update the composition field */
     if (E->composition.on) {
         fill_composition(E);
+    }
+
+    if (E->control.use_PICES && E->control.pices_initialized) {
+        PICES_particles_to_nodes(E, E->T, E->PICES_W);
+        (E->exchange_node_d)(E, E->T, E->mesh.levmax);
+        (E->exchange_node_d)(E, E->PICES_W, E->mesh.levmax);
+        for (m=1; m<=E->sphere.caps_per_proc; m++)
+            for (i=1; i<=E->lmesh.nno; i++)
+                if (E->PICES_W[m][i] > 0.0)
+                    E->T[m][i] /= E->PICES_W[m][i];
+        temperatures_conform_bcs(E);
     }
 
     /* Jiashun changed */
