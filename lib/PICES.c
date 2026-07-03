@@ -20,14 +20,14 @@
  * Implements paper Eq. 8 and 12:
  *
  *   δT_sub_norm[node]  = dT_sub_node_num / dT_sub_node_den       (Eq. 11 nodal)
- *   δT_remain[node]    = T_new_node[node] - δT_sub_norm[node]    (Eq. 12)
+ *   δT_remain[node]    = δT_diff_node[node] - δT_sub_norm[node]  (Eq. 12)
  *   T_p^{n+1} = T_p^n + δT_sub_p + δT_remain_p                  (Eq. 8)
  *
  * Execution order:
  *   1. Build δT_sub_norm nodal field (all caps).
  *   2. PICES_nodes_to_particles → extraq[pDS]: δT_sub per particle.
  *   3. Per-cap: malloc dT_sub_p, save extraq[pDS], overwrite nodal
- *      array with dT_remain = T_new - δT_sub_norm.
+ *      array with dT_remain = δT_diff - δT_sub_norm.
  *   4. PICES_nodes_to_particles → extraq[pDS]: δT_remain per particle.
  *   5. Per-cap: T_p += dT_sub_p + extraq[pDS];  free dT_sub_p.
  *   6. Free temporary nodal scratch.
@@ -35,13 +35,13 @@
  * extraq[pDS] is workspace; its content after this call is undefined.
  *
  * Inputs (all already MPI-exchanged by caller):
- *   T_new_node       — E->T after diffusion solve [cap][nno+1]
+ *   dT_diff_node     — nodal temperature change caused by diffusion
  *   dT_sub_node_num  — Σ(δT_sub * w) from PICES_subgrid_diffusion
  *   dT_sub_node_den  — Σ(w)           from PICES_subgrid_diffusion
  **************************************************************************/
 
 void PICES_update_particle_T(struct All_variables *E,    //PICES
-                              double **T_new_node,       //PICES
+                              double **dT_diff_node,     //PICES
                               double **dT_sub_node_num,  //PICES
                               double **dT_sub_node_den)  //PICES
 {
@@ -84,9 +84,9 @@ void PICES_update_particle_T(struct All_variables *E,    //PICES
         for (kk = 1; kk <= ntracers; kk++)                         //PICES
             dT_sub_p[j][kk] = E->trace.extraq[j][pDS][kk];        //PICES: save δT_sub_p
 
-        /* Eq. 12: δT_remain = T_new - δT_sub_norm (reuse dT_scratch) */
+        /* Eq. 12: δT_remain = δT_diff - δT_sub_norm (reuse dT_scratch) */
         for (n = 1; n <= nno; n++)                                  //PICES
-            dT_scratch[j][n] = T_new_node[j][n] - dT_scratch[j][n]; //PICES
+            dT_scratch[j][n] = dT_diff_node[j][n] - dT_scratch[j][n]; //PICES
     }                                                               //PICES
 
     /* --- Step 4: interpolate dT_remain → particles (all caps, → pDS) -- */

@@ -41,10 +41,10 @@ void PICES_subgrid_diffusion(struct All_variables *E,                  //PICES
 
 /* ---- defined in PICES.c ----------------------------------------------- */
 
-/* Eq. 8+12: update particle T using diffusion-solve result and subgrid δT.
+/* Eq. 8+12: update particle T using diffusion-induced δT and subgrid δT.
  * Uses extraq[pices_dtsub_idx] as internal workspace (overwritten). */
 void PICES_update_particle_T(struct All_variables *E,                  //PICES
-                              double **T_new_node,                     //PICES
+                              double **dT_diff_node,                   //PICES
                               double **dT_sub_node_num,                //PICES
                               double **dT_sub_node_den);               //PICES
 

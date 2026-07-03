@@ -234,6 +234,8 @@ void PG_timestep_solve(struct All_variables *E)
   int i,m,psc_pass,iredo, rheo_trick;
   double time0,time1,T_interior1;
   double *DTdot[NCS], *T1[NCS], *Tdot1[NCS];
+  double *PICES_Tp1[NCS];
+  int pices_saved_particles;
   FILE *fp;
 
   E->advection.timesteps++;
@@ -266,9 +268,15 @@ void PG_timestep_solve(struct All_variables *E)
     E->advection.timestep *= E->advection.dt_reduced;
 
     iredo = 0;
+    pices_saved_particles = 0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+      PICES_Tp1[m] = NULL;
+
     if (E->advection.ADVECTION) {
 
       if (E->control.use_PICES) {                                    //PICES: PICES path replaces predictor+pg_solver+corrector
+
+        double *dT_diff_node[NCS];                                    //PICES
 
         /* --- one-time particle T initialisation -------------------- */
         if (!E->control.pices_initialized) {                         //PICES
@@ -295,20 +303,39 @@ void PG_timestep_solve(struct All_variables *E)
         /* Step 5: apply boundary conditions before diffusion solve */
         temperatures_conform_bcs(E);                                 //PICES
 
-        /* Step 6: diffusion-only solve (VV=0 inside) */
-        pg_diffusion_solver(E, E->T, E->Tdot, DTdot,                //PICES
-                            E->convection.heat_sources,              //PICES
-                            E->control.inputdiff, 1, E->node);      //PICES
+        /* Step 6: save the pre-diffusion environmental T.  Eq. 12 needs
+         * the diffusion-caused temperature change, not absolute T. */
+        for (m=1; m<=E->sphere.caps_per_proc; m++) {                //PICES
+          dT_diff_node[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
+          for (i=1; i<=E->lmesh.nno; i++) {                         //PICES
+            dT_diff_node[m][i] = E->T[m][i];                        //PICES
+            E->Tdot[m][i] = 0.0;                                    //PICES
+          }                                                          //PICES
+        }                                                            //PICES
 
-        /* Step 7: corrector + BCs */
-        corrector(E, E->T, E->Tdot, DTdot);                         //PICES
-        temperatures_conform_bcs(E);                                 //PICES
+        /* Step 7: diffusion-only solve, including the normal heating
+         * update and temperature sub-iterations used by the Eulerian path. */
+        for(psc_pass=0; psc_pass<E->advection.temp_iterations; psc_pass++) { //PICES
+          if(E->control.disptn_number != 0)                         //PICES
+            process_heating(E, psc_pass);                           //PICES
+
+          pg_diffusion_solver(E, E->T, E->Tdot, DTdot,              //PICES
+                              E->convection.heat_sources,            //PICES
+                              E->control.inputdiff, 1, E->node);    //PICES
+          corrector(E, E->T, E->Tdot, DTdot);                       //PICES
+          temperatures_conform_bcs(E);                               //PICES
+        }                                                            //PICES
+
+        /* Step 8: convert saved T_before into dT_diff = T_after - T_before. */
+        for (m=1; m<=E->sphere.caps_per_proc; m++)                  //PICES
+          for (i=1; i<=E->lmesh.nno; i++)                           //PICES
+            dT_diff_node[m][i] = E->T[m][i] - dT_diff_node[m][i];   //PICES
 
         /* --- PARTICLE PART ---------------------------------------- */
         {                                                            //PICES
           double *dT_sub_num[NCS], *dT_sub_den[NCS];                //PICES
 
-          /* Step 8: allocate per-cap subgrid diffusion accumulators */
+          /* Step 9: allocate per-cap subgrid diffusion accumulators */
           for (m=1; m<=E->sphere.caps_per_proc; m++) {              //PICES
             dT_sub_num[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
             dT_sub_den[m] = (double *)malloc((E->lmesh.nno+1)*sizeof(double)); //PICES
@@ -318,23 +345,49 @@ void PG_timestep_solve(struct All_variables *E)
             }                                                        //PICES
           }                                                          //PICES
 
-          /* Step 9: compute subgrid diffusion (Eq. 11) */
+          /* Step 10: compute subgrid diffusion (Eq. 11) */
           PICES_subgrid_diffusion(E, dT_sub_num, dT_sub_den,        //PICES
                                   E->advection.timestep);           //PICES
 
-          /* Step 10: MPI exchange subgrid diffusion accumulators */
+          /* Step 11: MPI exchange subgrid diffusion accumulators */
           (E->exchange_node_d)(E, dT_sub_num, E->mesh.levmax);      //PICES
           (E->exchange_node_d)(E, dT_sub_den, E->mesh.levmax);      //PICES
 
-          /* Step 11: update particle T (Eq. 8 + 12) */
-          PICES_update_particle_T(E, E->T, dT_sub_num, dT_sub_den); //PICES
+          /* Step 12: save particle T so monitor_max_T redo can restore it. */
+          if(E->advection.monitor_max_T) {                          //PICES
+            int pT = E->trace.itracer_pices_temp;                   //PICES
+            pices_saved_particles = 1;                               //PICES
+            for (m=1; m<=E->sphere.caps_per_proc; m++) {            //PICES
+              int kk, ntracers = E->trace.ntracers[m];              //PICES
+              PICES_Tp1[m] = (double *)malloc((ntracers+1)*sizeof(double)); //PICES
+              for (kk=1; kk<=ntracers; kk++)                        //PICES
+                PICES_Tp1[m][kk] = E->trace.extraq[m][pT][kk];      //PICES
+            }                                                        //PICES
+          }                                                          //PICES
 
-          /* Step 12: free accumulators */
+          /* Step 13: update particle T (Eq. 8 + 12) */
+          PICES_update_particle_T(E, dT_diff_node, dT_sub_num, dT_sub_den); //PICES
+
+          /* Step 14: free accumulators */
           for (m=1; m<=E->sphere.caps_per_proc; m++) {              //PICES
             free(dT_sub_num[m]);                                     //PICES
             free(dT_sub_den[m]);                                     //PICES
           }                                                          //PICES
         }                                                            //PICES
+
+        /* Step 15: expose final particle temperature on E->T for Stokes,
+         * output, and any monitor/filter logic following the temperature step. */
+        PICES_particles_to_nodes(E, E->T, E->PICES_W);              //PICES
+        (E->exchange_node_d)(E, E->T,       E->mesh.levmax);        //PICES
+        (E->exchange_node_d)(E, E->PICES_W, E->mesh.levmax);        //PICES
+        for (m=1; m<=E->sphere.caps_per_proc; m++)                  //PICES
+          for (i=1; i<=E->lmesh.nno; i++)                           //PICES
+            if (E->PICES_W[m][i] > 0.0)                             //PICES
+              E->T[m][i] /= E->PICES_W[m][i];                       //PICES
+        temperatures_conform_bcs(E);                                 //PICES
+
+        for (m=1; m<=E->sphere.caps_per_proc; m++)                  //PICES
+          free(dT_diff_node[m]);                                     //PICES
 
       } else {                                                       //PICES: original path, bit-for-bit unchanged
 
@@ -373,12 +426,24 @@ void PG_timestep_solve(struct All_variables *E)
                       E->T[m][i] = T1[m][i];
                       E->Tdot[m][i] = Tdot1[m][i];
                   }
+              if (E->control.use_PICES && pices_saved_particles) {  //PICES
+                  int pT = E->trace.itracer_pices_temp;             //PICES
+                  for(m=1;m<=E->sphere.caps_per_proc;m++) {         //PICES
+                      int kk;                                       //PICES
+                      for (kk=1; kk<=E->trace.ntracers[m]; kk++)    //PICES
+                          E->trace.extraq[m][pT][kk] = PICES_Tp1[m][kk]; //PICES
+                  }                                                  //PICES
+              }                                                      //PICES
               iredo = 1;
               E->advection.dt_reduced *= 0.5;
               E->advection.last_sub_iterations ++;
           }
       }
     }
+
+    if (pices_saved_particles)                                      //PICES
+      for(m=1;m<=E->sphere.caps_per_proc;m++)                       //PICES
+        free(PICES_Tp1[m]);                                         //PICES
 
   }  while ( iredo==1 && E->advection.last_sub_iterations <= 5);
 
@@ -1427,4 +1492,3 @@ static void apply_smooth_sideTbc(E)
 
   return;
 }
-
