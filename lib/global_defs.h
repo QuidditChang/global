@@ -628,6 +628,7 @@ struct Output {
     int tracer;       /* whether to output tracer coordinate */
     int comp_el;      /* whether to output composition at elements */
     int comp_nd;      /* whether to output composition at nodes */
+    int k;            /* whether to output nodal thermal conductivity */
     int heating;      /* whether to output heating terms at elements */
 
 

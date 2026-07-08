@@ -33,6 +33,7 @@
 #include <math.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "material_properties.h"
 #include "parsing.h"
 #include "output.h"
 
@@ -49,6 +50,7 @@ void output_stress(struct All_variables *, int);
 void output_horiz_avg(struct All_variables *, int);
 void output_tracer(struct All_variables *, int);
 void output_pressure(struct All_variables *, int);
+void output_k(struct All_variables *, int);
 void output_heating(struct All_variables *, int);
 
 extern void parallel_process_termination();
@@ -122,6 +124,9 @@ void output(struct All_variables *E, int cycles)
 
   if (E->output.comp_nd && E->composition.on)
       output_comp_nd(E, cycles);
+
+  if(E->output.k)
+      output_k(E, cycles);
 
   if (E->output.comp_el && E->composition.on)
       output_comp_el(E, cycles);
@@ -555,6 +560,29 @@ void output_comp_el(struct All_variables *E, int cycles)
             }
             fprintf(fp1,"\n");
         }
+    }
+
+    fclose(fp1);
+    return;
+}
+
+
+void output_k(struct All_variables *E, int cycles)
+{
+    int i, j;
+    char output_file[255];
+    FILE *fp1;
+
+    sprintf(output_file,"%s.k.%d.%d", E->control.data_file,
+            E->parallel.me, cycles);
+    fp1 = output_open(output_file, "w");
+
+    fprintf(fp1,"%d %d %.5e\n",cycles,E->lmesh.nno,E->monitor.elapsed_time);
+
+    for(j=1;j<=E->sphere.caps_per_proc;j++) {
+        fprintf(fp1,"%3d %7d\n",j,E->lmesh.nno);
+        for(i=1;i<=E->lmesh.nno;i++)
+            fprintf(fp1,"%.6e\n",nodal_thermal_conductivity(E, j, i));
     }
 
     fclose(fp1);

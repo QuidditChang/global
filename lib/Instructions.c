@@ -1198,6 +1198,7 @@ static void output_parse_optional(struct  All_variables *E)
     E->output.tracer = 0;
     E->output.comp_el = 0;
     E->output.comp_nd = 0;
+    E->output.k = 0;
     E->output.heating = 0;
 
     while(1) {
@@ -1244,6 +1245,8 @@ static void output_parse_optional(struct  All_variables *E)
             E->output.comp_el = 1;
         else if(strcmp(prev, "comp_nd")==0)
             E->output.comp_nd = 1;
+        else if(strcmp(prev, "k")==0)
+            E->output.k = 1;
         else if(strcmp(prev, "heating")==0)
             E->output.heating = 1;
         else
@@ -1474,5 +1477,4 @@ char* strip(char *input)
 
     return str;
 }
-
 

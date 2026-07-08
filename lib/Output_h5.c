@@ -26,6 +26,7 @@
 #include <math.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "material_properties.h"
 #include "parsing.h"
 #include "output_h5.h"
 
@@ -125,6 +126,7 @@ void h5output_temperature(struct All_variables *, int);
 void h5output_viscosity(struct All_variables *, int);
 void h5output_pressure(struct All_variables *, int);
 void h5output_stress(struct All_variables *, int);
+void h5output_k(struct All_variables *, int);
 void h5output_tracer(struct All_variables *, int);
 void h5output_surf_botm(struct All_variables *, int);
 void h5output_geoid(struct All_variables *, int);
@@ -311,6 +313,9 @@ static void h5output_timedep(struct All_variables *E, int cycles)
 
     if(E->output.pressure == 1)
         h5output_pressure(E, cycles);
+
+    if(E->output.k == 1)
+        h5output_k(E, cycles);
 
     if (E->output.horiz_avg == 1)
         h5output_horiz_avg(E, cycles);
@@ -641,6 +646,48 @@ void h5output_pressure(struct All_variables *E, int cycles)
     status  = h5write_field(dataset, field, 1, 1);
 
     /* release resources */
+    status = H5Dclose(dataset);
+}
+
+void h5output_k(struct All_variables *E, int cycles)
+{
+    hid_t dataset;
+    herr_t status;
+    field_t *field;
+
+    int i, j, k;
+    int n, nx, ny, nz;
+    int m, mx, my, mz;
+
+    field = E->hdf5.scalar3d;
+
+    nx = E->lmesh.nox;
+    ny = E->lmesh.noy;
+    nz = E->lmesh.noz;
+
+    mx = field->block[1];
+    my = field->block[2];
+    mz = field->block[3];
+
+    /* prepare the data -- change citcom yxz order to xyz order */
+    for(i = 0; i < mx; i++)
+    {
+        for(j = 0; j < my; j++)
+        {
+            for(k = 0; k < mz; k++)
+            {
+                n = k + i*nz + j*nz*nx;
+                m = k + j*mz + i*mz*my;
+                field->data[m] = nodal_thermal_conductivity(E, 1, n+1);
+            }
+        }
+    }
+
+    h5create_field(E->hdf5.file_id, field, "k", "nodal thermal conductivity multiplier");
+
+    dataset = H5Dopen(E->hdf5.file_id, "/k");
+    status  = h5write_field(dataset, field, 1, 1);
+
     status = H5Dclose(dataset);
 }
 

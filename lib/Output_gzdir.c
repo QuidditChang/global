@@ -64,6 +64,7 @@ TWB
 #include <math.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "material_properties.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "output.h"
@@ -99,6 +100,7 @@ void gzdir_output_stress(struct All_variables *, int);
 void gzdir_output_horiz_avg(struct All_variables *, int);
 void gzdir_output_tracer(struct All_variables *, int);
 void gzdir_output_pressure(struct All_variables *, int);
+void gzdir_output_k(struct All_variables *, int);
 void gzdir_output_heating(struct All_variables *, int);
 void gzdir_output_cmbhf_CBF(struct All_variables *, int);
 
@@ -182,6 +184,9 @@ void gzdir_output(struct All_variables *E, int out_cycles)
 
   if (E->output.comp_nd && E->composition.on)
       gzdir_output_comp_nd(E, out_cycles);
+
+  if(E->output.k)
+      gzdir_output_k(E, out_cycles);
 
   if (E->output.comp_el && E->composition.on)
       gzdir_output_comp_el(E, out_cycles);
@@ -1102,6 +1107,55 @@ void gzdir_output_comp_el(struct All_variables *E, int cycles)
 
     gzclose(fp1);
     return;
+}
+
+
+void gzdir_output_k(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  gzFile *gz1;
+  FILE *fp1;
+  float ftmp;
+  MPI_Status mpi_stat;
+  int mpi_rc;
+  int mpi_inmsg, mpi_success_message = 1;
+
+  if(E->output.gzdir.vtk_io < 2){
+    snprintf(output_file,255,"%s/%d/k.%d.%d.gz", E->control.data_dir,
+             cycles,E->parallel.me, cycles);
+    gz1 = gzdir_output_open(output_file,"w");
+    gzprintf(gz1,"%d %d %.5e\n",cycles,E->lmesh.nno,E->monitor.elapsed_time);
+    for(j=1;j<=E->sphere.caps_per_proc;j++) {
+      gzprintf(gz1,"%3d %7d\n",j,E->lmesh.nno);
+      for(i=1;i<=E->lmesh.nno;i++)
+        gzprintf(gz1,"%.6e\n",nodal_thermal_conductivity(E, j, i));
+    }
+    gzclose(gz1);
+  }else{
+    if(E->output.gzdir.vtk_io == 2)
+      parallel_process_sync(E);
+    get_vtk_filename(output_file,0,E,cycles);
+    if((E->parallel.me == 0) || (E->output.gzdir.vtk_io == 3)){
+      fp1 = output_open(output_file,"a");
+      myfprintf(fp1,"SCALARS k float 1\n");
+      myfprintf(fp1,"LOOKUP_TABLE default\n");
+    }else{
+      mpi_rc = MPI_Recv(&mpi_inmsg, 1, MPI_INT, (E->parallel.me-1), 0, E->parallel.world, &mpi_stat);
+      fp1 = output_open(output_file,"a");
+    }
+    for(j=1; j<= E->sphere.caps_per_proc;j++)
+      for(i=1;i<=E->lmesh.nno;i++){
+        ftmp = (float)nodal_thermal_conductivity(E, j, i);
+        if(be_write_float_to_file(&ftmp,1,fp1)!=1)BE_WERROR;
+      }
+    fclose(fp1);fflush(fp1);
+    if(E->output.gzdir.vtk_io == 2)
+      if(E->parallel.me <  E->parallel.nproc-1){
+        mpi_rc = MPI_Send(&mpi_success_message, 1, MPI_INT, (E->parallel.me+1), 0, E->parallel.world);
+      }
+  }
+  return;
 }
 
 

@@ -114,6 +114,41 @@ void reference_state(struct All_variables *E)
 }
 
 
+double nodal_thermal_conductivity(struct All_variables *E, int cap, int node)
+{
+    int iz;
+    double kd, kT, kC, T_dim;
+
+    iz = ((node - 1) % E->lmesh.noz) + 1;
+    kd = E->refstate.thermal_conductivity[iz];
+
+    if(E->control.kT_exponent == 0.0) {
+        kT = 1.0;
+    }
+    else {
+        T_dim = (E->T[cap][node] + E->control.surface_temp)
+                * E->data.ref_temperature;
+        if(T_dim <= 0.0) {
+            fprintf(stderr,
+                    "Invalid dimensional temperature in nodal_thermal_conductivity: "
+                    "cap=%d node=%d iz=%d T=%e surface_temp=%e "
+                    "ref_temperature=%e T_dim=%e\n",
+                    cap, node, iz, E->T[cap][node],
+                    E->control.surface_temp,
+                    E->data.ref_temperature, T_dim);
+            parallel_process_termination();
+        }
+        kT = pow(300.0 / T_dim, (double)E->control.kT_exponent);
+    }
+
+    /* Composition conductivity is not wired in cmbhf_k yet. Keep this
+       diagnostic consistent with element_residual(), where kC = 1.0. */
+    kC = 1.0;
+
+    return kd * kT * kC;
+}
+
+
 static void read_refstate(struct All_variables *E)
 {
     FILE *fp;
@@ -183,5 +218,4 @@ static void adams_williamson_eos(struct All_variables *E)
 
     return;
 }
-
 

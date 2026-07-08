@@ -29,7 +29,7 @@
 
 void mat_prop_allocate(struct All_variables *E);
 void reference_state(struct All_variables *E);
+double nodal_thermal_conductivity(struct All_variables *E, int cap, int node);
 
 
 void density(struct All_variables *E, double *rho);
-
