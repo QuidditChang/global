@@ -1183,26 +1183,19 @@ void gzdir_output_heating(struct All_variables *E, int cycles)
 }
 
 
-/* =========================================================================
-   Write CMB heat flux computed by the CBF method to a per-step gzip file.
-   Output: {datadir}/cmbhf_CBF.{proc}.{cycles}.gz
-   Format: elapsed_time header \n cap# nsf \n q[i] \n ...
-   Only the bottom-layer processes write (me_loc[3]==0).
-   ========================================================================= */
-void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
+static void gzdir_write_CBF_flux(struct All_variables *E, int cycles,
+                                 int top, float *slice_flux[NCS],
+                                 const char *prefix)
 {
     int i, j;
     char output_file[255];
     gzFile *fp1;
+    const int target_zproc = top ? E->parallel.nprocz - 1 : 0;
 
-    void heat_flux_CBF();
+    if(E->parallel.me_loc[3] != target_zproc) return;
 
-    if(E->parallel.me_loc[3] != 0) return;
-
-    heat_flux_CBF(E);
-
-    snprintf(output_file, 255, "%s/cmbhf_CBF.%d.%d.gz",
-             E->control.data_dir, E->parallel.me, cycles);
+    snprintf(output_file, 255, "%s/%s_CBF.%d.%d.gz",
+             E->control.data_dir, prefix, E->parallel.me, cycles);
     fp1 = gzdir_output_open(output_file, "w");
 
     gzprintf(fp1, "%.5e\n", E->monitor.elapsed_time);
@@ -1210,10 +1203,44 @@ void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
     for(j = 1; j <= E->sphere.caps_per_proc; j++) {
         gzprintf(fp1, "%3d %7d\n", j, E->lmesh.nsf);
         for(i = 1; i <= E->lmesh.nsf; i++)
-            gzprintf(fp1, "%.6e\n", E->slice.bhflux_CBF[j][i]);
+            gzprintf(fp1, "%.6e\n", slice_flux[j][i]);
     }
 
     gzclose(fp1);
+
+    return;
+}
+
+
+/* =========================================================================
+   Write row-sum lumped CBF heat flux to per-step gzip files.
+   Outputs:
+     {datadir}/shflux_CBF.{proc}.{cycles}.gz  on top ranks, if enabled
+     {datadir}/bhflux_CBF.{proc}.{cycles}.gz  on bottom ranks, if enabled
+
+   Sign conventions:
+     shflux_CBF positive = heat flow from mantle to surface
+     bhflux_CBF positive = heat flow from core into mantle
+
+   Format: elapsed_time header \n cap# nsf \n q[i] \n ...
+
+   This function keeps the legacy Python binding name output_cmbhf_CBF, but
+   the files are now symmetric shflux/bhflux CBF products.
+   ========================================================================= */
+void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
+{
+    void heat_flux_CBF();
+
+    if(!E->output.cbf_output_shflux && !E->output.cbf_output_bhflux)
+        return;
+
+    heat_flux_CBF(E);
+
+    if(E->output.cbf_output_shflux)
+        gzdir_write_CBF_flux(E, cycles, 1, E->slice.shflux_CBF, "shflux");
+
+    if(E->output.cbf_output_bhflux)
+        gzdir_write_CBF_flux(E, cycles, 0, E->slice.bhflux_CBF, "bhflux");
 
     return;
 }

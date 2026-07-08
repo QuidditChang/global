@@ -323,6 +323,10 @@ class Solver(Component):
         #adiabaticT0 = inv.float("adiabaticT0", default=0.4)
         Q0 = inv.float("Q0", default=0.0)
 
+        cbf_output_shflux = inv.bool("cbf_output_shflux", default=True)
+        cbf_output_bhflux = inv.bool("cbf_output_bhflux", default=True)
+        cbf_use_advection = inv.bool("cbf_use_advection", default=True)
+
         stokes_flow_only = inv.bool("stokes_flow_only", default=False)
 
         verbose = inv.bool("verbose", default=False)

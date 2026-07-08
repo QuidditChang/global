@@ -481,6 +481,10 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
     /*getFloatProperty(properties, "adiabaticT0", E->control.adiabaticT0, fp);*/
     getFloatProperty(properties, "Q0", E->control.Q0, fp);
 
+    getIntProperty(properties, "cbf_output_shflux", E->output.cbf_output_shflux, fp);
+    getIntProperty(properties, "cbf_output_bhflux", E->output.cbf_output_bhflux, fp);
+    getIntProperty(properties, "cbf_use_advection", E->output.cbf_use_advection, fp);
+
     getIntProperty(properties, "stokes_flow_only", E->control.stokes, fp);
 
     getIntProperty(properties, "verbose", E->control.verbose, fp);

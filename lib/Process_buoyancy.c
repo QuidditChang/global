@@ -202,36 +202,51 @@ void heat_flux(E)
 
 
 /* ==========================================================================
-   CMB heat flux via Consistent Boundary Flux (CBF) method.
+   Heat flux via row-sum lumped Consistent Boundary Flux (CBF) method.
 
    Reference: Gresho et al. (1987), Dannberg et al. (2024, GJI).
 
-   For each bottom-layer element, integrates the energy-equation weak form
+   For each boundary-layer element, integrates the energy-equation weak form
    over the element volume to obtain the nodal residual b_i, and integrates
-   the shape function over the CMB face to obtain the lumped area A_i.
-   The CMB heat flux at node i is:
+   the shape function over the boundary face to obtain the row-sum lumped CBF
+   boundary mass A_i.
+   The boundary heat flux at node i is:
 
-       q_i = Q_SCALE * b_i / A_i   (W/m^2, positive = heat from core to mantle)
+       q_i = sign * Q_SCALE * b_i / A_i   (W/m^2)
 
-   where b_i = int_Omega [ grad(N_i).grad(T) + N_i*(dT/dt) - N_i*Q0 ] dOmega
-         A_i = int_Gamma_CMB N_i dGamma   (2D Gauss, face at zeta=-1)
+   where b_i mirrors the temperature residual terms in Advection_diffusion.c:
+         int_Omega [ kgp * latent * grad(N_i).grad(T)
+                     + N_i*((dT/dt + u.grad(T))*rho*cp - heating) ] dOmega
+         A_i = int_Gamma N_i dGamma
 
-   The advection term N_i*(u.grad(T)) is available but disabled by default
-   (cbf_use_advection=0 in cfg).
+   This is a lumped CBF-style reconstruction, not a full B_ij boundary-mass
+   solve. Stored sign conventions:
+     top/surface: positive means heat flows from mantle to surface.
+     bottom/CMB:  positive means heat flows from core into mantle.
 
-   Result stored in E->slice.bhflux_CBF[m][i], i=1..nsf.
+   Results are stored in E->slice.shflux_CBF or E->slice.bhflux_CBF.
    ========================================================================== */
 
-void heat_flux_CBF(struct All_variables *E)
+static void heat_flux_CBF_boundary(struct All_variables *E, int top,
+                                   float *slice_flux[NCS],
+                                   const char *label,
+                                   const char *positive_direction)
 {
-    /* only bottom-layer processes hold CMB nodes */
-    if(E->parallel.me_loc[3] != 0) return;
+    const int target_zproc = top ? E->parallel.nprocz - 1 : 0;
+    const int face_id = top ? 1 : 0;
+    const int side = top ? SIDE_TOP : SIDE_BOTTOM;
+    const double sign = top ? -1.0 : 1.0;
 
-    int    m, e, i, j, k, node, a;
+    int    m, e, el, i, j, k, node, a, face_node;
     double b_node, A_node;
     double gradT[4];       /* grad(T) at a volume Gauss point, 1-indexed    */
     double Tdot_gp;        /* dT/dt interpolated to Gauss point              */
     double udotgradT;      /* u.grad(T) at Gauss point (advection, optional) */
+    double T_gp;           /* T interpolated to Gauss point for k~_T         */
+    double DT;
+    double gradN_dot_gradT, mass_residual;
+    double Q, rho, cp, heating;
+    double kd_el, kC, kE, kT, T_dim, kgp;
     double Q_SCALE;        /* dimensional scale: k*DeltaT/R_earth  (W/m^2)  */
 
     float *b_cbf[NCS];     /* nodal CBF residual accumulator                 */
@@ -250,6 +265,7 @@ void heat_flux_CBF(struct All_variables *E)
     void get_global_1d_shape_fn();
     void velo_from_element();
     void sum_across_surface();
+    void parallel_process_termination();
 
     const int dims       = E->mesh.nsd;
     const int vpts       = vpoints[dims];        /* 8 volume Gauss points    */
@@ -257,15 +273,20 @@ void heat_flux_CBF(struct All_variables *E)
     const int oned       = onedvpoints[dims];    /* 4 face Gauss points      */
     const int nno        = E->lmesh.nno;
     const int nsf        = E->lmesh.nsf;
-    const int noz        = E->lmesh.noz;
     const int elz        = E->lmesh.elz;
     const int lev        = E->mesh.levmax;
     const int sphere_key = 1;
 
-    /* Q_SCALE = k * DeltaT / R_earth  ~2.59e-3 W/m^2
-       k = kappa * rho * Cp  (thermal conductivity)
+    if(E->parallel.me_loc[3] != target_zproc) return;
+
+    /* Q_SCALE = k0 * DeltaT / R_earth  ~2.59e-3 W/m^2
+       k0 = kappa * rho0 * Cp0  (baseline thermal conductivity)
        E->data.ref_temperature = DeltaT (K)
-       E->data.radius_km * 1e3 = R_earth (m)                                 */
+       E->data.radius_km * 1e3 = R_earth (m)
+
+       Variable-k multipliers and inputdiffusivity are included once in kgp
+       below, matching element_residual(). Q_SCALE only dimensionalizes the
+       nondimensional boundary flux.                                      */
     Q_SCALE = (E->data.therm_diff * E->data.density * E->data.Cp)
               * E->data.ref_temperature / (E->data.radius_km * 1.0e3);
 
@@ -283,22 +304,55 @@ void heat_flux_CBF(struct All_variables *E)
     }
 
     /* ------------------------------------------------------------------
-       Loop over bottom-layer elements: (e-1) % elz == 0
+       Loop over the selected boundary-layer elements.
        ------------------------------------------------------------------ */
     for(m = 1; m <= E->sphere.caps_per_proc; m++) {
         for(e = 1; e <= E->lmesh.nel; e++) {
 
-            if((e - 1) % elz != 0) continue;  /* skip non-bottom elements */
+            if(top) {
+                if(e % elz != 0) continue;          /* skip non-top elements */
+            }
+            else {
+                if((e - 1) % elz != 0) continue;    /* skip non-bottom elements */
+            }
 
             /* volume shape functions and Jacobian (sphere_key=1: Cartesian GNx) */
             get_global_shape_fn(E, e, &GN, &GNx, &dOmega, 0, sphere_key, rtf, lev, m);
 
-            /* face shape functions and Jacobian at zeta=-1 (bottom face)
-               get_global_1d_shape_fn(..., top=0) fills dGamma.vpt[GMVGAMMA(0,k)] */
-            get_global_1d_shape_fn(E, e, &GM, &dGamma, 0, m);
+            /* face shape functions and Jacobian. top=1 fills both bottom and
+               top entries; top=0 fills the bottom entry only. */
+            get_global_1d_shape_fn(E, e, &GM, &dGamma, top, m);
 
             if(E->output.cbf_use_advection)
                 velo_from_element(E, VV, m, e, sphere_key);
+
+            /* Keep this in sync with Advection_diffusion.c:element_residual().
+               This is a local mirror, not a shared helper, to keep the CBF
+               correction tightly scoped. */
+            Q = E->control.Q0;
+            if(E->control.tracer_enriched) {
+                Q *= (1.0 - E->composition.comp_el[m][0][e]);
+                Q += E->composition.comp_el[m][0][e] * E->control.Q0ER;
+            }
+
+            {
+                int nz = ((e - 1) % E->lmesh.elz) + 1;
+                rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
+                cp = 0.5 * (E->refstate.heat_capacity[nz] + E->refstate.heat_capacity[nz+1]);
+                kd_el = 0.5 * (E->refstate.thermal_conductivity[nz]
+                              + E->refstate.thermal_conductivity[nz+1]);
+            }
+
+            /* k~_C is currently disabled in element_residual(); keep CBF in
+               lockstep until composition conductivity is wired there. */
+            kC = 1.0;
+            kE = kd_el * kC;
+
+            if(E->control.disptn_number == 0)
+                heating = rho * Q;
+            else
+                heating = (rho * Q - E->heating_adi[m][e] + E->heating_visc[m][e])
+                    * E->heating_latent[m][e];
 
             /* ---- volume integral: b_i ---- */
             for(a = 1; a <= ends; a++) {
@@ -310,29 +364,50 @@ void heat_flux_CBF(struct All_variables *E)
                     /* Cartesian grad(T) at volume Gauss point i               */
                     gradT[1] = 0.0;  gradT[2] = 0.0;  gradT[3] = 0.0;
                     Tdot_gp  = 0.0;
+                    T_gp     = 0.0;
                     for(j = 1; j <= ends; j++) {
                         int nj = E->ien[m][e].node[j];
+                        double sfn = E->N.vpt[GNVINDEX(j,i)];
                         gradT[1] += GNx.vpt[GNVXINDEX(0,j,i)] * E->T[m][nj];
                         gradT[2] += GNx.vpt[GNVXINDEX(1,j,i)] * E->T[m][nj];
                         gradT[3] += GNx.vpt[GNVXINDEX(2,j,i)] * E->T[m][nj];
-                        Tdot_gp  += E->N.vpt[GNVINDEX(j,i)]   * E->Tdot[m][nj];
+                        T_gp     += sfn * E->T[m][nj];
+
+                        if(E->node[m][nj] & (TBX | TBY | TBZ))
+                            DT = 0.0;
+                        else
+                            DT = E->Tdot[m][nj];
+                        Tdot_gp += sfn * DT;
                     }
 
-                    /* conduction: grad(N_a) . grad(T) * dOmega */
-                    b_node +=
-                        ( GNx.vpt[GNVXINDEX(0,a,i)] * gradT[1]
-                        + GNx.vpt[GNVXINDEX(1,a,i)] * gradT[2]
-                        + GNx.vpt[GNVXINDEX(2,a,i)] * gradT[3] )
-                        * dOmega.vpt[i];
+                    if(E->control.kT_exponent == 0.0) {
+                        kT = 1.0;
+                    }
+                    else {
+                        T_dim = (T_gp + E->control.surface_temp)
+                                * E->data.ref_temperature;
+                        if(T_dim <= 0.0) {
+                            fprintf(stderr,
+                                    "Invalid dimensional temperature in heat_flux_CBF: "
+                                    "el=%d cap=%d gauss=%d T_gp=%e surface_temp=%e "
+                                    "ref_temperature=%e T_dim=%e\n",
+                                    e, m, i, T_gp, E->control.surface_temp,
+                                    E->data.ref_temperature, T_dim);
+                            parallel_process_termination();
+                        }
+                        kT = pow(300.0 / T_dim, (double)E->control.kT_exponent);
+                    }
+                    kgp = E->control.inputdiff * kE * kT;
 
-                    /* time derivative: N_a * dT/dt * dOmega
-                       (CMB TBZ nodes: Tdot is forced to 0 by CitcomS BC)      */
-                    b_node += E->N.vpt[GNVINDEX(a,i)] * Tdot_gp * dOmega.vpt[i];
+                    gradN_dot_gradT =
+                        GNx.vpt[GNVXINDEX(0,a,i)] * gradT[1]
+                      + GNx.vpt[GNVXINDEX(1,a,i)] * gradT[2]
+                      + GNx.vpt[GNVXINDEX(2,a,i)] * gradT[3];
 
-                    /* internal heating: -Q0 * N_a * dOmega */
-                    b_node -= E->N.vpt[GNVINDEX(a,i)] * E->control.Q0 * dOmega.vpt[i];
+                    b_node += kgp * E->heating_latent[m][e]
+                        * gradN_dot_gradT * dOmega.vpt[i];
 
-                    /* advection: N_a * (u.grad(T)) * dOmega  [default off] */
+                    mass_residual = Tdot_gp;
                     if(E->output.cbf_use_advection) {
                         udotgradT = 0.0;
                         for(k = 1; k <= dims; k++) {
@@ -341,8 +416,11 @@ void heat_flux_CBF(struct All_variables *E)
                                 u_k += VV[k][j] * E->N.vpt[GNVINDEX(j,i)];
                             udotgradT += u_k * gradT[k];
                         }
-                        b_node += E->N.vpt[GNVINDEX(a,i)] * udotgradT * dOmega.vpt[i];
+                        mass_residual += udotgradT;
                     }
+
+                    b_node += E->N.vpt[GNVINDEX(a,i)]
+                        * (mass_residual * rho * cp - heating) * dOmega.vpt[i];
 
                 }  /* end volume Gauss loop */
 
@@ -350,15 +428,16 @@ void heat_flux_CBF(struct All_variables *E)
 
             }  /* end volume nodes loop */
 
-            /* ---- face integral: A_i for bottom-face nodes (a=1..4) ----
+            /* ---- face integral: A_i for boundary-face nodes ----
                Uses E->M.vpt[GMVINDEX(a,k)]  (face shape fn, node a, Gauss pt k)
-               and  dGamma.vpt[GMVGAMMA(0,k)] (bottom-face Jacobian at Gauss pt k)
+               and  dGamma.vpt[GMVGAMMA(face_id,k)] (face Jacobian at Gauss pt k)
                Gauss weights are 1.0 for 2-pt quadrature on [-1,1], so omitted. */
             for(a = 1; a <= oned; a++) {
-                node   = E->ien[m][e].node[a];   /* sidenodes[SIDE_BOTTOM] = 1..4 */
+                face_node = sidenodes[side][a];
+                node = E->ien[m][e].node[face_node];
                 A_node = 0.0;
                 for(k = 1; k <= oned; k++)
-                    A_node += E->M.vpt[GMVINDEX(a,k)] * dGamma.vpt[GMVGAMMA(0,k)];
+                    A_node += E->M.vpt[GMVINDEX(a,k)] * dGamma.vpt[GMVGAMMA(face_id,k)];
                 A_cbf[m][node] += (float)A_node;
             }
 
@@ -369,26 +448,25 @@ void heat_flux_CBF(struct All_variables *E)
     (E->exchange_node_f)(E, b_cbf, lev);
     (E->exchange_node_f)(E, A_cbf, lev);
 
-    /* ---- compute q = Q_SCALE * b / A and store in bhflux_CBF ---- */
+    /* ---- compute q = sign * Q_SCALE * b / A and store in the target slice ---- */
     for(m = 1; m <= E->sphere.caps_per_proc; m++) {
         for(i = 1; i <= nsf; i++) {
-            /* bottom node index: surf_node[m][i] - noz + 1  (iz=1 in 1-based) */
-            node = E->surf_node[m][i] - noz + 1;
+            node = top ? E->surf_node[m][i] : E->surf_node[m][i] - E->lmesh.noz + 1;
             if(A_cbf[m][node] > 0.0f)
-                E->slice.bhflux_CBF[m][i] = (float)(Q_SCALE * b_cbf[m][node] / A_cbf[m][node]);
+                slice_flux[m][i] = (float)(sign * Q_SCALE * b_cbf[m][node] / A_cbf[m][node]);
             else
-                E->slice.bhflux_CBF[m][i] = 0.0f;
+                slice_flux[m][i] = 0.0f;
         }
     }
 
     /* ---- global average for monitoring ---- */
     for(m = 1; m <= E->sphere.caps_per_proc; m++) {
         for(e = 1; e <= E->lmesh.snel; e++) {
-            float qavg = ( E->slice.bhflux_CBF[m][E->sien[m][e].node[1]]
-                         + E->slice.bhflux_CBF[m][E->sien[m][e].node[2]]
-                         + E->slice.bhflux_CBF[m][E->sien[m][e].node[3]]
-                         + E->slice.bhflux_CBF[m][E->sien[m][e].node[4]] ) * 0.25f;
-            int el = (e - 1) * elz + 1;
+            float qavg = ( slice_flux[m][E->sien[m][e].node[1]]
+                         + slice_flux[m][E->sien[m][e].node[2]]
+                         + slice_flux[m][E->sien[m][e].node[3]]
+                         + slice_flux[m][E->sien[m][e].node[4]] ) * 0.25f;
+            el = top ? e * elz : (e - 1) * elz + 1;
             sum_h[0] += qavg * E->eco[m][el].area;
             sum_h[1] += E->eco[m][el].area;
         }
@@ -396,11 +474,18 @@ void heat_flux_CBF(struct All_variables *E)
 
     sum_across_surface(E, sum_h, 2);
 
-    if(E->parallel.me == 0) {
+    if((top && E->parallel.me == E->parallel.nprocz - 1) ||
+       (!top && E->parallel.me == 0)) {
         if(sum_h[1] > 0.0f) {
             float q_ave = sum_h[0] / sum_h[1];
-            fprintf(stderr, "CMB heat flux (CBF) = %g W/m^2\n", q_ave);
-            fprintf(E->fp,  "CMB heat flux (CBF) = %g W/m^2\n", q_ave);
+            fprintf(stderr,
+                    "%s heat flux (lumped CBF, positive %s, advection %s) = %g W/m^2\n",
+                    label, positive_direction,
+                    E->output.cbf_use_advection ? "on" : "off", q_ave);
+            fprintf(E->fp,
+                    "%s heat flux (lumped CBF, positive %s, advection %s) = %g W/m^2\n",
+                    label, positive_direction,
+                    E->output.cbf_use_advection ? "on" : "off", q_ave);
         }
     }
 
@@ -409,6 +494,19 @@ void heat_flux_CBF(struct All_variables *E)
         free((void *)A_cbf[m]);
     }
     free((void *)sum_h);
+
+    return;
+}
+
+void heat_flux_CBF(struct All_variables *E)
+{
+    if(E->output.cbf_output_shflux)
+        heat_flux_CBF_boundary(E, 1, E->slice.shflux_CBF,
+                               "surface", "mantle->surface");
+
+    if(E->output.cbf_output_bhflux)
+        heat_flux_CBF_boundary(E, 0, E->slice.bhflux_CBF,
+                               "bottom/CMB", "core->mantle");
 
     return;
 }
