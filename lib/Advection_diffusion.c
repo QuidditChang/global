@@ -801,7 +801,7 @@ static void element_residual(struct All_variables *E, int el,
     double tgp[9];   /* Phase 2: temperature at each Gauss point (for k~_T) */
     double adv_dT,t2[4];
     double T,DT;
-    double T_dim,kT;
+    double T_dim,T_surf,T_bot,DeltaT,kT;
 
     double prod,sfn;
     struct Shape_function1 GM;
@@ -901,34 +901,32 @@ static void element_residual(struct All_variables *E, int el,
        baseline scalar transport coefficient; the k~ terms are relative
        multipliers. k~_d (depth) and k~_C (composition) are per-element (kE
        above); k~_T is per-Gauss-point in T.
-       For nonzero kT_exponent, T_dim[K] = (T_nd + surface_temp) *
-       ref_temperature is the CitcomS non-dim -> absolute temperature reduction
-       (surface_temp non-dim offset, ref_temperature = DeltaT in K). T_dim must
-       be positive; invalid values abort instead of being clamped. 300 K is the
-       Deschamps reference T_surf.
+       For nonzero kT_exponent, T_surf[K] and T_bot[K] come from model
+       temperature scaling and boundary values. DeltaT[K] = T_bot - T_surf.
+       T_dim[K] = T_surf + T_nd * DeltaT is the local dimensional absolute
+       temperature for k~_T. If local numerical undershoot gives
+       T_dim < T_surf, protect only the conductivity temperature factor by using
+       T_surf as the lower bound. The model temperature field itself is not
+       modified here.
 
        THREE-LAYER DEGENERACY:
          a=0 (kT_exponent=0) -> kT=1 -> kgp[i]=diff*kd_el   (Phase 1)
          + col6 == 1         -> kd_el=1 -> kgp[i]=diff      (Phase 0)
          R_C=1 (kC_ratio=1)  -> kC=1 -> composition factor off
        TODO: wire k~_C to comp_el[m][PRIM_IDX][el] once primordial exists. */
+    T_surf = E->control.surface_temp * E->data.ref_temperature;
+    T_bot = (E->control.surface_temp + E->control.TBCbotval)
+            * E->data.ref_temperature;
+    DeltaT = T_bot - T_surf;
     for(i=1;i<=vpts;i++) {
         if(E->control.kT_exponent == 0.0) {
             kT = 1.0;
         }
         else {
-            T_dim = (tgp[i] + E->control.surface_temp)
-                    * E->data.ref_temperature;
-            if(T_dim <= 0.0) {
-                fprintf(stderr,
-                        "Invalid dimensional temperature in element_residual: "
-                        "el=%d cap=%d gauss=%d tgp=%e surface_temp=%e "
-                        "ref_temperature=%e T_dim=%e\n",
-                        el, m, i, tgp[i], E->control.surface_temp,
-                        E->data.ref_temperature, T_dim);
-                parallel_process_termination();
-            }
-            kT = pow(300.0 / T_dim, (double)E->control.kT_exponent);
+            T_dim = T_surf + tgp[i] * DeltaT;
+            if(T_dim < T_surf)
+                T_dim = T_surf;
+            kT = pow(T_surf / T_dim, (double)E->control.kT_exponent);
         }
         kgp[i] = diff * kE * kT;
     }
@@ -1334,4 +1332,3 @@ static void apply_smooth_sideTbc(E)
 
   return;
 }
-
