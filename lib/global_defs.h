@@ -456,6 +456,10 @@ struct CONTROL {
     /* inverse of Gruneisen parameter */
     float inv_gruneisen;
 
+    /* compressible Stokes force form: 0=TALA, 1=ALA pressure buoyancy */
+    int ala_pressure_buoyancy;
+    char compressible_formulation[20];
+
     /* surface temperature */
     float surface_temp;
 

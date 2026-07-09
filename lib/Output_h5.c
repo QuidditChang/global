@@ -1523,6 +1523,8 @@ void h5output_meta(struct All_variables *E)
                                  (E->control.inv_gruneisen == 0)?
                                   1.0/E->control.inv_gruneisen :
 				 E->control.inv_gruneisen);
+    status = set_attribute_string(input, "compressible_formulation",
+                                  E->control.compressible_formulation);
     status = set_attribute_float(input, "surfaceT", E->control.surface_temp);
     status = set_attribute_float(input, "Q0", E->control.Q0);
 

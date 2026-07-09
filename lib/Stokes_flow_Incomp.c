@@ -655,6 +655,7 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     const int lev = E->mesh.levmax;
 
     double global_vdot(),global_pdot();
+    void assemble_forces();
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)   {
     	old_v[m] = (double *)malloc(neq*sizeof(double));
@@ -678,6 +679,9 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
             for(i=0;i<neq;i++) old_v[m][i] = V[m][i];
             for(i=1;i<=npno;i++) old_p[m][i] = P[m][i];
         }
+
+        if(E->control.ala_pressure_buoyancy)
+            assemble_forces(E,0);
 
         residual = solve_Ahat_p_fhat_CG(E,V,P,F,E->control.accuracy,&cycles);
 

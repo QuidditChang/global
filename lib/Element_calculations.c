@@ -957,8 +957,37 @@ void get_elt_g(E,el,elt_del,lev,m)
       */
      }
 
-   return;
- }
+return;
+}
+
+
+static double ala_pressure_buoyancy_coefficient(struct All_variables *E,
+                                                int el)
+{
+  int nz;
+  double alpha, gravity, cp;
+
+  if(!E->control.ala_pressure_buoyancy ||
+     E->control.inv_gruneisen == 0.0 ||
+     E->control.disptn_number == 0.0)
+    return 0.0;
+
+  nz = ((el-1) % E->lmesh.elz) + 1;
+
+  alpha = 0.5 * (E->refstate.thermal_expansivity[nz] +
+                 E->refstate.thermal_expansivity[nz+1]);
+  gravity = 0.5 * (E->refstate.gravity[nz] +
+                   E->refstate.gravity[nz+1]);
+  cp = 0.5 * (E->refstate.heat_capacity[nz] +
+              E->refstate.heat_capacity[nz+1]);
+
+  if(cp == 0.0)
+    return 0.0;
+
+  return alpha * gravity / cp
+         * E->control.disptn_number * E->control.inv_gruneisen;
+}
+
 
 /*=================================================================
   Function to create the element force vector (allowing for velocity b.c.'s)
@@ -978,6 +1007,7 @@ void get_elt_f(E,el,elt_f,bcs,m)
   const unsigned int vbc_flag[] = {0, VBX, VBY, VBZ};
 
   double force[9],force_at_gs[9],elt_k[24*24];
+  double ala_pressure_coeff, ala_pressure_force;
   double rtf[4][9];
 
   void get_global_shape_fn();
@@ -1005,10 +1035,14 @@ void get_elt_f(E,el,elt_f,bcs,m)
   for(p=1;p<=ends;p++)
     force[p] = E->buoyancy[m][E->ien[m][el].node[p]];
 
+  ala_pressure_coeff = ala_pressure_buoyancy_coefficient(E,el);
+  ala_pressure_force = ala_pressure_coeff * E->P[m][el];
+
   for(j=1;j<=vpts;j++)       {   /*compute force at each int point */
     force_at_gs[j] = 0.0;
     for(k=1;k<=ends;k++)
       force_at_gs[j] += force[k] * E->N.vpt[GNVINDEX(k,j)] ;
+    force_at_gs[j] -= ala_pressure_force;
     }
 
   for(i=1;i<=dims;i++)  {

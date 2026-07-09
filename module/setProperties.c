@@ -861,6 +861,20 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
 
     getIntProperty(properties, "remove_rigid_rotation", E->control.remove_rigid_rotation, fp);
 
+    getStringProperty(properties, "compressible_formulation",
+                      E->control.compressible_formulation, fp);
+    if(strcmp(E->control.compressible_formulation, "tala") == 0) {
+        E->control.ala_pressure_buoyancy = 0;
+    }
+    else if(strcmp(E->control.compressible_formulation, "ala") == 0) {
+        E->control.ala_pressure_buoyancy = 1;
+        if(E->control.inv_gruneisen == 0)
+            myerror(E, "compressible_formulation=ala requires gruneisen != 0");
+    }
+    else {
+        myerror(E, "compressible_formulation must be tala or ala");
+    }
+
     if(E->control.inv_gruneisen != 0) {
         /* which compressible solver to use: "cg" or "bicg" */
         getStringProperty(properties, "uzawa", E->control.uzawa, fp);
@@ -868,6 +882,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
             /* more convergence parameters for "cg" */
             getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
             getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
+        }
+        else if(strcmp(E->control.uzawa, "bicg") == 0) {
+            if(E->control.ala_pressure_buoyancy)
+                myerror(E, "compressible_formulation=ala currently requires uzawa=cg");
         }
     }
 

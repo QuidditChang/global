@@ -495,6 +495,20 @@ void read_initial_settings(struct All_variables *E)
   else
       E->control.inv_gruneisen = 0;
 
+  input_string("compressible_formulation",
+               E->control.compressible_formulation,"tala",m);
+  if(strcmp(E->control.compressible_formulation, "tala") == 0) {
+      E->control.ala_pressure_buoyancy = 0;
+  }
+  else if(strcmp(E->control.compressible_formulation, "ala") == 0) {
+      E->control.ala_pressure_buoyancy = 1;
+      if(E->control.inv_gruneisen == 0)
+          myerror(E, "compressible_formulation=ala requires gruneisen != 0");
+  }
+  else {
+      myerror(E, "compressible_formulation must be tala or ala");
+  }
+
   if(E->control.inv_gruneisen != 0) {
       /* which compressible solver to use: "cg" or "bicg" */
       input_string("uzawa",E->control.uzawa,"cg",m);
@@ -504,6 +518,8 @@ void read_initial_settings(struct All_variables *E)
           input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
       }
       else if(strcmp(E->control.uzawa, "bicg") == 0) {
+          if(E->control.ala_pressure_buoyancy)
+              myerror(E, "compressible_formulation=ala currently requires uzawa=cg");
       }
       else
           myerror(E, "Error: unknown Uzawa iteration\n");

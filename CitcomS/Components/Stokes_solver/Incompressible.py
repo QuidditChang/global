@@ -102,6 +102,10 @@ class Incompressible(CitcomComponent):
         aug_lagr = prop.bool("aug_lagr", default=True)
         aug_number = prop.float("aug_number", default=2.0e3)
 
+        compressible_formulation = prop.str("compressible_formulation",
+                                            default="tala",
+                                            validator=prop.choice(["tala",
+                                                                   "ala"]))
         uzawa = prop.str("uzawa", default="cg",
                          validator=prop.choice(["cg", "bicg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)
