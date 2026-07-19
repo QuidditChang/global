@@ -114,9 +114,9 @@ void full_global_derived_values(E)
 
 
   /* Myr */
-  E->data.scalet = (E->data.radius_km*1e3*E->data.radius_km*1e3/E->data.therm_diff)/(1.e6*365.25*24*3600);
+  E->data.scalet = (E->data.radius_km*1e3*E->data.radius_km*1e3/E->data.kappa0)/(1.e6*365.25*24*3600);
   /* cm/yr */
-  E->data.scalev = (E->data.radius_km*1e3/E->data.therm_diff)/(100*365.25*24*3600);
+  E->data.scalev = (E->data.radius_km*1e3/E->data.kappa0)/(100*365.25*24*3600);
   E->data.timedir = E->control.Atemp / fabs(E->control.Atemp);
 
   if(E->control.print_convergence && E->parallel.me==0)

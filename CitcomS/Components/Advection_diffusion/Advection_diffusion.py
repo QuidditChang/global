@@ -94,9 +94,19 @@ class Advection_diffusion(CitcomComponent):
         adv_gamma = prop.float("adv_gamma", default=0.5)
         adv_sub_iterations = prop.int("adv_sub_iterations", default=2)
 
-        inputdiffusivity = prop.float("inputdiffusivity", default=1)
+        # inputdiffusivity is a deprecated cfg alias retained by setProperties.
+        inputdiffusivity = prop.float("inputdiffusivity", default=-1.0)
+        reference_conductivity = prop.float("reference_conductivity", default=-1.0)
+        kd_mantle_thickness_km = prop.float("kd_mantle_thickness_km", default=2890.0)
+        kd_transition_depth_km = prop.float("kd_transition_depth_km", default=660.0)
+        kd_upper_prefactor = prop.float("kd_upper_prefactor", default=3.0)
+        kd_upper_linear = prop.float("kd_upper_linear", default=15.66)
+        kd_upper_quadratic = prop.float("kd_upper_quadratic", default=-16.38)
+        kd_lower_prefactor = prop.float("kd_lower_prefactor", default=5.33)
+        kd_lower_linear = prop.float("kd_lower_linear", default=4.98)
+        kd_lower_quadratic = prop.float("kd_lower_quadratic", default=-0.81)
         kT_exponent = prop.float("kT_exponent", default=0.0)
-        kC_ratio = prop.float("kC_ratio", default=1.0)
+        kC_ratio = prop.float("kC_ratio", default=0.8)
 
 
 

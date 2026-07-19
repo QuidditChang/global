@@ -75,6 +75,17 @@ class Const(CitcomComponent):
         radius = pyre.inventory.float("radius", default=6371.0e3)
         density = pyre.inventory.float("density", default=3340.0)
         thermdiff = pyre.inventory.float("thermdiff", default=1.0e-6)
+        # Explicit thermal references. Zero retains the legacy inputs above.
+        ks = pyre.inventory.float("ks", default=0.0)
+        k0 = pyre.inventory.float("k0", default=0.0)
+        rho0 = pyre.inventory.float("rho0", default=0.0)
+        Cp0 = pyre.inventory.float("Cp0", default=0.0)
+        g0 = pyre.inventory.float("g0", default=0.0)
+        alpha0 = pyre.inventory.float("alpha0", default=0.0)
+        Ttop = pyre.inventory.float("Ttop", default=-1.0)
+        Tbottom = pyre.inventory.float("Tbottom", default=-1.0)
+        # Deprecated compatibility input. DeltaT is derived from Tbottom-Ttop.
+        deltaT = pyre.inventory.float("deltaT", default=-1.0)
         gravacc = pyre.inventory.float("gravacc", default=9.81)
         thermexp = pyre.inventory.float("thermexp", default=3.0e-5)
         refvisc = pyre.inventory.float("refvisc", default=1.0e21)
@@ -83,10 +94,10 @@ class Const(CitcomComponent):
         density_below = pyre.inventory.float("density_below", default=6600.0)
 
         z_lith = pyre.inventory.float("z_lith", default=0.014)
-        z_410 = pyre.inventory.float("z_410", default=0.06435)
+        z_410 = pyre.inventory.float("z_410", default=410.0/6371.0)
 #	z_lith = pyre.inventory.float("z_lith", default=0.005)
 #	z_410 = pyre.inventory.float("z_410", default=0.03435)
-        z_lmantle = pyre.inventory.float("z_lmantle", default=0.105)
+        z_lmantle = pyre.inventory.float("z_lmantle", default=660.0/6371.0)
         z_cmb = pyre.inventory.float("z_cmb", default=0.439)
 
 

@@ -525,7 +525,8 @@ void read_initial_settings(struct All_variables *E)
           myerror(E, "Error: unknown Uzawa iteration\n");
   }
 
-  input_float("surfaceT",&(E->control.surface_temp),"0.1",m);
+  /* Deprecated compatibility input.  Explicit Ttop/Tbottom are read below. */
+  input_float("surfaceT",&(E->control.surface_temp),"-1.0",m);
   /*input_float("adiabaticT0",&(E->control.adiabaticT0),"0.4",m);*/
   input_float("Q0",&(E->control.Q0),"0.0",m);
   /* Q0_enriched gets read in Tracer_setup.c */
@@ -536,6 +537,15 @@ void read_initial_settings(struct All_variables *E)
   input_float("cp",&(E->data.Cp),"1200.0",m);
   input_float("thermdiff",&(E->data.therm_diff),"1.0e-6",m);
   input_float("density",&(E->data.density),"3340.0",m);
+  input_float("k0",&(E->data.k0),"0.0",m);
+  input_float("ks",&(E->data.ks),"0.0",m);
+  input_float("rho0",&(E->data.rho0),"0.0",m);
+  input_float("Cp0",&(E->data.Cp0),"0.0",m);
+  input_float("g0",&(E->data.g0),"0.0",m);
+  input_float("alpha0",&(E->data.alpha0),"0.0",m);
+  input_float("Ttop",&(E->data.Ttop),"-1.0",m);
+  input_float("Tbottom",&(E->data.Tbottom),"-1.0",m);
+  input_float("deltaT",&(E->data.ref_temperature),"-1.0",m);
   input_float("density_above",&(E->data.density_above),"1030.0",m);
   input_float("density_below",&(E->data.density_below),"6600.0",m);
   input_float("refvisc",&(E->data.ref_viscosity),"1.0e21",m);
@@ -543,12 +553,81 @@ void read_initial_settings(struct All_variables *E)
   input_float("radius",&tmp,"6371e3.0",m);
   E->data.radius_km = tmp / 1e3;
 
-  E->data.therm_cond = E->data.therm_diff * E->data.density * E->data.Cp;
+  /* The explicit reference system is authoritative when supplied.  A zero
+     value selects the historical density/cp/thermdiff input triplet. */
+  if(E->data.rho0 <= 0.0)
+      E->data.rho0 = E->data.density;
+  if(E->data.Cp0 <= 0.0)
+      E->data.Cp0 = E->data.Cp;
+  if(E->data.g0 <= 0.0)
+      E->data.g0 = E->data.grav_acc;
+  if(E->data.alpha0 <= 0.0)
+      E->data.alpha0 = E->data.therm_exp;
+  if(E->data.k0 <= 0.0)
+      E->data.k0 = E->data.therm_diff * E->data.rho0 * E->data.Cp0;
+  /* Legacy files did not distinguish the model normalization from k0. */
+  if(E->data.ks <= 0.0)
+      E->data.ks = E->data.k0;
 
-  E->data.ref_temperature = E->control.Atemp * E->data.therm_diff
-    * E->data.ref_viscosity
-    / (E->data.density * E->data.grav_acc * E->data.therm_exp)
-    / (E->data.radius_km * E->data.radius_km * E->data.radius_km * 1e9);
+  if(!isfinite(E->data.ks) || !isfinite(E->data.k0) ||
+     !isfinite(E->data.rho0) || !isfinite(E->data.Cp0) ||
+     !isfinite(E->data.g0) || !isfinite(E->data.alpha0) ||
+     E->data.ks <= 0.0 || E->data.k0 <= 0.0 ||
+     E->data.rho0 <= 0.0 || E->data.Cp0 <= 0.0 ||
+     E->data.g0 <= 0.0 || E->data.alpha0 <= 0.0)
+      myerror(E, "ks, k0, rho0, Cp0, g0, and alpha0 must be finite and positive");
+
+  E->data.kappa0 = E->data.k0 / (E->data.rho0 * E->data.Cp0);
+  E->control.reference_conductivity = E->data.ks / E->data.k0;
+
+  /* Preserve old call sites and old input files without retaining two
+     independent thermal scales. */
+  E->data.therm_cond = E->data.k0;
+  E->data.therm_diff = E->data.kappa0;
+  E->data.density = E->data.rho0;
+  E->data.Cp = E->data.Cp0;
+  E->data.grav_acc = E->data.g0;
+  E->data.therm_exp = E->data.alpha0;
+
+  if((E->data.Ttop >= 0.0) != (E->data.Tbottom >= 0.0))
+      myerror(E, "Ttop and Tbottom must be specified together");
+  if(E->data.Ttop >= 0.0) {
+      if(!isfinite(E->data.Ttop) || !isfinite(E->data.Tbottom) ||
+         E->data.Tbottom <= E->data.Ttop)
+          myerror(E, "Ttop and Tbottom must be finite with Tbottom > Ttop >= 0");
+      if(E->parallel.me == 0 && E->data.ref_temperature > 0.0)
+          fprintf(stderr, "WARNING: deltaT is deprecated and ignored; using Tbottom-Ttop\n");
+      if(E->parallel.me == 0 && E->control.surface_temp >= 0.0)
+          fprintf(stderr, "WARNING: surfaceT is deprecated and ignored; using Ttop/DeltaT\n");
+      E->data.ref_temperature = E->data.Tbottom - E->data.Ttop;
+      E->control.surface_temp = E->data.Ttop / E->data.ref_temperature;
+  }
+  else {
+      if(E->parallel.me == 0)
+          fprintf(stderr, "WARNING: Ttop/Tbottom absent; deltaT/surfaceT compatibility mode is deprecated\n");
+      if(E->control.surface_temp < 0.0)
+          E->control.surface_temp = 0.1;
+  }
+
+  if(E->data.ref_temperature > 0.0)
+      E->control.Atemp = E->data.rho0 * E->data.g0 * E->data.alpha0
+        * E->data.ref_temperature
+        * (E->data.radius_km * E->data.radius_km * E->data.radius_km * 1e9)
+        / (E->data.ref_viscosity * E->data.kappa0);
+  else
+      E->data.ref_temperature = E->control.Atemp * E->data.kappa0
+        * E->data.ref_viscosity
+        / (E->data.rho0 * E->data.g0 * E->data.alpha0)
+        / (E->data.radius_km * E->data.radius_km * E->data.radius_km * 1e9);
+
+  if(E->data.Ttop < 0.0) {
+      E->data.Ttop = E->control.surface_temp * E->data.ref_temperature;
+      E->data.Tbottom = E->data.Ttop + E->data.ref_temperature;
+  }
+  if(E->parallel.me == 0)
+      fprintf(stderr,
+              "Temperature reference:\nTtop = %.9g K\nTbottom = %.9g K\nDeltaT = %.9g K\n",
+              E->data.Ttop, E->data.Tbottom, E->data.ref_temperature);
 
   output_common_input(E);
   h5input_params(E);
@@ -925,7 +1004,16 @@ void global_default_values(E)
   E->data.density_below = 6600.0;    /* sea water */
 
   E->data.Cp = 1200.0;
-  E->data.therm_cond = 3.168;
+  E->data.ks = 0.0;
+  E->data.rho0 = E->data.density;
+  E->data.Cp0 = E->data.Cp;
+  E->data.g0 = E->data.grav_acc;
+  E->data.alpha0 = E->data.therm_exp;
+  E->data.k0 = E->data.therm_diff * E->data.rho0 * E->data.Cp0;
+  E->data.kappa0 = E->data.therm_diff;
+  E->data.therm_cond = E->data.k0;
+  E->control.reference_conductivity = 1.0;
+  E->control.requested_reference_conductivity = -1.0;
   E->data.res_density = 3300.0;  /* density when X = ... */
   E->data.res_density_X = 0.3;
   E->data.melt_density = 2800.0;
@@ -942,6 +1030,9 @@ void global_default_values(E)
   E->data.dT_dz = 0.48e-3;
   E->data.delta_S = 250.0;
   E->data.ref_temperature = 2 * 1350.0; /* fixed temperature ... delta T */
+  E->data.Ttop = 0.1 * E->data.ref_temperature;
+  E->data.Tbottom = E->data.Ttop + E->data.ref_temperature;
+  E->control.surface_temp = 0.1;
 
   /* THIRD: you forgot and then went home, let's see if we can help out */
 
@@ -1222,6 +1313,13 @@ static void output_parse_optional(struct  All_variables *E)
     E->output.comp_el = 0;
     E->output.comp_nd = 0;
     E->output.k = 0;
+    E->output.kd = 0;
+    E->output.kT = 0;
+    E->output.kC = 0;
+    E->output.k_total = 0;
+    E->output.kappa_eff = 0;
+    E->output.rho_ref = 0;
+    E->output.Cp = 0;
     E->output.heating = 0;
 
     while(1) {
@@ -1270,6 +1368,20 @@ static void output_parse_optional(struct  All_variables *E)
             E->output.comp_nd = 1;
         else if(strcmp(prev, "k")==0)
             E->output.k = 1;
+        else if(strcmp(prev, "kd")==0)
+            E->output.kd = 1;
+        else if(strcmp(prev, "kT")==0)
+            E->output.kT = 1;
+        else if(strcmp(prev, "kC")==0)
+            E->output.kC = 1;
+        else if(strcmp(prev, "k_total")==0)
+            E->output.k_total = 1;
+        else if(strcmp(prev, "kappa_eff")==0)
+            E->output.kappa_eff = 1;
+        else if(strcmp(prev, "rho_ref")==0)
+            E->output.rho_ref = 1;
+        else if(strcmp(prev, "Cp")==0 || strcmp(prev, "cp")==0)
+            E->output.Cp = 1;
         else if(strcmp(prev, "heating")==0)
             E->output.heating = 1;
         else
@@ -1459,6 +1571,8 @@ void output_finalize(struct  All_variables *E)
     fclose(E->output.fpqt);
   if(E->output.fpqb)
     fclose(E->output.fpqb);
+
+  mat_prop_free(E);
 
 
 #ifdef USE_GZDIR

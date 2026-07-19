@@ -30,34 +30,33 @@
 #include <sys/types.h>
 #include "global_defs.h"
 
+#include "parallel_related.h"
 #include "parsing.h"
 #include "phase_change.h"
 
-static void phase_change_apply(struct All_variables *E, double **buoy,
-			       float **B, float **B_b,
-			       float Ra, float clapeyron,
-			       float depth, float transT, float inv_width);
+static void apply_one_phase(struct All_variables *E, double **buoy,
+                            int phase_index);
 static void calc_phase_change(struct All_variables *E,
-			      float **B, float **B_b,
-			      float Ra, float clapeyron,
-			      float depth, float transT, float inv_width);
-static void debug_phase_change(struct All_variables *E, float **B);
+                              int phase_index);
+static void debug_phase_change(struct All_variables *E, int phase_index);
+static void validate_phase_parameters(struct All_variables *E);
 
 
 void phase_change_allocate(struct All_variables *E)
 {
-  int j;
+  int j, phase_index;
   int nno  = E->lmesh.nno;
   int nsf  = E->lmesh.nsf;
 
-  for (j=1;j<=E->sphere.caps_per_proc;j++)  {
-    E->Fas410[j]   = (float *) malloc((nno+1)*sizeof(float));
-    E->Fas410_b[j] = (float *) malloc((nsf+1)*sizeof(float));
-    E->Fas670[j]   = (float *) malloc((nno+1)*sizeof(float));
-    E->Fas670_b[j] = (float *) malloc((nsf+1)*sizeof(float));
-    E->Fascmb[j]   = (float *) malloc((nno+1)*sizeof(float));
-    E->Fascmb_b[j] = (float *) malloc((nsf+1)*sizeof(float));
-  }
+  validate_phase_parameters(E);
+
+  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
+    for(j=1; j<=E->sphere.caps_per_proc; j++) {
+      E->phase_B[phase_index][j] =
+          (float *) malloc((nno+1)*sizeof(float));
+      E->phase_boundary[phase_index][j] =
+          (float *) malloc((nsf+1)*sizeof(float));
+    }
 
   return;
 }
@@ -66,86 +65,67 @@ void phase_change_allocate(struct All_variables *E)
 void phase_change_input(struct All_variables *E)
 {
   int m = E->parallel.me;
-  float width;
+  int phase_index;
+  float depth[PHASE_TRANSITIONS];
+  float density_jump[PHASE_TRANSITIONS];
+  float Ra[PHASE_TRANSITIONS];
+  float width[PHASE_TRANSITIONS];
+  float clapeyron[PHASE_TRANSITIONS];
+  float transT[PHASE_TRANSITIONS];
 
-  /* for phase change 410km  */
-  input_float("Ra_410",&(E->control.Ra_410),"0.0",m);
-  input_float("clapeyron410",&(E->control.clapeyron410),"0.0",m);
-  input_float("transT410",&(E->control.transT410),"0.0",m);
-  input_float("width410",&width,"0.0",m);
+  input_float_vector("phase_depth", PHASE_TRANSITIONS, depth, m);
+  input_float_vector("phase_delta_rho", PHASE_TRANSITIONS, density_jump, m);
+  input_float_vector("phase_Ra", PHASE_TRANSITIONS, Ra, m);
+  input_float_vector("phase_width", PHASE_TRANSITIONS, width, m);
+  input_float_vector("phase_clapeyron", PHASE_TRANSITIONS, clapeyron, m);
+  input_float_vector("phase_transT", PHASE_TRANSITIONS, transT, m);
 
-  if (width!=0.0)
-    E->control.inv_width410 = 1.0/width;
-
-  /* for phase change 670km   */
-  input_float("Ra_670",&(E->control.Ra_670),"0.0",m);
-  input_float("clapeyron670",&(E->control.clapeyron670),"0.0",m);
-  input_float("transT670",&(E->control.transT670),"0.0",m);
-  input_float("width670",&width,"0.0",m);
-
-  if (width!=0.0)
-    E->control.inv_width670 = 1.0/width;
-
-  /* for phase change CMB  */
-  input_float("Ra_cmb",&(E->control.Ra_cmb),"0.0",m);
-  input_float("clapeyroncmb",&(E->control.clapeyroncmb),"0.0",m);
-  input_float("transTcmb",&(E->control.transTcmb),"0.0",m);
-  input_float("widthcmb",&width,"0.0",m);
-
-  if (width!=0.0)
-    E->control.inv_widthcmb = 1.0/width;
-
+  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+    E->control.phase[phase_index].depth = depth[phase_index];
+    E->control.phase[phase_index].density_jump = density_jump[phase_index];
+    E->control.phase[phase_index].Ra = Ra[phase_index];
+    E->control.phase[phase_index].clapeyron = clapeyron[phase_index];
+    E->control.phase[phase_index].transT = transT[phase_index];
+    E->control.phase[phase_index].inv_width =
+        (width[phase_index] == 0.0)? 0.0 : 1.0/width[phase_index];
+  }
 
   return;
 }
 
 
-void phase_change_apply_410(struct All_variables *E, double **buoy)
+void phase_change_apply(struct All_variables *E, double **buoy)
 {
-  if (E->control.Ra_410 != 0.0)
-    phase_change_apply(E, buoy, E->Fas410, E->Fas410_b, E->control.Ra_410,
-		       E->control.clapeyron410, E->viscosity.z410,
-		       E->control.transT410, E->control.inv_width410);
+  int phase_index;
+
+  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
+    if(E->control.phase[phase_index].Ra != 0.0)
+      apply_one_phase(E, buoy, phase_index);
+
   return;
 }
 
 
-void phase_change_apply_670(struct All_variables *E, double **buoy)
-{
-  if (E->control.Ra_670 != 0.0)
-    phase_change_apply(E, buoy, E->Fas670, E->Fas670_b, E->control.Ra_670,
-		       E->control.clapeyron670, E->viscosity.zlm,
-		       E->control.transT670, E->control.inv_width670);
-  return;
-}
-
-
-void phase_change_apply_cmb(struct All_variables *E, double **buoy)
-{
-  if (E->control.Ra_cmb != 0.0)
-    phase_change_apply(E, buoy, E->Fascmb, E->Fascmb_b, E->control.Ra_cmb,
-		       E->control.clapeyroncmb, E->viscosity.zcmb,
-		       E->control.transTcmb, E->control.inv_widthcmb);
-  return;
-}
-
-
-static void phase_change_apply(struct All_variables *E, double **buoy,
-			       float **B, float **B_b,
-			       float Ra, float clapeyron,
-			       float depth, float transT, float inv_width)
+static void apply_one_phase(struct All_variables *E, double **buoy,
+                            int phase_index)
 {
   int m, i;
+  struct Phase_transition *phase = &E->control.phase[phase_index];
+  float **B = E->phase_B[phase_index];
 
-  calc_phase_change(E, B, B_b, Ra, clapeyron, depth, transT, inv_width);
+  calc_phase_change(E, phase_index);
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=E->lmesh.nno;i++)
-      buoy[m][i] -= Ra * B[m][i];
+      buoy[m][i] -= phase->Ra * B[m][i];
 
   if (E->control.verbose) {
-    fprintf(E->fp_out, "Ra=%f, clapeyron=%f, depth=%f, transT=%f, inv_width=%f\n",
-	    Ra, clapeyron, depth, transT, inv_width);
-    debug_phase_change(E,B);
+    fprintf(E->fp_out,
+            "phase[%d] depth=%f depth_km=%f delta_rho=%f Ra=%f "
+            "clapeyron=%f transT=%f inv_width=%f\n",
+            phase_index, phase->depth, phase->depth*E->data.radius_km,
+            phase->density_jump, phase->Ra, phase->clapeyron,
+            phase->transT, phase->inv_width);
+    debug_phase_change(E, phase_index);
     fflush(E->fp_out);
   }
 
@@ -154,12 +134,13 @@ static void phase_change_apply(struct All_variables *E, double **buoy,
 
 
 static void calc_phase_change(struct All_variables *E,
-			      float **B, float **B_b,
-			      float Ra, float clapeyron,
-			      float depth, float transT, float inv_width)
+                              int phase_index)
 {
   int i,j,k,n,ns,m,nz;
   float e_pressure,pt5,one,dz;
+  struct Phase_transition *phase = &E->control.phase[phase_index];
+  float **B = E->phase_B[phase_index];
+  float **B_b = E->phase_boundary[phase_index];
 
   pt5 = 0.5;
   one = 1.0;
@@ -169,14 +150,14 @@ static void calc_phase_change(struct All_variables *E,
      * phase. B is between 0 and 1. */
     for(i=1;i<=E->lmesh.nno;i++)  {
         nz = ((i-1) % E->lmesh.noz) + 1;
-        dz = (E->sphere.ro-E->sx[m][3][i]) - depth;
+        dz = (E->sphere.ro-E->sx[m][3][i]) - phase->depth;
         /*XXX: dz*rho[nz]*g[nz] is only a approximation for the reduced
          * pressure, a more accurate formula is:
          *   integral(rho(z)*g(z)*dz) from depth_ph to current depth   */
         e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
-            - clapeyron * (E->T[m][i] - transT);
+            - phase->clapeyron * (E->T[m][i] - phase->transT);
 
-        B[m][i] = pt5 * (one + tanh(inv_width * e_pressure));
+        B[m][i] = pt5 * (one + tanh(phase->inv_width * e_pressure));
     }
 
     /* compute the phase boundary, defined as the depth where B==0.5 */
@@ -197,17 +178,65 @@ static void calc_phase_change(struct All_variables *E,
 }
 
 
-static void debug_phase_change(struct All_variables *E, float **B)
+static void debug_phase_change(struct All_variables *E, int phase_index)
 {
   int m, j;
+  struct Phase_transition *phase = &E->control.phase[phase_index];
+  float **B = E->phase_B[phase_index];
 
-  fprintf(E->fp_out,"output_phase_change_buoyancy\n");
+  fprintf(E->fp_out,
+          "output_phase_change phase_index=%d phase_depth=%f depth_km=%f\n",
+          phase_index, phase->depth, phase->depth*E->data.radius_km);
   for(m=1;m<=E->sphere.caps_per_proc;m++)        {
     fprintf(E->fp_out,"for cap %d\n",E->sphere.capid[m]);
     for (j=1;j<=E->lmesh.nno;j++)
-      fprintf(E->fp_out,"Z = %.6e T = %.6e B[%06d] = %.6e \n",E->sx[m][3][j],E->T[m][j],j,B[m][j]);
+      fprintf(E->fp_out,
+              "phase_depth=%.6e node=%06d Z=%.6e T=%.6e B=%.6e "
+              "density_jump_contribution=%.6e "
+              "phase_buoyancy_contribution=%.6e\n",
+              phase->depth, j, E->sx[m][3][j], E->T[m][j], B[m][j],
+              phase->density_jump*B[m][j], -phase->Ra*B[m][j]);
   }
   fflush(E->fp_out);
+
+  return;
+}
+
+
+static void validate_phase_parameters(struct All_variables *E)
+{
+  int phase_index;
+  struct Phase_transition *phase;
+  double density_scale, expected_Ra, relative_error;
+
+  density_scale = E->data.density * E->data.therm_exp
+      * E->data.ref_temperature;
+
+  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+    phase = &E->control.phase[phase_index];
+
+    if(phase->depth < 0.0 || phase->depth > E->sphere.ro-E->sphere.ri) {
+      fprintf(stderr, "phase[%d] depth=%g is outside the model shell\n",
+              phase_index, phase->depth);
+      parallel_process_termination();
+    }
+
+    if(phase->Ra != 0.0 && phase->inv_width == 0.0) {
+      fprintf(stderr, "phase[%d] has nonzero Ra but zero width\n", phase_index);
+      parallel_process_termination();
+    }
+
+    if(phase->density_jump != 0.0 && phase->Ra != 0.0 &&
+       density_scale != 0.0 && E->control.Atemp != 0.0) {
+      expected_Ra = E->control.Atemp * phase->density_jump / density_scale;
+      relative_error = fabs(phase->Ra-expected_Ra) / fabs(expected_Ra);
+      if(relative_error > 0.01 && E->parallel.me == 0)
+        fprintf(stderr,
+                "phase[%d] Ra=%g differs from delta_rho-derived Ra=%g "
+                "by %.2f percent\n",
+                phase_index, phase->Ra, expected_Ra, 100.0*relative_error);
+    }
+  }
 
   return;
 }

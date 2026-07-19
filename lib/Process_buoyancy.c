@@ -35,6 +35,7 @@
 
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "material_properties.h"
 #include <math.h>		/* for sqrt */
 
 
@@ -245,8 +246,9 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     double T_gp;           /* T interpolated to Gauss point for k~_T         */
     double DT;
     double gradN_dot_gradT, mass_residual;
-    double Q, rho, cp, heating;
-    double kd_el, kC, kE, kT, T_dim, kgp;
+    double Q, rho, heating;
+    double depth_m, kd_el, kC, kE, kT, kgp, kappa_eff;
+    double rho_ref_gp, cp_gp;
     double Q_SCALE;        /* dimensional scale: k*DeltaT/R_earth  (W/m^2)  */
 
     float *b_cbf[NCS];     /* nodal CBF residual accumulator                 */
@@ -280,15 +282,15 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     if(E->parallel.me_loc[3] != target_zproc) return;
 
     /* Q_SCALE = k0 * DeltaT / R_earth  ~2.59e-3 W/m^2
-       k0 = kappa * rho0 * Cp0  (baseline thermal conductivity)
+       k0 = kappa0 * rho0 * Cp0  (baseline thermal conductivity)
        E->data.ref_temperature = DeltaT (K)
        E->data.radius_km * 1e3 = R_earth (m)
 
-       Variable-k multipliers and inputdiffusivity are included once in kgp
+       Variable-k multipliers and reference_conductivity are included once in kgp
        below, matching element_residual(). Q_SCALE only dimensionalizes the
        nondimensional boundary flux.                                      */
-    Q_SCALE = (E->data.therm_diff * E->data.density * E->data.Cp)
-              * E->data.ref_temperature / (E->data.radius_km * 1.0e3);
+    Q_SCALE = E->data.k0 * E->data.ref_temperature
+              / (E->data.radius_km * 1.0e3);
 
     /* allocate per-cap arrays */
     sum_h = (float *)malloc(5 * sizeof(float));
@@ -338,14 +340,13 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
             {
                 int nz = ((e - 1) % E->lmesh.elz) + 1;
                 rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
-                cp = 0.5 * (E->refstate.heat_capacity[nz] + E->refstate.heat_capacity[nz+1]);
-                kd_el = 0.5 * (E->refstate.thermal_conductivity[nz]
-                              + E->refstate.thermal_conductivity[nz+1]);
             }
 
-            /* k~_C is currently disabled in element_residual(); keep CBF in
-               lockstep until composition conductivity is wired there. */
-            kC = 1.0;
+            depth_m = (1.0 - 0.5 * (E->sx[m][3][E->ien[m][e].node[1]]
+                                    + E->sx[m][3][E->ien[m][e].node[5]]))
+                      * E->data.radius_km * 1.0e3;
+            kd_el = conductivity_depth_factor(E, depth_m);
+            kC = conductivity_element_composition_factor(E, m, e);
             kE = kd_el * kC;
 
             if(E->control.disptn_number == 0)
@@ -365,13 +366,18 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                     gradT[1] = 0.0;  gradT[2] = 0.0;  gradT[3] = 0.0;
                     Tdot_gp  = 0.0;
                     T_gp     = 0.0;
+                    rho_ref_gp = 0.0;
+                    cp_gp = 0.0;
                     for(j = 1; j <= ends; j++) {
                         int nj = E->ien[m][e].node[j];
+                        int iz = ((nj - 1) % E->lmesh.noz) + 1;
                         double sfn = E->N.vpt[GNVINDEX(j,i)];
                         gradT[1] += GNx.vpt[GNVXINDEX(0,j,i)] * E->T[m][nj];
                         gradT[2] += GNx.vpt[GNVXINDEX(1,j,i)] * E->T[m][nj];
                         gradT[3] += GNx.vpt[GNVXINDEX(2,j,i)] * E->T[m][nj];
                         T_gp     += sfn * E->T[m][nj];
+                        rho_ref_gp += sfn * E->refstate.rho[iz];
+                        cp_gp += sfn * E->refstate.heat_capacity[iz];
 
                         if(E->node[m][nj] & (TBX | TBY | TBZ))
                             DT = 0.0;
@@ -380,24 +386,16 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                         Tdot_gp += sfn * DT;
                     }
 
-                    if(E->control.kT_exponent == 0.0) {
-                        kT = 1.0;
+                    kT = conductivity_temperature_factor(E, T_gp);
+                    kgp = E->control.reference_conductivity * kE * kT;
+                    kappa_eff = kgp / (rho_ref_gp * cp_gp);
+                    if(!isfinite(kappa_eff) || kappa_eff < 0.0) {
+                        fprintf(stderr,
+                                "Invalid kappa_eff in heat_flux_CBF: "
+                                "element=%d gauss=%d kgp=%e rho_ref=%e Cp=%e\n",
+                                e, i, kgp, rho_ref_gp, cp_gp);
+                        parallel_process_termination();
                     }
-                    else {
-                        T_dim = (T_gp + E->control.surface_temp)
-                                * E->data.ref_temperature;
-                        if(T_dim <= 0.0) {
-                            fprintf(stderr,
-                                    "Invalid dimensional temperature in heat_flux_CBF: "
-                                    "el=%d cap=%d gauss=%d T_gp=%e surface_temp=%e "
-                                    "ref_temperature=%e T_dim=%e\n",
-                                    e, m, i, T_gp, E->control.surface_temp,
-                                    E->data.ref_temperature, T_dim);
-                            parallel_process_termination();
-                        }
-                        kT = pow(300.0 / T_dim, (double)E->control.kT_exponent);
-                    }
-                    kgp = E->control.inputdiff * kE * kT;
 
                     gradN_dot_gradT =
                         GNx.vpt[GNVXINDEX(0,a,i)] * gradT[1]
@@ -420,7 +418,8 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                     }
 
                     b_node += E->N.vpt[GNVINDEX(a,i)]
-                        * (mass_residual * rho * cp - heating) * dOmega.vpt[i];
+                        * (mass_residual * rho_ref_gp * cp_gp - heating)
+                        * dOmega.vpt[i];
 
                 }  /* end volume Gauss loop */
 

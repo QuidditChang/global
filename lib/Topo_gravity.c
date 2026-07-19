@@ -535,7 +535,7 @@ static void geoid_from_topography(struct All_variables *E,
         tpgb[i] = (float *)malloc(E->sphere.hindice*sizeof(float));
     }
 
-    stress_scaling = E->data.ref_viscosity*E->data.therm_diff/
+    stress_scaling = E->data.ref_viscosity*E->data.kappa0/
         (E->data.radius_km*E->data.radius_km*1e6);
 
     /* density contrast across surface, need to dimensionalize reference density */

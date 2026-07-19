@@ -104,12 +104,22 @@ extern "C" {
 
 #define MAX_LEVELS 12   /* max. number of multigrid levels */
 #define NCS      14   /* max. number of sphere caps */
+#define PHASE_TRANSITIONS 3
 
 typedef float higher_precision;  /* matrix coeffs etc */
 typedef double higher_precision1; /* intermediate calculations for finding above coeffs */
 
 
 /* Common structures */
+
+struct Phase_transition {
+    float depth;
+    float density_jump;
+    float Ra;
+    float clapeyron;
+    float transT;
+    float inv_width;
+};
 
 struct Bdry {
   int nel;
@@ -435,9 +445,7 @@ struct CONTROL {
     int reset_startage;
     int zero_elapsed_time;
 
-    float Ra_670,clapeyron670,transT670,inv_width670;
-    float Ra_410,clapeyron410,transT410,inv_width410;
-    float Ra_cmb,clapeyroncmb,transTcmb,inv_widthcmb;
+    struct Phase_transition phase[PHASE_TRANSITIONS];
 
     int augmented_Lagr;
     double augmented;
@@ -474,9 +482,18 @@ struct CONTROL {
 
     char uzawa[20];
 
-    float inputdiff;
+    float reference_conductivity; /* derived conversion ks/k0 */
+    float requested_reference_conductivity; /* deprecated input compatibility */
+    float kd_mantle_thickness_km;
+    float kd_transition_depth_km;
+    float kd_upper_prefactor;
+    float kd_upper_linear;
+    float kd_upper_quadratic;
+    float kd_lower_prefactor;
+    float kd_lower_linear;
+    float kd_lower_quadratic;
     float kT_exponent;   /* Deschamps k~_T temperature exponent a (default 0 = degenerate leg) */
-    float kC_ratio;      /* Deschamps k~_C composition conductivity ratio R_C (default 1 = off) */
+    float kC_ratio;      /* Deschamps k~_C enriched/normal conductivity ratio R_C */
     float VBXtopval;
     float VBXbotval;
     float VBYtopval;
@@ -493,7 +510,10 @@ struct CONTROL {
     int lith_age_time;
     int lith_age_old_cycles;
     float lith_age_depth;
+    float max_plate_age_Ma;              /* HSC effective-age cap in Ma */
     float lith_age_mantle_temp;
+    float bottom_tbl_thickness;          /* H_TBL / Earth radius; 0 disables */
+    float bottom_tbl_diffusivity_ratio;  /* kappa_bottom / kappa0 */
 
     int temperature_bound_adj;
     float depth_bound_adj;
@@ -544,14 +564,20 @@ struct CONTROL {
 
 struct REF_STATE {
     int choice;
+    int has_temperature;           /* initial background geotherm is available */
+    int has_beta_ala;
     char filename[200];
     double *rho;
+    double *ala_beta;              /* authoritative strict-ALA element beta */
+    double *beta_ala;              /* strict-ALA nodal beta, refstate column 6 */
     double *thermal_expansivity;
     double *heat_capacity;
-    double *thermal_conductivity;   /* k~_d : non-dim depth conductivity factor (refstate col 6) */
+    double *temperature;            /* column 3 initial background geotherm; not active ALA state */
+    double temperature_cmb;         /* unclosed initial-background CMB value, available on every rank */
+    double temperature_surface;     /* unclosed initial-background surface value, available on every rank */
+    double *gamma_eff;              /* dimensionless strict-ALA Gamma_eff (column 7) */
     double *gravity;
-    // DJB EBA
-    double *dis;
+    double *dis;                    /* legacy BA/EBA/TALA reference-state mask only */
     /*double *Tadi;*/
 };
 
@@ -561,6 +587,17 @@ struct DATA {
     float  radius_km;
     float   grav_acc;
     float   therm_exp;
+    /* Explicit dimensional thermal reference system. */
+    float   ks;                    /* conductivity-model normalization, W m^-1 K^-1 */
+    float   k0;                    /* W m^-1 K^-1 */
+    float   rho0;                  /* kg m^-3 */
+    float   Cp0;                   /* J kg^-1 K^-1 */
+    float   kappa0;                /* m^2 s^-1 = k0/(rho0*Cp0) */
+    float   g0;                    /* m s^-2 */
+    float   alpha0;                /* K^-1 */
+    float   Ttop;                  /* dimensional temperature at T*=0, K */
+    float   Tbottom;               /* dimensional temperature at T*=1, K */
+    /* Legacy aliases, synchronized when input is finalized. */
     float   Cp;
     float  therm_diff;
     float  therm_cond;
@@ -633,7 +670,14 @@ struct Output {
     int tracer;       /* whether to output tracer coordinate */
     int comp_el;      /* whether to output composition at elements */
     int comp_nd;      /* whether to output composition at nodes */
-    int k;            /* whether to output nodal thermal conductivity */
+    int k;            /* legacy alias for nodal k_total output */
+    int kd;
+    int kT;
+    int kC;
+    int k_total;
+    int kappa_eff;
+    int rho_ref;
+    int Cp;
     int heating;      /* whether to output heating terms at elements */
 
 
@@ -761,8 +805,8 @@ struct All_variables {
 
     float *stress[NCS];
     float *gstress[NCS];
-    float *Fas670[NCS],*Fas410[NCS],*Fas670_b[NCS],*Fas410_b[NCS];
-    float *Fascmb[NCS],*Fascmb_b[NCS];
+    float *phase_B[PHASE_TRANSITIONS][NCS];
+    float *phase_boundary[PHASE_TRANSITIONS][NCS];
 
     float *Vi[NCS],*EVi[NCS];
     float *VI[MAX_LEVELS][NCS],*EVI[MAX_LEVELS][NCS];

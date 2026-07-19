@@ -49,20 +49,18 @@ class Phase(CitcomComponent):
         import pyre.inventory
 
 
-        Ra_410 = pyre.inventory.float("Ra_410", default=0.0)
-        clapeyron410 = pyre.inventory.float("clapeyron410", default=0.0235)
-        transT410 = pyre.inventory.float("transT410", default=0.78)
-        width410 = pyre.inventory.float("width410", default=0.0058)
-
-        Ra_670 = pyre.inventory.float("Ra_670", default=0.0)
-        clapeyron670 = pyre.inventory.float("clapeyron670", default=-0.0235)
-        transT670 = pyre.inventory.float("transT670", default=0.78)
-        width670 = pyre.inventory.float("width670", default=0.0058)
-
-        Ra_cmb = pyre.inventory.float("Ra_cmb", default=0.0)
-        clapeyroncmb = pyre.inventory.float("clapeyroncmb", default=-0.0235)
-        transTcmb = pyre.inventory.float("transTcmb", default=0.875)
-        widthcmb = pyre.inventory.float("widthcmb", default=0.0058)
+        phase_depth = pyre.inventory.list(
+            "phase_depth", default=[410.0/6371.0, 520.0/6371.0, 660.0/6371.0])
+        phase_delta_rho = pyre.inventory.list(
+            "phase_delta_rho", default=[0.0, 0.0, 0.0])
+        phase_Ra = pyre.inventory.list(
+            "phase_Ra", default=[0.0, 0.0, 0.0])
+        phase_width = pyre.inventory.list(
+            "phase_width", default=[0.0058, 0.0058, 0.0058])
+        phase_clapeyron = pyre.inventory.list(
+            "phase_clapeyron", default=[0.0235, 0.0, -0.0235])
+        phase_transT = pyre.inventory.list(
+            "phase_transT", default=[0.78, 0.78, 0.78])
 
 
 # version

@@ -28,8 +28,25 @@
 
 
 void mat_prop_allocate(struct All_variables *E);
+void mat_prop_free(struct All_variables *E);
 void reference_state(struct All_variables *E);
+double conductivity_depth_factor(struct All_variables *E,
+                                 double physical_depth_m);
+double conductivity_temperature_factor(struct All_variables *E,
+                                       double nondimensional_temperature);
+double conductivity_element_composition_factor(struct All_variables *E,
+                                               int cap, int element);
 double nodal_thermal_conductivity(struct All_variables *E, int cap, int node);
+double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
+                                    int component);
+
+#define CONDUCTIVITY_KD 0
+#define CONDUCTIVITY_KT 1
+#define CONDUCTIVITY_KC 2
+#define CONDUCTIVITY_K_TOTAL 3
+#define CONDUCTIVITY_KAPPA_EFF 4
+#define CONDUCTIVITY_RHO_REF 5
+#define CONDUCTIVITY_CP 6
 
 
 void density(struct All_variables *E, double *rho);

@@ -101,6 +101,8 @@ void gzdir_output_horiz_avg(struct All_variables *, int);
 void gzdir_output_tracer(struct All_variables *, int);
 void gzdir_output_pressure(struct All_variables *, int);
 void gzdir_output_k(struct All_variables *, int);
+static void gzdir_output_conductivity_field(struct All_variables *, int,
+                                            const char *, int);
 void gzdir_output_heating(struct All_variables *, int);
 void gzdir_output_cmbhf_CBF(struct All_variables *, int);
 
@@ -187,6 +189,23 @@ void gzdir_output(struct All_variables *E, int out_cycles)
 
   if(E->output.k)
       gzdir_output_k(E, out_cycles);
+  if(E->output.kd)
+      gzdir_output_conductivity_field(E, out_cycles, "kd", CONDUCTIVITY_KD);
+  if(E->output.kT)
+      gzdir_output_conductivity_field(E, out_cycles, "kT", CONDUCTIVITY_KT);
+  if(E->output.kC)
+      gzdir_output_conductivity_field(E, out_cycles, "kC", CONDUCTIVITY_KC);
+  if(E->output.k_total)
+      gzdir_output_conductivity_field(E, out_cycles, "k_total",
+                                      CONDUCTIVITY_K_TOTAL);
+  if(E->output.kappa_eff)
+      gzdir_output_conductivity_field(E, out_cycles, "kappa_eff",
+                                      CONDUCTIVITY_KAPPA_EFF);
+  if(E->output.rho_ref)
+      gzdir_output_conductivity_field(E, out_cycles, "rho_ref",
+                                      CONDUCTIVITY_RHO_REF);
+  if(E->output.Cp)
+      gzdir_output_conductivity_field(E, out_cycles, "Cp", CONDUCTIVITY_CP);
 
   if (E->output.comp_el && E->composition.on)
       gzdir_output_comp_el(E, out_cycles);
@@ -517,7 +536,7 @@ void gzdir_output_velo_temp(struct All_variables *E, int cycles)
       else			/* parallel */
 	sprintf(message,"POINT_DATA %i\n",E->lmesh.nno*E->sphere.caps_per_proc);
       myfprintf(fp1,message);
-      myfprintf(fp1,"SCALARS temperature float 1\n");
+      myfprintf(fp1,"SCALARS temperature_K float 1\n");
       myfprintf(fp1,"LOOKUP_TABLE default\n");
     }else{
       /* if not first, wait for previous */
@@ -527,7 +546,7 @@ void gzdir_output_velo_temp(struct All_variables *E, int cycles)
     }
     for(j=1; j<= E->sphere.caps_per_proc;j++) /* print the temperatures */
       for(i=1;i<=E->lmesh.nno;i++){
-	cvec[0] = E->T[j][i];
+	cvec[0] = E->data.Ttop + E->T[j][i] * E->data.ref_temperature;
 	if(be_write_float_to_file(cvec,1,fp1)!=1)
 	  BE_WERROR;
       }
@@ -618,14 +637,16 @@ void gzdir_output_velo_temp(struct All_variables *E, int cycles)
     snprintf(output_file,255,"%s.gz",output_file2); /* add the .gz */
 
     gzout = gzdir_output_open(output_file,"w");
-    gzprintf(gzout,"%d %d %.5e\n",
-	     cycles,E->lmesh.nno,E->monitor.elapsed_time);
+    gzprintf(gzout,"%d %d %.5e %.9g %.9g %.9g\n",
+	     cycles,E->lmesh.nno,E->monitor.elapsed_time,
+             E->data.Ttop,E->data.Tbottom,E->data.ref_temperature);
     for(j=1; j<= E->sphere.caps_per_proc;j++)     {
       gzprintf(gzout,"%3d %7d\n",j,E->lmesh.nno);
       if(E->output.gzdir.vtk_io){
 	/* VTK */
 	for(i=1;i<=E->lmesh.nno;i++)
-	  gzprintf(gzout,"%.6e\n",E->T[j][i]);
+	  gzprintf(gzout,"%.6e\n",
+	           E->data.Ttop + E->T[j][i] * E->data.ref_temperature);
       } else {
 	/* old velo + T output */
 	if(E->output.gzdir.rnr){
@@ -636,7 +657,8 @@ void gzdir_output_velo_temp(struct All_variables *E, int cycles)
 	    sub_netr(E->sx[j][3][i],E->sx[j][1][i],E->sx[j][2][i],(vcorr+0),(vcorr+1),omega);
 	    gzprintf(gzout,"%.6e %.6e %.6e %.6e\n",
 		     vcorr[0],vcorr[1],
-		     E->sphere.cap[j].V[3][i],E->T[j][i]);
+		     E->sphere.cap[j].V[3][i],
+		     E->data.Ttop + E->T[j][i] * E->data.ref_temperature);
 
 	  }
 	}else{
@@ -644,7 +666,8 @@ void gzdir_output_velo_temp(struct All_variables *E, int cycles)
 	    gzprintf(gzout,"%.6e %.6e %.6e %.6e\n",
 		     E->sphere.cap[j].V[1][i],
 		     E->sphere.cap[j].V[2][i],
-		     E->sphere.cap[j].V[3][i],E->T[j][i]);
+		     E->sphere.cap[j].V[3][i],
+		     E->data.Ttop + E->T[j][i] * E->data.ref_temperature);
 	}
       }
     }
@@ -1112,8 +1135,15 @@ void gzdir_output_comp_el(struct All_variables *E, int cycles)
 
 void gzdir_output_k(struct All_variables *E, int cycles)
 {
+  gzdir_output_conductivity_field(E, cycles, "k", CONDUCTIVITY_K_TOTAL);
+}
+
+
+static void gzdir_output_conductivity_field(struct All_variables *E, int cycles,
+                                            const char *name, int component)
+{
   int i, j;
-  char output_file[255];
+  char output_file[255], message[255];
   gzFile *gz1;
   FILE *fp1;
   float ftmp;
@@ -1122,14 +1152,15 @@ void gzdir_output_k(struct All_variables *E, int cycles)
   int mpi_inmsg, mpi_success_message = 1;
 
   if(E->output.gzdir.vtk_io < 2){
-    snprintf(output_file,255,"%s/%d/k.%d.%d.gz", E->control.data_dir,
-             cycles,E->parallel.me, cycles);
+    snprintf(output_file,255,"%s/%d/%s.%d.%d.gz", E->control.data_dir,
+             cycles,name,E->parallel.me, cycles);
     gz1 = gzdir_output_open(output_file,"w");
     gzprintf(gz1,"%d %d %.5e\n",cycles,E->lmesh.nno,E->monitor.elapsed_time);
     for(j=1;j<=E->sphere.caps_per_proc;j++) {
       gzprintf(gz1,"%3d %7d\n",j,E->lmesh.nno);
       for(i=1;i<=E->lmesh.nno;i++)
-        gzprintf(gz1,"%.6e\n",nodal_thermal_conductivity(E, j, i));
+        gzprintf(gz1,"%.6e\n", nodal_conductivity_diagnostic(
+                 E, j, i, component));
     }
     gzclose(gz1);
   }else{
@@ -1138,7 +1169,8 @@ void gzdir_output_k(struct All_variables *E, int cycles)
     get_vtk_filename(output_file,0,E,cycles);
     if((E->parallel.me == 0) || (E->output.gzdir.vtk_io == 3)){
       fp1 = output_open(output_file,"a");
-      myfprintf(fp1,"SCALARS k float 1\n");
+      snprintf(message, sizeof(message), "SCALARS %s float 1\n", name);
+      myfprintf(fp1,message);
       myfprintf(fp1,"LOOKUP_TABLE default\n");
     }else{
       mpi_rc = MPI_Recv(&mpi_inmsg, 1, MPI_INT, (E->parallel.me-1), 0, E->parallel.world, &mpi_stat);
@@ -1146,7 +1178,7 @@ void gzdir_output_k(struct All_variables *E, int cycles)
     }
     for(j=1; j<= E->sphere.caps_per_proc;j++)
       for(i=1;i<=E->lmesh.nno;i++){
-        ftmp = (float)nodal_thermal_conductivity(E, j, i);
+        ftmp = (float)nodal_conductivity_diagnostic(E, j, i, component);
         if(be_write_float_to_file(&ftmp,1,fp1)!=1)BE_WERROR;
       }
     fclose(fp1);fflush(fp1);
@@ -1254,7 +1286,8 @@ restart facility for zipped/VTK style , will init temperature
 void restart_tic_from_gzdir_file(struct All_variables *E)
 {
   int ii, ll, mm,rezip;
-  float restart_elapsed_time;
+  float restart_elapsed_time, output_Ttop, output_Tbottom, output_DeltaT;
+  int dimensional_temperature_output;
   int i, m;
   char output_file[255], input_s[1000];
   FILE *fp;
@@ -1287,7 +1320,17 @@ void restart_tic_from_gzdir_file(struct All_variables *E)
     fprintf(E->fp,"restart_tic_from_gzdir_file: using  %s for restarted temperature\n",
 	    output_file);
   }
-  if(fscanf(fp,"%i %i %f",&ll,&mm,&restart_elapsed_time) != 3)
+  if(fgets(input_s, sizeof(input_s), fp) == NULL)
+    myerror(E,"restart vtkl read error 0");
+  dimensional_temperature_output =
+      sscanf(input_s,"%i %i %f %f %f %f",&ll,&mm,&restart_elapsed_time,
+             &output_Ttop,&output_Tbottom,&output_DeltaT) == 6;
+  if(dimensional_temperature_output &&
+     (output_DeltaT <= 0.0 ||
+      fabs((output_Tbottom-output_Ttop)-output_DeltaT) >
+      1.0e-5 * output_DeltaT))
+    myerror(E,"invalid dimensional temperature metadata in restart file");
+  if(sscanf(input_s,"%i %i %f",&ll,&mm,&restart_elapsed_time) != 3)
     myerror(E,"restart vtkl read error 0");
   if(mm != E->lmesh.nno){
     fprintf(stderr,"%i %i\n",mm, E->lmesh.nno);
@@ -1306,7 +1349,8 @@ void restart_tic_from_gzdir_file(struct All_variables *E)
 	  fprintf(stderr,"WARNING: found a NaN in input temperatures\n");
 	  g=0.0;
 	}
-	E->T[m][i] = g;
+	E->T[m][i] = dimensional_temperature_output
+            ? (g - output_Ttop) / output_DeltaT : g;
       }
     }
     break;
@@ -1320,7 +1364,8 @@ void restart_tic_from_gzdir_file(struct All_variables *E)
 	    E->sphere.cap[m].V[1][i] = v3;  */
 	/* I don't like that  */
 	//E->T[m][i] = max(0.0,min(g,1.0));
-	E->T[m][i] = g;
+	E->T[m][i] = dimensional_temperature_output
+            ? (g - output_Ttop) / output_DeltaT : g;
       }
     }
     break;

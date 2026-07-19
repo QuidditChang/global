@@ -31,6 +31,7 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
@@ -51,6 +52,8 @@ void output_horiz_avg(struct All_variables *, int);
 void output_tracer(struct All_variables *, int);
 void output_pressure(struct All_variables *, int);
 void output_k(struct All_variables *, int);
+static void output_conductivity_field(struct All_variables *, int,
+                                      const char *, int);
 void output_heating(struct All_variables *, int);
 
 extern void parallel_process_termination();
@@ -127,6 +130,22 @@ void output(struct All_variables *E, int cycles)
 
   if(E->output.k)
       output_k(E, cycles);
+  if(E->output.kd)
+      output_conductivity_field(E, cycles, "kd", CONDUCTIVITY_KD);
+  if(E->output.kT)
+      output_conductivity_field(E, cycles, "kT", CONDUCTIVITY_KT);
+  if(E->output.kC)
+      output_conductivity_field(E, cycles, "kC", CONDUCTIVITY_KC);
+  if(E->output.k_total)
+      output_conductivity_field(E, cycles, "k_total", CONDUCTIVITY_K_TOTAL);
+  if(E->output.kappa_eff)
+      output_conductivity_field(E, cycles, "kappa_eff",
+                                CONDUCTIVITY_KAPPA_EFF);
+  if(E->output.rho_ref)
+      output_conductivity_field(E, cycles, "rho_ref",
+                                CONDUCTIVITY_RHO_REF);
+  if(E->output.Cp)
+      output_conductivity_field(E, cycles, "Cp", CONDUCTIVITY_CP);
 
   if (E->output.comp_el && E->composition.on)
       output_comp_el(E, cycles);
@@ -223,12 +242,15 @@ void output_velo(struct All_variables *E, int cycles)
           E->parallel.me, cycles);
   fp1 = output_open(output_file, "w");
 
-  fprintf(fp1,"%d %d %.5e\n",cycles,E->lmesh.nno,E->monitor.elapsed_time);
+  fprintf(fp1,"%d %d %.5e %.9g %.9g %.9g\n",cycles,E->lmesh.nno,
+          E->monitor.elapsed_time, E->data.Ttop, E->data.Tbottom,
+          E->data.ref_temperature);
 
   for(j=1;j<=E->sphere.caps_per_proc;j++) {
     fprintf(fp1,"%3d %7d\n",j,E->lmesh.nno);
     for(i=1;i<=E->lmesh.nno;i++) {
-      fprintf(fp1,"%.6e %.6e %.6e %.6e\n",E->sphere.cap[j].V[1][i],E->sphere.cap[j].V[2][i],E->sphere.cap[j].V[3][i],E->T[j][i]);
+      fprintf(fp1,"%.6e %.6e %.6e %.6e\n",E->sphere.cap[j].V[1][i],E->sphere.cap[j].V[2][i],E->sphere.cap[j].V[3][i],
+              E->data.Ttop + E->T[j][i] * E->data.ref_temperature);
     }
   }
 
@@ -381,7 +403,9 @@ void output_horiz_avg(struct All_variables *E, int cycles)
             E->parallel.me, cycles);
     fp1=fopen(output_file,"w");
     for(j=1;j<=E->lmesh.noz;j++)  {
-        fprintf(fp1,"%.4e %.4e %.4e %.4e\n",E->sx[1][3][j],E->Have.T[j],E->Have.V[1][j],E->Have.V[2][j]);
+        fprintf(fp1,"%.4e %.4e %.4e %.4e\n",E->sx[1][3][j],
+                E->data.Ttop + E->Have.T[j] * E->data.ref_temperature,
+                E->Have.V[1][j],E->Have.V[2][j]);
     }
     fclose(fp1);
   }
@@ -569,11 +593,18 @@ void output_comp_el(struct All_variables *E, int cycles)
 
 void output_k(struct All_variables *E, int cycles)
 {
+    output_conductivity_field(E, cycles, "k", CONDUCTIVITY_K_TOTAL);
+}
+
+
+static void output_conductivity_field(struct All_variables *E, int cycles,
+                                      const char *name, int component)
+{
     int i, j;
     char output_file[255];
     FILE *fp1;
 
-    sprintf(output_file,"%s.k.%d.%d", E->control.data_file,
+    sprintf(output_file,"%s.%s.%d.%d", E->control.data_file, name,
             E->parallel.me, cycles);
     fp1 = output_open(output_file, "w");
 
@@ -582,7 +613,8 @@ void output_k(struct All_variables *E, int cycles)
     for(j=1;j<=E->sphere.caps_per_proc;j++) {
         fprintf(fp1,"%3d %7d\n",j,E->lmesh.nno);
         for(i=1;i<=E->lmesh.nno;i++)
-            fprintf(fp1,"%.6e\n",nodal_thermal_conductivity(E, j, i));
+            fprintf(fp1,"%.6e\n", nodal_conductivity_diagnostic(
+                        E, j, i, component));
     }
 
     fclose(fp1);

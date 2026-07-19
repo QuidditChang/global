@@ -314,8 +314,8 @@ void get_elt_k(E,el,elt_k,lev,m,iconv)
     void get_global_shape_fn();
     void construct_c3x3matrix_el();
     struct Shape_function GN;
-    struct Shape_function_dA dOmega;
     struct Shape_function_dx GNx;
+    struct Shape_function_dA dOmega;
 
     double ba[9][9][4][7]; /* integration points,node,3x6 matrix */
 
@@ -828,13 +828,13 @@ void get_elt_c(struct All_variables *E, int el,
 {
     void get_global_shape_fn();
     void construct_c3x3matrix_el();
-    int p, a, i, j, nz;
-    double temp, beta, rho_avg, x[4];
+    int p, a, i, j, nz, fine_first, fine_last, fine_nz;
+    double temp, beta, dr, dr_total, rho_avg, x[4], rho[9];
 
     struct Shape_function GN;
     struct Shape_function_dx GNx;
     struct Shape_function_dA dOmega;
-    double rtf[4][9], rho[9];
+    double rtf[4][9];
 
     const int dims = E->mesh.nsd;
     const int ends = enodes[dims];
@@ -847,15 +847,38 @@ void get_elt_c(struct All_variables *E, int el,
 
     temp = p_point[1].weight[dims-1] * dOmega.ppt[1];
 
-    switch (E->refstate.choice) {
-    case 1:
-        /* the reference state is computed by rho=exp((1-r)Di/gamma) */
-        /* so d(rho)/dr/rho == -Di/gamma */
+    if(E->control.ala_pressure_buoyancy) {
+        /* Strict ALA: restrict the single finest-grid element beta by radial
+         * length.  On levmax this is identical to pressure buoyancy. */
+        nz = ((el-1) % E->lmesh.ELZ[lev]) + 1;
+        fine_first = ((nz-1) * E->lmesh.elz) / E->lmesh.ELZ[lev] + 1;
+        fine_last = (nz * E->lmesh.elz) / E->lmesh.ELZ[lev];
+        beta = 0.0;
+        dr_total = 0.0;
+        for(fine_nz=fine_first; fine_nz<=fine_last; fine_nz++) {
+            dr = E->sx[1][3][fine_nz+1] - E->sx[1][3][fine_nz];
+            beta += E->refstate.ala_beta[fine_nz] * dr;
+            dr_total += dr;
+        }
+        beta /= dr_total;
 
-        beta = - E->control.disptn_number * E->control.inv_gruneisen;
-
+        /* ala_beta=-d(ln rho)/dr, hence div(u)=ala_beta*u_r. */
         for(a=1;a<=ends;a++) {
-            for (i=1;i<=dims;i++) {
+            for(i=1;i<=dims;i++) {
+                x[i] = E->N.ppt[GNPINDEX(a,1)]
+                    * E->element_Cc.ppt[BPINDEX(3,i,a,1)];
+            }
+            p=dims*(a-1);
+            elt_c[p  ][0] = x[1] * temp * beta;
+            elt_c[p+1][0] = x[2] * temp * beta;
+            elt_c[p+2][0] = x[3] * temp * beta;
+        }
+    }
+    else if(E->refstate.choice == 1) {
+        /* Explicit legacy analytic TALA benchmark policy. */
+        beta = -E->control.disptn_number * E->control.inv_gruneisen;
+        for(a=1;a<=ends;a++) {
+            for(i=1;i<=dims;i++) {
                 x[i] = E->N.ppt[GNPINDEX(a,1)]
                     * E->element_Cc.ppt[BPINDEX(3,i,a,1)];
             }
@@ -864,24 +887,20 @@ void get_elt_c(struct All_variables *E, int el,
             elt_c[p+1][0] = -x[2] * temp * beta;
             elt_c[p+2][0] = -x[3] * temp * beta;
         }
-        break;
-    default:
-        /* compute d(rho)/dr/rho from rho(r) */
-
+    }
+    else {
+        /* Historical file-based TALA density-gradient assembly, unchanged. */
         for(a=1;a<=ends;a++) {
             j = E->IEN[lev][m][el].node[a];
             nz = (j - 1) % E->lmesh.noz + 1;
             rho[a] = E->refstate.rho[nz];
         }
-
-        rho_avg = 0;
-        for(a=1;a<=ends;a++) {
+        rho_avg = 0.0;
+        for(a=1;a<=ends;a++)
             rho_avg += rho[a];
-        }
         rho_avg /= ends;
-
         for(a=1;a<=ends;a++) {
-            for (i=1;i<=dims;i++) {
+            for(i=1;i<=dims;i++) {
                 x[i] = rho[a] * GNx.ppt[GNPXINDEX(2,a,1)]
                     * E->N.ppt[GNPINDEX(a,1)]
                     * E->element_Cc.ppt[BPINDEX(3,i,a,1)];
@@ -891,7 +910,6 @@ void get_elt_c(struct All_variables *E, int el,
             elt_c[p+1][0] = -x[2] * temp / rho_avg;
             elt_c[p+2][0] = -x[3] * temp / rho_avg;
         }
-
     }
 
     return;
@@ -965,27 +983,13 @@ static double ala_pressure_buoyancy_coefficient(struct All_variables *E,
                                                 int el)
 {
   int nz;
-  double alpha, gravity, cp;
 
   if(!E->control.ala_pressure_buoyancy ||
-     E->control.inv_gruneisen == 0.0 ||
-     E->control.disptn_number == 0.0)
+     E->control.inv_gruneisen == 0.0)
     return 0.0;
 
   nz = ((el-1) % E->lmesh.elz) + 1;
-
-  alpha = 0.5 * (E->refstate.thermal_expansivity[nz] +
-                 E->refstate.thermal_expansivity[nz+1]);
-  gravity = 0.5 * (E->refstate.gravity[nz] +
-                   E->refstate.gravity[nz+1]);
-  cp = 0.5 * (E->refstate.heat_capacity[nz] +
-              E->refstate.heat_capacity[nz+1]);
-
-  if(cp == 0.0)
-    return 0.0;
-
-  return alpha * gravity / cp
-         * E->control.disptn_number * E->control.inv_gruneisen;
+  return E->refstate.ala_beta[nz];
 }
 
 
@@ -1113,7 +1117,7 @@ void get_elt_tr(struct All_variables *E, int bel, int side, double elt_tr[24], i
 	const float g = E->data.grav_acc;
 	const float R = 6371000.0;
 	const float eta = E->data.ref_viscosity;
-	const float kappa = E->data.therm_diff;
+	const float kappa = E->data.kappa0;
 	const float factor = 1.0e+00;
 	int nodeas;
 
@@ -1197,7 +1201,7 @@ void get_elt_tr_pseudo_surf(struct All_variables *E, int bel, int side, double e
 	const float g = E->data.grav_acc;
 	const float R = 6371000.0;
 	const float eta = E->data.ref_viscosity;
-	const float kappa = E->data.therm_diff;
+	const float kappa = E->data.kappa0;
 	const float factor = 1.0e+00;
 	int nodeas;
 

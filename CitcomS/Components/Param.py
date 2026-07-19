@@ -74,7 +74,10 @@ class Param(CitcomComponent):
 	tf_file = pyre.inventory.str("tf_file",default="tf_depth.dat")
         lith_age_time = pyre.inventory.bool("lith_age_time", default=False)
         lith_age_depth = pyre.inventory.float("lith_age_depth", default=0.0314)
+        max_plate_age_Ma = pyre.inventory.float("max_plate_age_Ma", default=70.0)
         mantle_temp = pyre.inventory.float("mantle_temp", default=1.0)
+        bottom_tbl_thickness = pyre.inventory.float("bottom_tbl_thickness", default=0.0)
+        bottom_tbl_diffusivity_ratio = pyre.inventory.float("bottom_tbl_diffusivity_ratio", default=1.0)
 
         #DESCRIBE = pyre.inventory.bool("DESCRIBE", default=False)
         #BEGINNER = pyre.inventory.bool("BEGINNER", default=False)

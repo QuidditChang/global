@@ -206,9 +206,7 @@ void get_buoyancy(struct All_variables *E, double **buoy)
     }
 
     /* phase change buoyancy */
-    phase_change_apply_410(E, buoy);
-    phase_change_apply_670(E, buoy);
-    phase_change_apply_cmb(E, buoy);
+    phase_change_apply(E, buoy);
 
     /* convert density to buoyancy */
     for(m=1;m<=E->sphere.caps_per_proc;m++)

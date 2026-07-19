@@ -35,10 +35,19 @@
 #include "global_defs.h"
 
 #include "advection_diffusion.h"
+#include "material_properties.h"
 #include "parsing.h"
 #include "lith_age.h"
 
+extern void parallel_process_termination();
+
 static void set_diffusion_timestep(struct All_variables *E);
+static void element_thermal_transport(struct All_variables *E, int cap,
+                                      int element, const double *tgp,
+                                      double reference_conductivity,
+                                      double *rho_gp,
+                                      double *cp_gp, double *kgp,
+                                      double *kappa_eff);
 static void predictor(struct All_variables *E, double **field,
                       double **fielddot);
 static void corrector(struct All_variables *E, double **field,
@@ -78,6 +87,8 @@ void advection_diffusion_parameters(struct All_variables *E)
 
     /* Set intial values, defaults & read parameters*/
     int m=E->parallel.me;
+    int legacy_found, reference_found;
+    float legacy_inputdiffusivity;
 
     input_boolean("ADV",&(E->advection.ADVECTION),"on",m);
     input_boolean("filter_temp",&(E->advection.filter_temperature),"off",m);
@@ -91,13 +102,63 @@ void advection_diffusion_parameters(struct All_variables *E)
     input_float("adv_gamma",&(E->advection.gamma),"0.5",m);
     input_int("adv_sub_iterations",&(E->advection.temp_iterations),"2,1,nomax",m);
 
-    input_float("inputdiffusivity",&(E->control.inputdiff),"1.0",m);
+    legacy_found = input_float("inputdiffusivity", &legacy_inputdiffusivity,
+                               "-1.0", m);
+    reference_found = input_float(
+        "reference_conductivity",
+        &(E->control.requested_reference_conductivity), "-1.0", m);
+    if(!reference_found && legacy_found)
+        E->control.requested_reference_conductivity = legacy_inputdiffusivity;
+    if((reference_found || legacy_found) &&
+       fabs(E->control.requested_reference_conductivity
+            - E->control.reference_conductivity)
+       > 1.0e-6 * max(1.0, fabs(E->control.reference_conductivity))) {
+        fprintf(stderr,
+                "reference_conductivity is derived as ks/k0=%e; "
+                "remove the deprecated independent value %e\n",
+                E->control.reference_conductivity,
+                E->control.requested_reference_conductivity);
+        parallel_process_termination();
+    }
 
     /* Deschamps (2026) conductivity factors k~ = k~_d * k~_T(T) * k~_C(C):
        kT_exponent = a in k~_T = (300/T_dim)^a  (0 = degenerate, k~_T=1)
        kC_ratio    = R_C in k~_C = 1+(R_C-1)*C_prim  (1 = off, k~_C=1) */
     input_float("kT_exponent",&(E->control.kT_exponent),"0.0",m);
-    input_float("kC_ratio",&(E->control.kC_ratio),"1.0",m);
+    input_float("kC_ratio",&(E->control.kC_ratio),"0.8",m);
+    input_float("kd_mantle_thickness_km",
+                &(E->control.kd_mantle_thickness_km),"2890.0",m);
+    input_float("kd_transition_depth_km",
+                &(E->control.kd_transition_depth_km),"660.0",m);
+    input_float("kd_upper_prefactor",
+                &(E->control.kd_upper_prefactor),"3.0",m);
+    input_float("kd_upper_linear",&(E->control.kd_upper_linear),"15.66",m);
+    input_float("kd_upper_quadratic",
+                &(E->control.kd_upper_quadratic),"-16.38",m);
+    input_float("kd_lower_prefactor",
+                &(E->control.kd_lower_prefactor),"5.33",m);
+    input_float("kd_lower_linear",&(E->control.kd_lower_linear),"4.98",m);
+    input_float("kd_lower_quadratic",
+                &(E->control.kd_lower_quadratic),"-0.81",m);
+
+    if(E->control.reference_conductivity < 0.0) {
+        fprintf(stderr,
+                "reference_conductivity must be non-negative, got %e\n",
+                E->control.reference_conductivity);
+        parallel_process_termination();
+    }
+    if(E->control.kC_ratio <= 0.0) {
+        fprintf(stderr, "kC_ratio must be positive, got %e\n",
+                E->control.kC_ratio);
+        parallel_process_termination();
+    }
+    if(E->control.kd_mantle_thickness_km <= 0.0 ||
+       E->control.kd_transition_depth_km < 0.0 ||
+       E->control.kd_upper_prefactor <= 0.0 ||
+       E->control.kd_lower_prefactor <= 0.0) {
+        fprintf(stderr, "invalid kd conductivity-model parameters\n");
+        parallel_process_termination();
+    }
 
 
     return;
@@ -121,8 +182,10 @@ void advection_diffusion_allocate_memory(struct All_variables *E)
 
 void PG_timestep_init(struct All_variables *E)
 {
-
-  set_diffusion_timestep(E);
+  /* Temperature and composition are initialized after this setup hook.
+     std_timestep() computes the field-dependent diffusion limit once those
+     fields exist. */
+  E->advection.diff_timestep = 1.0e8;
 
   return;
 }
@@ -171,6 +234,8 @@ void std_timestep(struct All_variables *E)
       E->advection.timestep = E->advection.fixed_timestep;
       return;
     }
+
+    set_diffusion_timestep(E);
 
     adv_timestep = 1.0e8;
     for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -267,8 +332,8 @@ void PG_timestep_solve(struct All_variables *E)
         if(E->control.disptn_number != 0)
           process_heating(E, psc_pass);
 
-        /* XXX: replace inputdiff with refstate.thermal_conductivity */
-	pg_solver(E,E->T,E->Tdot,DTdot,E->convection.heat_sources,E->control.inputdiff,1,E->node);
+	pg_solver(E,E->T,E->Tdot,DTdot,E->convection.heat_sources,
+                  E->control.reference_conductivity,1,E->node);
 	corrector(E,E->T,E->Tdot,DTdot);
 	temperatures_conform_bcs(E);
 	//if(E->sphere.caps==1)  apply_smooth_sideTbc(E);
@@ -456,7 +521,7 @@ void PG_timestep_solve_back(struct All_variables *E)
     
     do {
         E->advection.timestep *= E->advection.dt_reduced;
-        diff = E->control.inputdiff;
+        diff = E->control.reference_conductivity;
         
         iredo = 0;
         if (E->advection.ADVECTION) {
@@ -490,7 +555,7 @@ void PG_timestep_solve_back(struct All_variables *E)
                 t_temp = E->advection.timestep;
                 E->advection.timestep = 0.2*E->advection.fixed_timestep;
                 if(order) E->advection.timestep *= 10;
-                if(order) diff = 5*E->control.inputdiff;
+                if(order) diff = 5*E->control.reference_conductivity;
                 do {
                     if(E->parallel.me==0) fprintf(stderr,"Apply smoothing!\n");
                     flag = 1;
@@ -557,22 +622,43 @@ void PG_timestep_solve_back(struct All_variables *E)
 
 static void set_diffusion_timestep(struct All_variables *E)
 {
-  float diff_timestep, ts;
-  int m, el, d;
+  float min_dx2, ts;
+  int m, el, d, i, j, node;
+  double local_kappa_max, global_kappa_max;
+  double tgp[9], rho_gp[9], cp_gp[9], kgp[9], kappa_eff[9];
 
   float global_fmin();
 
-  diff_timestep = 1.0e8;
+  min_dx2 = 1.0e8;
+  local_kappa_max = 0.0;
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(el=1;el<=E->lmesh.nel;el++)  {
       for(d=1;d<=E->mesh.nsd;d++)    {
 	ts = E->eco[m][el].size[d] * E->eco[m][el].size[d];
-	diff_timestep = min(diff_timestep,ts);
+	min_dx2 = min(min_dx2,ts);
       }
+
+      for(i=1;i<=vpoints[E->mesh.nsd];i++) {
+          tgp[i] = 0.0;
+          for(j=1;j<=enodes[E->mesh.nsd];j++) {
+              node = E->ien[m][el].node[j];
+              tgp[i] += E->T[m][node] * E->N.vpt[GNVINDEX(j,i)];
+          }
+      }
+      element_thermal_transport(E, m, el, tgp,
+                                E->control.reference_conductivity,
+                                rho_gp, cp_gp, kgp, kappa_eff);
+      for(i=1;i<=vpoints[E->mesh.nsd];i++)
+          local_kappa_max = max(local_kappa_max, kappa_eff[i]);
     }
 
-  diff_timestep = global_fmin(E,diff_timestep);
-  E->advection.diff_timestep = 0.5 * diff_timestep;
+  min_dx2 = global_fmin(E,min_dx2);
+  MPI_Allreduce(&local_kappa_max, &global_kappa_max, 1, MPI_DOUBLE,
+                MPI_MAX, E->parallel.world);
+  if(global_kappa_max > 0.0)
+      E->advection.diff_timestep = 0.5 * min_dx2 / global_kappa_max;
+  else
+      E->advection.diff_timestep = 1.0e8;
 
   return;
 }
@@ -672,7 +758,6 @@ static void pg_solver(struct All_variables *E,
           get_global_shape_fn(E, el, &GN, &GNx, &dOmega, 0,
                               sphere_key, rtf, E->mesh.levmax, m);
 
-          /* XXX: replace diff with refstate.thermal_conductivity */
           pg_shape_fn(E, el, &PG, &GNx, VV,
                       rtf, diff, m);
           element_residual(E, el, PG, GNx, dOmega, VV, T, Tdot,
@@ -770,6 +855,57 @@ static void pg_shape_fn(struct All_variables *E, int el,
 
 
 
+static void element_thermal_transport(struct All_variables *E, int cap,
+                                      int element, const double *tgp,
+                                      double reference_conductivity,
+                                      double *rho_gp,
+                                      double *cp_gp, double *kgp,
+                                      double *kappa_eff)
+{
+    int i, j, node, iz;
+    double depth_m, kd, kC, kT, sfn;
+    const int ends = enodes[E->mesh.nsd];
+    const int vpts = vpoints[E->mesh.nsd];
+
+    depth_m = (1.0 - 0.5 * (E->sx[cap][3][E->ien[cap][element].node[1]]
+                            + E->sx[cap][3][E->ien[cap][element].node[5]]))
+              * E->data.radius_km * 1.0e3;
+    kd = conductivity_depth_factor(E, depth_m);
+    kC = conductivity_element_composition_factor(E, cap, element);
+
+    for(i=1;i<=vpts;i++) {
+        rho_gp[i] = 0.0;
+        cp_gp[i] = 0.0;
+        for(j=1;j<=ends;j++) {
+            node = E->ien[cap][element].node[j];
+            iz = ((node - 1) % E->lmesh.noz) + 1;
+            sfn = E->N.vpt[GNVINDEX(j,i)];
+            rho_gp[i] += E->refstate.rho[iz] * sfn;
+            cp_gp[i] += E->refstate.heat_capacity[iz] * sfn;
+        }
+        if(rho_gp[i] <= 0.0 || cp_gp[i] <= 0.0 ||
+           !isfinite(rho_gp[i]) || !isfinite(cp_gp[i])) {
+            fprintf(stderr,
+                    "Invalid reference rho/Cp in thermal transport: "
+                    "cap=%d element=%d gauss=%d rho_ref=%e Cp=%e\n",
+                    cap, element, i, rho_gp[i], cp_gp[i]);
+            parallel_process_termination();
+        }
+        kT = conductivity_temperature_factor(E, tgp[i]);
+        kgp[i] = reference_conductivity * kd * kT * kC;
+        kappa_eff[i] = kgp[i] / (rho_gp[i] * cp_gp[i]);
+        if(!isfinite(kgp[i]) || !isfinite(kappa_eff[i]) ||
+           kappa_eff[i] < 0.0) {
+            fprintf(stderr,
+                    "Invalid conductivity/diffusivity: cap=%d element=%d "
+                    "gauss=%d kgp=%e kappa_eff=%e\n",
+                    cap, element, i, kgp[i], kappa_eff[i]);
+            parallel_process_termination();
+        }
+    }
+}
+
+
 /* ==========================================
    Residual force vector from heat-transport.
    Used to correct the Tdot term.
@@ -791,24 +927,19 @@ static void element_residual(struct All_variables *E, int el,
     double dT[9];
     double tx1[9],tx2[9],tx3[9],sint[9];
     double v1[9],v2[9],v3[9];
-    double kgp[9];   /* Per-Gauss-point transport coefficient in the diffusion
-                        residual. diff remains the cmbhf_v0 baseline scalar
-                        transport coefficient from inputdiffusivity and is also
-                        still used by pg_shape_fn as the SUPG parameter. kd_el,
-                        kT, and kC are relative conductivity multipliers. EBA
-                        conductivity-vs-diffusivity consistency still needs an
-                        equation-level review. */
+    double kgp[9];   /* Per-Gauss-point normalized conductivity in the diffusion
+                        residual. diff is the baseline k/k0 multiplier from
+                        reference_conductivity and is also used by pg_shape_fn
+                        as the SUPG parameter. */
     double tgp[9];   /* Phase 2: temperature at each Gauss point (for k~_T) */
+    double rho_gp[9],cp_gp[9],kappa_eff[9];
     double adv_dT,t2[4];
     double T,DT;
-    double T_dim,T_surf,T_bot,DeltaT,kT;
 
     double prod,sfn;
     struct Shape_function1 GM;
     struct Shape_function1_dA dGamma;
-    double temp,rho,cp,heating;
-    double kd_el;   /* Phase 1: element k~_d (refstate depth factor, nz average) */
-    double kC,kE;
+    double temp,rho,heating;
     int nz;
 
     void get_global_1d_shape_fn();
@@ -873,18 +1004,8 @@ static void element_residual(struct All_variables *E, int el,
 
     nz = ((el-1) % E->lmesh.elz) + 1;
     rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
-    cp = 0.5 * (E->refstate.heat_capacity[nz] + E->refstate.heat_capacity[nz+1]);
-    /* Phase 1: element depth conductivity multiplier k~_d, same [nz] average as
-       rho/cp (thermal_conductivity is [noz+1], so nz+1 is in-bounds at the top
-       radial element). Element-constant in radius; both z Gauss points share it. */
-    kd_el = 0.5 * (E->refstate.thermal_conductivity[nz] + E->refstate.thermal_conductivity[nz+1]);
-    /* Phase 2: element composition multiplier k~_C = 1 + (R_C-1)*C_prim.
-       R_C = kC_ratio defaults to 1 -> k~_C = 1 (off). C_prim has no physical
-       object until the primordial flavor is added (route P), so kC remains
-       disabled as 1.0 here. TODO: kC = 1.0 + (E->control.kC_ratio - 1.0) *
-       E->composition.comp_el[m][PRIM_IDX][el] once primordial is in. */
-    kC = 1.0;
-    kE = kd_el * kC;   /* per-element part of k~ (depth * composition) */
+    element_thermal_transport(E, m, el, tgp, diff, rho_gp, cp_gp,
+                              kgp, kappa_eff);
 
     if(E->control.disptn_number == 0)
         heating = rho * Q;
@@ -899,45 +1020,23 @@ static void element_residual(struct All_variables *E, int el,
        injection point for the Deschamps et al. (2026) law
        kgp = diff * k~_d(d) * k~_T(T) * k~_C(C_prim). diff is the cmbhf_v0
        baseline scalar transport coefficient; the k~ terms are relative
-       multipliers. k~_d (depth) and k~_C (composition) are per-element (kE
-       above); k~_T is per-Gauss-point in T.
-       For nonzero kT_exponent, T_surf[K] and T_bot[K] come from model
-       temperature scaling and boundary values. DeltaT[K] = T_bot - T_surf.
-       T_dim[K] = T_surf + T_nd * DeltaT is the local dimensional absolute
-       temperature for k~_T. If local numerical undershoot gives
-       T_dim < T_surf, protect only the conductivity temperature factor by using
-       T_surf as the lower bound. The model temperature field itself is not
-       modified here.
+       multipliers. k~_d (depth) and k~_C (composition) are per-element;
+       k~_T, rho_ref, Cp, and kappa_eff=kgp/(rho_ref*Cp) are evaluated at
+       Gauss points.
+       T_dim[K] = E->data.Ttop + T_nd*E->data.ref_temperature. Numerical
+       undershoot is clamped to Ttop only inside the conductivity factor.
 
        THREE-LAYER DEGENERACY:
-         a=0 (kT_exponent=0) -> kT=1 -> kgp[i]=diff*kd_el   (Phase 1)
-         + col6 == 1         -> kd_el=1 -> kgp[i]=diff      (Phase 0)
-         R_C=1 (kC_ratio=1)  -> kC=1 -> composition factor off
-       TODO: wire k~_C to comp_el[m][PRIM_IDX][el] once primordial exists. */
-    T_surf = E->control.surface_temp * E->data.ref_temperature;
-    T_bot = (E->control.surface_temp + E->control.TBCbotval)
-            * E->data.ref_temperature;
-    DeltaT = T_bot - T_surf;
-    for(i=1;i<=vpts;i++) {
-        if(E->control.kT_exponent == 0.0) {
-            kT = 1.0;
-        }
-        else {
-            T_dim = T_surf + tgp[i] * DeltaT;
-            if(T_dim < T_surf)
-                T_dim = T_surf;
-            kT = pow(T_surf / T_dim, (double)E->control.kT_exponent);
-        }
-        kgp[i] = diff * kE * kT;
-    }
-
+         a=0 (kT_exponent=0) -> kT=1
+         R_C=1 (kC_ratio=1)  -> kC=1 */
     if(diffusion){
       for(j=1;j<=ends;j++) {
 	Eres[j]=0.0;
 	for(i=1;i<=vpts;i++)
 	  Eres[j] -=
 	    PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
-              * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])*rho*cp
+              * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])
+                 * rho_gp[i] * cp_gp[i]
                  - heating )
               + kgp[i] * dOmega.vpt[i] * E->heating_latent[m][el]
               * (GNx.vpt[GNVXINDEX(0,j,i)]*tx1[i]*rtf[3][i] +
@@ -950,8 +1049,9 @@ static void element_residual(struct All_variables *E, int el,
       for(j=1;j<=ends;j++) {
 	Eres[j]=0.0;
 	for(i=1;i<=vpts;i++)
-	  Eres[j] -= PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
-              * (dT[i] - heating + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i]);
+          Eres[j] -= PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
+              * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])
+                 * rho_gp[i] * cp_gp[i] - heating);
       }
     }
 
@@ -1094,11 +1194,12 @@ static void process_visc_heating(struct All_variables *E, int m,
     strain_rate_2_inv(E, m, strain_sqr, 0);
 
     for(e=1; e<=E->lmesh.nel; e++) {
-	/* DJB EBA */
         ez = (e - 1) % E->lmesh.elz + 1;
-        matprop = 0.5
-            * (E->refstate.dis[ez] +
-               E->refstate.dis[ez + 1]);
+        if(E->control.ala_pressure_buoyancy)
+            matprop = 1.0;
+        else
+            matprop = 0.5 * (E->refstate.dis[ez] +
+                             E->refstate.dis[ez + 1]);
         visc = 0.0;
         for(i = 1; i <= vpts; i++)
             visc += E->EVi[m][(e-1)*vpts + i];
@@ -1122,13 +1223,21 @@ static void process_adi_heating(struct All_variables *E, int m,
     temp2 = E->control.disptn_number / ends;
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        matprop = 0.0625 // DJB EBA
-            * (E->refstate.thermal_expansivity[ez] +
-               E->refstate.thermal_expansivity[ez + 1])
-	    * (E->refstate.dis[ez] + // DJB EBA5
-	       E->refstate.dis[ez + 1])
-            * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
-            * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        if(E->control.ala_pressure_buoyancy) {
+            matprop = 0.125
+                * (E->refstate.thermal_expansivity[ez] +
+                   E->refstate.thermal_expansivity[ez + 1])
+                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
+                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        }
+        else {
+            matprop = 0.0625
+                * (E->refstate.thermal_expansivity[ez] +
+                   E->refstate.thermal_expansivity[ez + 1])
+                * (E->refstate.dis[ez] + E->refstate.dis[ez + 1])
+                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
+                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        }
 
         temp1 = 0.0;
         for(i=1; i<=ends; i++) {
@@ -1158,13 +1267,21 @@ static void latent_heating(struct All_variables *E, int m,
 
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        matprop = 0.0625 // DJB EBA
-            * (E->refstate.thermal_expansivity[ez] +
-               E->refstate.thermal_expansivity[ez + 1])
-	    * (E->refstate.dis[ez] + // DJB EBA
-	       E->refstate.dis[ez + 1])
-            * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
-            * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        if(E->control.ala_pressure_buoyancy) {
+            matprop = 0.125
+                * (E->refstate.thermal_expansivity[ez] +
+                   E->refstate.thermal_expansivity[ez + 1])
+                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
+                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        }
+        else {
+            matprop = 0.0625
+                * (E->refstate.thermal_expansivity[ez] +
+                   E->refstate.thermal_expansivity[ez + 1])
+                * (E->refstate.dis[ez] + E->refstate.dis[ez + 1])
+                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
+                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
+        }
 
         temp2 = 0;
         temp3 = 0;
@@ -1189,37 +1306,26 @@ static void latent_heating(struct All_variables *E, int m,
 static void process_latent_heating(struct All_variables *E, int m,
                                    double *heating_latent, double *heating_adi)
 {
-    int e;
+    int e, phase_index, active_phase;
+    struct Phase_transition *phase;
 
     /* reset */
     for(e=1; e<=E->lmesh.nel; e++)
         heating_latent[e] = 1.0;
 
-    if(E->control.Ra_410 != 0.0) {
-        latent_heating(E, m, heating_latent, heating_adi,
-                       E->Fas410, E->control.Ra_410,
-                       E->control.clapeyron410, E->viscosity.z410,
-                       E->control.transT410, E->control.inv_width410);
-
+    active_phase = 0;
+    for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+        phase = &E->control.phase[phase_index];
+        if(phase->Ra != 0.0) {
+            latent_heating(E, m, heating_latent, heating_adi,
+                           E->phase_B[phase_index], phase->Ra,
+                           phase->clapeyron, phase->depth,
+                           phase->transT, phase->inv_width);
+            active_phase = 1;
+        }
     }
 
-    if(E->control.Ra_670 != 0.0) {
-        latent_heating(E, m, heating_latent, heating_adi,
-                       E->Fas670, E->control.Ra_670,
-                       E->control.clapeyron670, E->viscosity.zlm,
-                       E->control.transT670, E->control.inv_width670);
-    }
-
-    if(E->control.Ra_cmb != 0.0) {
-        latent_heating(E, m, heating_latent, heating_adi,
-                       E->Fascmb, E->control.Ra_cmb,
-                       E->control.clapeyroncmb, E->viscosity.zcmb,
-                       E->control.transTcmb, E->control.inv_widthcmb);
-    }
-
-
-    if(E->control.Ra_410 != 0 || E->control.Ra_670 != 0.0 ||
-       E->control.Ra_cmb != 0) {
+    if(active_phase) {
         for(e=1; e<=E->lmesh.nel; e++)
             heating_latent[e] = 1.0 / heating_latent[e];
     }

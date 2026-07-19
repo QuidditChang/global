@@ -30,6 +30,7 @@
 #include "config.h"
 #endif
 
+#include <ctype.h>
 #include <math.h>
 
 #include "global_defs.h"
@@ -37,7 +38,9 @@
 #include "parallel_related.h"
 
 static void read_refstate(struct All_variables *E);
+static int read_refstate_data_line(FILE *fp, char *buffer, int length);
 static void adams_williamson_eos(struct All_variables *E);
+static void initialize_ala_beta(struct All_variables *E);
 
 int layers_r(struct All_variables *,float);
 
@@ -49,6 +52,17 @@ void mat_prop_allocate(struct All_variables *E)
 
     /* reference profile of density */
     E->refstate.rho = (double *) malloc((noz+1)*sizeof(double));
+
+    /* Strict ALA nodal input and its one authoritative element mapping. */
+    E->refstate.ala_beta =
+        (double *) malloc((E->lmesh.elz+1)*sizeof(double));
+    E->refstate.beta_ala = (double *) calloc(noz+1, sizeof(double));
+    if(E->refstate.rho == NULL || E->refstate.ala_beta == NULL ||
+       E->refstate.beta_ala == NULL) {
+        fprintf(stderr, "Unable to allocate reference density/ALA beta storage\n");
+        parallel_process_termination();
+    }
+    E->refstate.has_beta_ala = 0;
 
     /* reference profile of gravity */
     E->refstate.gravity = (double *) malloc((noz+1)*sizeof(double));
@@ -63,14 +77,26 @@ void mat_prop_allocate(struct All_variables *E)
     /* dissipation scaling */
     E->refstate.dis = (double *) malloc((noz+1)*sizeof(double));
 
-    /* reference profile of thermal conductivity (k~_d depth factor, refstate col 6).
-       Allocated [noz+1] exactly like rho/heat_capacity so the 0.5*(arr[nz]+arr[nz+1])
-       element average in element_residual never reads past the top radial node. */
-    E->refstate.thermal_conductivity = (double *) malloc((noz+1)*sizeof(double));
+    /* Column 3 initializes the background geotherm; it is not used by ALA
+       continuity, momentum, heating, expansion, or EOS closure. */
+    E->refstate.temperature = (double *) malloc((noz+1)*sizeof(double));
+    E->refstate.gamma_eff = (double *) malloc((noz+1)*sizeof(double));
+    E->refstate.has_temperature = 0;
+    E->refstate.temperature_cmb = 0.0;
+    E->refstate.temperature_surface = 0.0;
 
     /* reference profile of temperature */
     /*E->refstate.Tadi = (double *) malloc((noz+1)*sizeof(double));*/
 
+}
+
+
+void mat_prop_free(struct All_variables *E)
+{
+    free(E->refstate.ala_beta);
+    E->refstate.ala_beta = NULL;
+    free(E->refstate.beta_ala);
+    E->refstate.beta_ala = NULL;
 }
 
 
@@ -100,61 +126,318 @@ void reference_state(struct All_variables *E)
         parallel_process_termination();
     }
 
-    if(E->parallel.me == 0) {
-        fprintf(stderr, "nz  radius   depth    rho    dis     layer\n");  // DJB EBA
+    initialize_ala_beta(E);
+
+    if(E->control.ala_pressure_buoyancy) {
+        if(E->parallel.me == 0) {
+            fprintf(stderr, "nz  radius   depth    rho    T_init_background    beta    gamma_eff    layer\n");
+        }
+        if(E->parallel.me < E->parallel.nprocz)
+            for(i=1; i<=E->lmesh.noz; i++) {
+                fprintf(stderr, "%d %f %f %e %11f %e %e %5i\n",
+                        i+E->lmesh.nzs-1, E->sx[1][3][i], 1-E->sx[1][3][i],
+                        E->refstate.rho[i], E->refstate.temperature[i],
+                        E->refstate.beta_ala[i], E->refstate.gamma_eff[i],
+                        layers_r(E,E->sx[1][3][i]));
+            }
     }
-    if(E->parallel.me < E->parallel.nprocz)
-        for(i=1; i<=E->lmesh.noz; i++) {
+    else {
+        if(E->parallel.me == 0) {
+            fprintf(stderr, "nz  radius   depth    rho    dis     layer\n");  // DJB EBA
+        }
+        if(E->parallel.me < E->parallel.nprocz)
+            for(i=1; i<=E->lmesh.noz; i++) {
             fprintf(stderr, "%d %f %f %e %11f %5i\n",
                     i+E->lmesh.nzs-1, E->sx[1][3][i], 1-E->sx[1][3][i],
                     E->refstate.rho[i],E->refstate.dis[i],layers_r(E,E->sx[1][3][i]));  // DJB EBA
-        }
+            }
+    }
 
     return;
 }
 
 
-double nodal_thermal_conductivity(struct All_variables *E, int cap, int node)
+/* Map strict-ALA nodal beta to one element coefficient by arithmetic endpoint
+ * averaging.  Continuity and pressure buoyancy both consume ala_beta.  The
+ * density logarithmic secant is validation only; it never replaces supplied
+ * strict-ALA beta.  reference_state=1 remains the explicit analytic benchmark
+ * policy and is the only ALA path allowed to construct beta from density.
+ *
+ * Validation uses relative mismatch |beta-beta_rho|/max(|beta_rho|,1e-12).
+ * RMS > 2% or maximum > 5% warns; RMS > 10% or maximum > 25% fails.  These
+ * thresholds also make missing R0 or kilometre-to-metre conversions fatal.
+ */
+static void initialize_ala_beta(struct All_variables *E)
 {
-    int iz;
-    double kd, kT, kC, T_dim;
+    int nz, global_nz, local_bad, global_bad, local_count, global_count;
+    double r0, r1, rho0, rho1, beta, beta_rho, beta_thermo;
+    double mismatch, relative, thermo_mismatch, thermo_relative;
+    double local_sum, global_sum, local_sq, global_sq;
+    double local_rel_sq, global_rel_sq;
+    double local_thermo_sum, global_thermo_sum;
+    double local_thermo_sq, global_thermo_sq;
+    double local_thermo_rel_sq, global_thermo_rel_sq;
+    double local_signed_at_max, global_signed_at_max;
+    double local_depth_at_max, global_depth_at_max;
+    double rms, relative_rms, thermo_rms, thermo_relative_rms;
+    struct { double value; int index; } local_max, global_max;
+    struct { double value; int index; } local_thermo_max, global_thermo_max;
+    const double beta_floor = 1.0e-12;
 
-    iz = ((node - 1) % E->lmesh.noz) + 1;
-    kd = E->refstate.thermal_conductivity[iz];
-
-    if(E->control.kT_exponent == 0.0) {
-        kT = 1.0;
-    }
-    else {
-        T_dim = (E->T[cap][node] + E->control.surface_temp)
-                * E->data.ref_temperature;
-        if(T_dim <= 0.0) {
+    for(nz=1; nz<=E->lmesh.noz; nz++) {
+        if(E->refstate.rho[nz] <= 0.0 || !isfinite(E->refstate.rho[nz])) {
             fprintf(stderr,
-                    "Invalid dimensional temperature in nodal_thermal_conductivity: "
-                    "cap=%d node=%d iz=%d T=%e surface_temp=%e "
-                    "ref_temperature=%e T_dim=%e\n",
-                    cap, node, iz, E->T[cap][node],
-                    E->control.surface_temp,
-                    E->data.ref_temperature, T_dim);
+                    "Invalid smooth reference density: rank=%d global_nz=%d rho=%e\n",
+                    E->parallel.me, nz + E->lmesh.nzs - 1,
+                    E->refstate.rho[nz]);
             parallel_process_termination();
         }
-        kT = pow(300.0 / T_dim, (double)E->control.kT_exponent);
     }
 
-    /* Composition conductivity is not wired in cmbhf_k yet. Keep this
-       diagnostic consistent with element_residual(), where kC = 1.0. */
-    kC = 1.0;
+    local_sum = local_sq = local_rel_sq = 0.0;
+    local_thermo_sum = local_thermo_sq = local_thermo_rel_sq = 0.0;
+    local_max.value = local_thermo_max.value = -1.0;
+    local_max.index = local_thermo_max.index = -1;
+    local_bad = 0;
+    local_count = E->lmesh.elz;
 
-    return kd * kT * kC;
+    for(nz=1; nz<=E->lmesh.elz; nz++) {
+        r0 = E->sx[1][3][nz];
+        r1 = E->sx[1][3][nz+1];
+        rho0 = E->refstate.rho[nz];
+        rho1 = E->refstate.rho[nz+1];
+        if(!isfinite(r0) || !isfinite(r1) || r1 <= r0) {
+            fprintf(stderr,
+                    "Invalid outward radial interval: rank=%d local_nz=%d r0=%e r1=%e\n",
+                    E->parallel.me, nz, r0, r1);
+            parallel_process_termination();
+        }
+
+        beta_rho = -(log(rho1) - log(rho0)) / (r1 - r0);
+        if(E->control.ala_pressure_buoyancy && E->refstate.choice == 0)
+            beta = 0.5 * (E->refstate.beta_ala[nz] +
+                          E->refstate.beta_ala[nz+1]);
+        else
+            beta = beta_rho;
+        if(!isfinite(beta) || beta <= 0.0) {
+            fprintf(stderr,
+                    "Invalid ALA beta: rank=%d local_nz=%d beta=%e; "
+                    "strict ALA requires positive beta*=-d(ln rho)/dr*\n",
+                    E->parallel.me, nz, beta);
+            parallel_process_termination();
+        }
+        E->refstate.ala_beta[nz] = beta;
+
+        mismatch = beta - beta_rho;
+        relative = fabs(mismatch) / max(fabs(beta_rho), beta_floor);
+        beta_thermo = E->control.disptn_number
+            * 0.5 * (E->refstate.thermal_expansivity[nz] +
+                     E->refstate.thermal_expansivity[nz+1])
+            * 0.5 * (E->refstate.gravity[nz] + E->refstate.gravity[nz+1])
+            / (0.5 * (E->refstate.heat_capacity[nz] +
+                      E->refstate.heat_capacity[nz+1])
+               * 0.5 * (E->refstate.gamma_eff[nz] +
+                        E->refstate.gamma_eff[nz+1]));
+        thermo_mismatch = beta - beta_thermo;
+        thermo_relative = fabs(thermo_mismatch) /
+                          max(fabs(beta_thermo), beta_floor);
+        global_nz = nz + E->lmesh.nzs - 1;
+
+        local_sum += mismatch;
+        local_sq += mismatch * mismatch;
+        local_rel_sq += relative * relative;
+        local_thermo_sum += thermo_mismatch;
+        local_thermo_sq += thermo_mismatch * thermo_mismatch;
+        local_thermo_rel_sq += thermo_relative * thermo_relative;
+        if(relative > local_max.value) {
+            local_max.value = relative;
+            local_max.index = global_nz;
+        }
+        if(thermo_relative > local_thermo_max.value) {
+            local_thermo_max.value = thermo_relative;
+            local_thermo_max.index = global_nz;
+        }
+        if(relative > 0.25 || thermo_relative > 0.25)
+            local_bad = 1;
+    }
+
+    MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_sq, &global_sq, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_rel_sq, &global_rel_sq, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_thermo_sum, &global_thermo_sum, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_thermo_sq, &global_thermo_sq, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_thermo_rel_sq, &global_thermo_rel_sq, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_count, &global_count, 1, MPI_INT, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_max, &global_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, E->parallel.world);
+    MPI_Allreduce(&local_thermo_max, &global_thermo_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, E->parallel.world);
+    MPI_Allreduce(&local_bad, &global_bad, 1, MPI_INT, MPI_MAX, E->parallel.world);
+    rms = sqrt(global_sq / global_count);
+    relative_rms = sqrt(global_rel_sq / global_count);
+    thermo_rms = sqrt(global_thermo_sq / global_count);
+    thermo_relative_rms = sqrt(global_thermo_rel_sq / global_count);
+
+    local_signed_at_max = local_depth_at_max = 0.0;
+    for(nz=1; nz<=E->lmesh.elz; nz++) {
+        global_nz = nz + E->lmesh.nzs - 1;
+        if(global_nz == global_max.index) {
+            beta_rho = -(log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz])) /
+                       (E->sx[1][3][nz+1] - E->sx[1][3][nz]);
+            local_signed_at_max = E->refstate.ala_beta[nz] - beta_rho;
+            local_depth_at_max = 1.0 - 0.5 * (E->sx[1][3][nz] + E->sx[1][3][nz+1]);
+        }
+    }
+    MPI_Allreduce(&local_signed_at_max, &global_signed_at_max, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_depth_at_max, &global_depth_at_max, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    /* Horizontal ranks duplicate the same radial reference-state slice. */
+    global_signed_at_max /= E->parallel.nprocxy;
+    global_depth_at_max /= E->parallel.nprocxy;
+
+    if(E->parallel.me == 0 && E->control.ala_pressure_buoyancy) {
+        fprintf(stderr,
+                "Strict ALA beta validation (beta* uses radius normalized by R0)\n"
+                "  density closure: mean_signed=%e RMS=%e relative_RMS=%e max_relative=%e "
+                "signed_at_max=%e radial_element=%d depth_over_R0=%e\n"
+                "  thermodynamic closure: mean_signed=%e RMS=%e "
+                "relative_RMS=%e max_relative=%e radial_element=%d\n",
+                global_sum/global_count, rms, relative_rms, global_max.value,
+                global_signed_at_max, global_max.index, global_depth_at_max,
+                global_thermo_sum/global_count, thermo_rms, thermo_relative_rms,
+                global_thermo_max.value, global_thermo_max.index);
+        if(relative_rms > 0.02 || thermo_relative_rms > 0.02 ||
+           global_max.value > 0.05 || global_thermo_max.value > 0.05)
+            fprintf(stderr, "  WARNING: strict ALA closure exceeds 2%% RMS or 5%% maximum tolerance\n");
+    }
+    if(E->control.ala_pressure_buoyancy &&
+       (global_bad || relative_rms > 0.10 || thermo_relative_rms > 0.10)) {
+        fprintf(stderr, "Strict ALA reference state fails beta closure tolerance\n");
+        parallel_process_termination();
+    }
+}
+
+
+double conductivity_depth_factor(struct All_variables *E,
+                                 double physical_depth_m)
+{
+    double depth, d;
+
+    if(!isfinite(physical_depth_m)) {
+        fprintf(stderr, "Non-finite physical depth in conductivity_depth_factor\n");
+        parallel_process_termination();
+    }
+
+    depth = max(0.0, physical_depth_m);
+    d = depth / (E->control.kd_mantle_thickness_km * 1.0e3);
+    if(depth < E->control.kd_transition_depth_km * 1.0e3)
+        return E->control.kd_upper_prefactor
+               * (1.0 + E->control.kd_upper_linear*d
+                  + E->control.kd_upper_quadratic*d*d)
+               / E->data.ks;
+    return E->control.kd_lower_prefactor
+           * (1.0 + E->control.kd_lower_linear*d
+              + E->control.kd_lower_quadratic*d*d)
+           / E->data.ks;
+}
+
+
+double conductivity_temperature_factor(struct All_variables *E,
+                                       double nondimensional_temperature)
+{
+    const double conductivity_reference_temperature_k = 300.0;
+    double dimensional_temperature;
+
+    if(E->control.kT_exponent == 0.0)
+        return 1.0;
+
+    dimensional_temperature = E->data.Ttop
+        + nondimensional_temperature * E->data.ref_temperature;
+    /* Do not let numerical undershoot alter the evolved T*.  The conductivity
+       lookup alone is bounded at the explicit dimensional top temperature. */
+    if(dimensional_temperature < E->data.Ttop)
+        dimensional_temperature = E->data.Ttop;
+
+    return pow(conductivity_reference_temperature_k / dimensional_temperature,
+               (double)E->control.kT_exponent);
+}
+
+
+static double conductivity_composition_factor(struct All_variables *E,
+                                              double primordial_fraction)
+{
+    double cprim;
+
+    if(!isfinite(primordial_fraction)) {
+        fprintf(stderr, "Non-finite primordial fraction in conductivity model\n");
+        parallel_process_termination();
+    }
+    cprim = min(1.0, max(0.0, primordial_fraction));
+    return 1.0 + (E->control.kC_ratio - 1.0) * cprim;
+}
+
+
+double conductivity_element_composition_factor(struct All_variables *E,
+                                               int cap, int element)
+{
+    /* The ratio composition scheme maps component i to tracer flavor i+1.
+       The highest-numbered flavor is primordial in both supported setups. */
+    if(!E->composition.on || E->composition.ncomp < 1)
+        return 1.0;
+    return conductivity_composition_factor(
+        E, E->composition.comp_el[cap][E->composition.ncomp-1][element]);
+}
+
+
+double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
+                                    int component)
+{
+    int iz;
+    double depth_m, kd, kT, kC, k_total, rho, cp;
+
+    iz = ((node - 1) % E->lmesh.noz) + 1;
+    depth_m = (1.0 - E->sx[cap][3][node]) * E->data.radius_km * 1.0e3;
+    kd = conductivity_depth_factor(E, depth_m);
+    kT = conductivity_temperature_factor(E, E->T[cap][node]);
+    if(E->composition.on && E->composition.ncomp > 0)
+        kC = conductivity_composition_factor(
+            E, E->composition.comp_node[cap][E->composition.ncomp-1][node]);
+    else
+        kC = 1.0;
+    k_total = kd * kT * kC;
+    rho = E->refstate.rho[iz];
+    cp = E->refstate.heat_capacity[iz];
+
+    switch(component) {
+    case CONDUCTIVITY_KD: return kd;
+    case CONDUCTIVITY_KT: return kT;
+    case CONDUCTIVITY_KC: return kC;
+    case CONDUCTIVITY_K_TOTAL:
+        return E->control.reference_conductivity * k_total;
+    case CONDUCTIVITY_KAPPA_EFF:
+        return E->control.reference_conductivity * k_total / (rho * cp);
+    case CONDUCTIVITY_RHO_REF: return rho;
+    case CONDUCTIVITY_CP: return cp;
+    default:
+        fprintf(stderr, "Unknown conductivity diagnostic component %d\n",
+                component);
+        parallel_process_termination();
+    }
+    return 0.0;
+}
+
+
+double nodal_thermal_conductivity(struct All_variables *E, int cap, int node)
+{
+    return nodal_conductivity_diagnostic(E, cap, node,
+                                         CONDUCTIVITY_K_TOTAL);
 }
 
 
 static void read_refstate(struct All_variables *E)
 {
     FILE *fp;
-    int i;
-    char buffer[255];
-    double not_used2; // DJB EBA  (col 7 still unused; col 6 now = thermal_conductivity)
+    int i, j, columns, expected_columns, cmb_columns, background_rows;
+    char buffer[255], cmb_buffer[255], trailing;
+    double values[9], cmb_values[9];
+    double first_temperature[4], last_temperature[4];
 
     fp = fopen(E->refstate.filename, "r");
     if(fp == NULL) {
@@ -163,24 +446,183 @@ static void read_refstate(struct All_variables *E)
         parallel_process_termination();
     }
 
+    /* Every radial MPI rank needs the same initial-background CMB temperature
+       when constructing the bottom TBL. Read the first global row explicitly,
+       then rewind before the existing local radial slice read. */
+    if(!read_refstate_data_line(fp, cmb_buffer, 255)) {
+        fprintf(stderr, "Reference state file '%s' is empty\n",
+                E->refstate.filename);
+        parallel_process_termination();
+    }
+    if(E->control.ala_pressure_buoyancy)
+        cmb_columns = sscanf(cmb_buffer,
+                             "%lf %lf %lf %lf %lf %lf %lf %c",
+                             &cmb_values[0], &cmb_values[1], &cmb_values[2],
+                             &cmb_values[3], &cmb_values[4], &cmb_values[5],
+                             &cmb_values[6], &trailing);
+    else
+        cmb_columns = sscanf(cmb_buffer,
+                             "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
+                             &cmb_values[0], &cmb_values[1], &cmb_values[2],
+                             &cmb_values[3], &cmb_values[4], &cmb_values[5],
+                             &cmb_values[6], &cmb_values[7], &cmb_values[8]);
+    if(E->control.ala_pressure_buoyancy && cmb_columns != 7) {
+        fprintf(stderr,
+                "Reference state file '%s', global radial row 1: "
+                "strict ALA requires exactly 7 numeric columns "
+                "(rho g Tref alpha Cp beta Gamma_eff), found %d\n",
+                E->refstate.filename, cmb_columns);
+        parallel_process_termination();
+    }
+    if(!E->control.ala_pressure_buoyancy &&
+       cmb_columns != 7 && cmb_columns != 8 && cmb_columns != 9) {
+        fprintf(stderr,
+                "Legacy reference state file '%s', global radial row 1: "
+                "expected 7, 8, or 9 numeric columns, found %d\n",
+                E->refstate.filename, cmb_columns);
+        parallel_process_termination();
+    }
+    if(E->control.ala_pressure_buoyancy) {
+        /* Strict-ALA generation closes the endpoint rows to the Dirichlet
+         * values T*=1 and T*=0.  Those closures are not the Katsura
+         * background endpoints needed by initial anomaly superposition.
+         * Recover both smooth background endpoints by quadratic continuation
+         * of the three adjacent interior radial samples. */
+        rewind(fp);
+        background_rows = 0;
+        for(j=0; j<4; j++) {
+            first_temperature[j] = 0.0;
+            last_temperature[j] = 0.0;
+        }
+        while(read_refstate_data_line(fp, buffer, 255)) {
+            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
+                             &values[0], &values[1], &values[2], &values[3],
+                             &values[4], &values[5], &values[6], &trailing);
+            if(columns != 7) {
+                fprintf(stderr,
+                        "Reference state file '%s', global radial row %d: "
+                        "strict ALA requires exactly 7 numeric columns\n",
+                        E->refstate.filename, background_rows+1);
+                parallel_process_termination();
+            }
+            if(background_rows < 4)
+                first_temperature[background_rows] = values[2];
+            for(j=0; j<3; j++)
+                last_temperature[j] = last_temperature[j+1];
+            last_temperature[3] = values[2];
+            background_rows++;
+        }
+        if(background_rows != E->mesh.noz || background_rows < 4) {
+            fprintf(stderr,
+                    "Reference state file '%s' has %d radial rows; expected %d\n",
+                    E->refstate.filename, background_rows, E->mesh.noz);
+            parallel_process_termination();
+        }
+        E->refstate.temperature_cmb =
+            3.0*first_temperature[1] - 3.0*first_temperature[2]
+            + first_temperature[3];
+        E->refstate.temperature_surface =
+            3.0*last_temperature[2] - 3.0*last_temperature[1]
+            + last_temperature[0];
+    }
+    else if(cmb_columns >= 8)
+        E->refstate.temperature_cmb = cmb_values[6];
+    rewind(fp);
+
     /* skip these lines, which belong to other processors */
     for(i=1; i<E->lmesh.nzs; i++) {
-        fgets(buffer, 255, fp);
+        if(!read_refstate_data_line(fp, buffer, 255)) {
+            fprintf(stderr, "Reference state file '%s' has too few radial rows\n",
+                    E->refstate.filename);
+            parallel_process_termination();
+        }
     }
 
+    expected_columns = 0;
     for(i=1; i<=E->lmesh.noz; i++) {
-        fgets(buffer, 255, fp);
-        if(sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf\n",
-               &(E->refstate.rho[i]),
-               &(E->refstate.gravity[i]),
-               &(E->refstate.thermal_expansivity[i]),
-               &(E->refstate.heat_capacity[i]),
-	       &(E->refstate.dis[i]), // DJB EBA
-               &(E->refstate.thermal_conductivity[i]),  // col 6 = k~_d depth factor
-               &not_used2) != 7) {
-		fprintf(stderr,"Error while reading file '%s'\n", E->refstate.filename);
-            exit(8);
-	}
+        if(!read_refstate_data_line(fp, buffer, 255)) {
+            fprintf(stderr, "Reference state file '%s' has too few radial rows\n",
+                    E->refstate.filename);
+            parallel_process_termination();
+        }
+
+        if(E->control.ala_pressure_buoyancy)
+            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
+                             &values[0], &values[1], &values[2], &values[3],
+                             &values[4], &values[5], &values[6], &trailing);
+        else
+            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
+                             &values[0], &values[1], &values[2], &values[3],
+                             &values[4], &values[5], &values[6], &values[7],
+                             &values[8]);
+        if(E->control.ala_pressure_buoyancy && columns != 7) {
+            fprintf(stderr,
+                    "Reference state file '%s', global radial row %d: "
+                    "strict ALA requires exactly 7 numeric columns "
+                    "(rho g Tref alpha Cp beta Gamma_eff), found %d\n",
+                    E->refstate.filename, i+E->lmesh.nzs-1, columns);
+            parallel_process_termination();
+        }
+        if(!E->control.ala_pressure_buoyancy &&
+           columns != 7 && columns != 8 && columns != 9) {
+            fprintf(stderr,
+                    "Legacy reference state file '%s', global radial row %d: "
+                    "expected 7, 8, or 9 numeric columns, found %d\n",
+                    E->refstate.filename, i+E->lmesh.nzs-1, columns);
+            parallel_process_termination();
+        }
+        if(expected_columns == 0)
+            expected_columns = columns;
+        else if(columns != expected_columns) {
+            fprintf(stderr,
+                    "Reference state file '%s' mixes %d- and %d-column rows\n",
+                    E->refstate.filename, expected_columns, columns);
+            parallel_process_termination();
+        }
+
+        if(E->control.ala_pressure_buoyancy) {
+            /* Conductivity is transport physics, not reference-state data.
+             * Strict schema: rho g Tref alpha Cp beta Gamma_eff. */
+            E->refstate.rho[i] = values[0];
+            E->refstate.gravity[i] = values[1];
+            E->refstate.temperature[i] = values[2];
+            E->refstate.thermal_expansivity[i] = values[3];
+            E->refstate.heat_capacity[i] = values[4];
+            E->refstate.beta_ala[i] = values[5];
+            E->refstate.gamma_eff[i] = values[6];
+            E->refstate.dis[i] = 1.0; /* inert legacy storage, not strict input */
+            if(E->refstate.rho[i] <= 0.0 ||
+               E->refstate.gravity[i] <= 0.0 ||
+               E->refstate.thermal_expansivity[i] <= 0.0 ||
+               E->refstate.heat_capacity[i] <= 0.0 ||
+               E->refstate.beta_ala[i] <= 0.0 ||
+               E->refstate.gamma_eff[i] <= 0.0 ||
+               !isfinite(E->refstate.rho[i]) ||
+               !isfinite(E->refstate.gravity[i]) ||
+               !isfinite(E->refstate.temperature[i]) ||
+               !isfinite(E->refstate.thermal_expansivity[i]) ||
+               !isfinite(E->refstate.heat_capacity[i]) ||
+               !isfinite(E->refstate.beta_ala[i]) ||
+               !isfinite(E->refstate.gamma_eff[i])) {
+                fprintf(stderr,
+                        "Invalid strict ALA row %d: all fields must be finite "
+                        "and rho/g/alpha/Cp/beta/Gamma_eff positive\n",
+                        i+E->lmesh.nzs-1);
+                parallel_process_termination();
+            }
+        }
+        else {
+            /* Historical named formulations retain their dis-containing
+             * rho g alpha Cp dis k [Tref Gamma_eff [beta]] interpretation. */
+            E->refstate.rho[i] = values[0];
+            E->refstate.gravity[i] = values[1];
+            E->refstate.thermal_expansivity[i] = values[2];
+            E->refstate.heat_capacity[i] = values[3];
+            E->refstate.dis[i] = values[4];
+            E->refstate.temperature[i] = columns >= 8 ? values[6] : 0.0;
+            E->refstate.gamma_eff[i] = columns >= 8 ? values[7] : 1.0;
+            E->refstate.beta_ala[i] = columns == 9 ? values[8] : 0.0;
+        }
 
         /**** debug ****
         fprintf(stderr, "%d %f %f %f %f\n",
@@ -192,8 +634,50 @@ static void read_refstate(struct All_variables *E)
         /* end of debug */
     }
 
+    E->refstate.has_temperature = E->control.ala_pressure_buoyancy ||
+                                  expected_columns >= 8;
+    E->refstate.has_beta_ala = E->control.ala_pressure_buoyancy ||
+                               expected_columns == 9;
+    if(!E->refstate.has_temperature && E->control.lith_age &&
+       E->convection.tic_method != -1) {
+        fprintf(stderr,
+                "Initial-background geotherm construction requires an 8-column "
+                "reference state file; '%s' uses the legacy 7-column format\n",
+                E->refstate.filename);
+        parallel_process_termination();
+    }
+
+    if(E->parallel.me == 0 && E->control.ala_pressure_buoyancy) {
+        fprintf(stderr,
+                "Read strict ALA reference state '%s': "
+                "rho g Tref alpha Cp beta Gamma_eff; "
+                "unclosed T_K endpoints CMB=%e surface=%e\n",
+                E->refstate.filename, E->refstate.temperature_cmb,
+                E->refstate.temperature_surface);
+    }
+    else if(E->parallel.me == 0 && E->refstate.has_temperature) {
+        fprintf(stderr,
+                "Read %d-column legacy dis-containing reference state '%s'\n",
+                expected_columns, E->refstate.filename);
+    }
+
     fclose(fp);
     return;
+}
+
+
+static int read_refstate_data_line(FILE *fp, char *buffer, int length)
+{
+    char *cursor;
+
+    while(fgets(buffer, length, fp) != NULL) {
+        cursor = buffer;
+        while(isspace((unsigned char)*cursor))
+            cursor++;
+        if(*cursor != '\0' && *cursor != '#')
+            return 1;
+    }
+    return 0;
 }
 
 
@@ -212,10 +696,16 @@ static void adams_williamson_eos(struct All_variables *E)
 	E->refstate.thermal_expansivity[i] = 1;
 	E->refstate.heat_capacity[i] = 1;
 	E->refstate.dis[i] = 1; // DJB EBA
-	E->refstate.thermal_conductivity[i] = 1; /* k~_d: analytic EoS path -> constant (no depth dep) */
+	E->refstate.temperature[i] = 0.0;
+	E->refstate.gamma_eff[i] = 1.0;
 	/*E->refstate.Tadi[i] = (E->control.adiabaticT0 + E->control.surface_temp) * exp(E->control.disptn_number * z) - E->control.surface_temp;*/
     }
 
+    E->refstate.temperature_cmb = 0.0;
+    E->refstate.temperature_surface = 0.0;
+    E->refstate.has_beta_ala = 0;
+    for(i=1; i<=E->lmesh.noz; i++)
+        E->refstate.beta_ala[i] = 0.0;
+
     return;
 }
-

@@ -90,6 +90,8 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
+    float legacy_inputdiffusivity;
+    float reference_conductivity;
 
     if (!PyArg_ParseTuple(args, "OOO:Advection_diffusion_set_properties",
 			  &obj, &properties, &out))
@@ -109,9 +111,52 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     getFloatProperty(properties, "adv_gamma", E->advection.gamma, fp);
     getIntProperty(properties, "adv_sub_iterations", E->advection.temp_iterations, fp);
 
-    getFloatProperty(properties, "inputdiffusivity", E->control.inputdiff, fp);
+    getFloatProperty(properties, "inputdiffusivity", legacy_inputdiffusivity, fp);
+    getFloatProperty(properties, "reference_conductivity",
+                     reference_conductivity, fp);
+    if(reference_conductivity >= 0.0)
+        E->control.requested_reference_conductivity = reference_conductivity;
+    else if(reference_conductivity != -1.0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "reference_conductivity must be non-negative");
+        return NULL;
+    }
+    else if(legacy_inputdiffusivity >= 0.0)
+        E->control.requested_reference_conductivity = legacy_inputdiffusivity;
+    else if(legacy_inputdiffusivity == -1.0)
+        E->control.requested_reference_conductivity = -1.0;
+    else {
+        PyErr_SetString(PyExc_ValueError,
+                        "inputdiffusivity compatibility value must be non-negative");
+        return NULL;
+    }
+    if(E->data.k0 > 0.0 &&
+       E->control.requested_reference_conductivity >= 0.0 &&
+       fabs(E->control.requested_reference_conductivity
+            - E->control.reference_conductivity)
+       > 1.0e-6 * fmax(1.0, fabs(E->control.reference_conductivity))) {
+        PyErr_SetString(PyExc_ValueError,
+                        "reference_conductivity is derived as ks/k0");
+        return NULL;
+    }
     getFloatProperty(properties, "kT_exponent", E->control.kT_exponent, fp);
     getFloatProperty(properties, "kC_ratio", E->control.kC_ratio, fp);
+    getFloatProperty(properties, "kd_mantle_thickness_km",
+                     E->control.kd_mantle_thickness_km, fp);
+    getFloatProperty(properties, "kd_transition_depth_km",
+                     E->control.kd_transition_depth_km, fp);
+    getFloatProperty(properties, "kd_upper_prefactor",
+                     E->control.kd_upper_prefactor, fp);
+    getFloatProperty(properties, "kd_upper_linear",
+                     E->control.kd_upper_linear, fp);
+    getFloatProperty(properties, "kd_upper_quadratic",
+                     E->control.kd_upper_quadratic, fp);
+    getFloatProperty(properties, "kd_lower_prefactor",
+                     E->control.kd_lower_prefactor, fp);
+    getFloatProperty(properties, "kd_lower_linear",
+                     E->control.kd_lower_linear, fp);
+    getFloatProperty(properties, "kd_lower_quadratic",
+                     E->control.kd_lower_quadratic, fp);
 
 
     PUTS(("\n"));
@@ -193,6 +238,15 @@ PyObject * pyCitcom_Const_set_properties(PyObject *self, PyObject *args)
     getFloatProperty(properties, "radius", radius, fp);
     getFloatProperty(properties, "density", E->data.density, fp);
     getFloatProperty(properties, "thermdiff", E->data.therm_diff, fp);
+    getFloatProperty(properties, "ks", E->data.ks, fp);
+    getFloatProperty(properties, "k0", E->data.k0, fp);
+    getFloatProperty(properties, "rho0", E->data.rho0, fp);
+    getFloatProperty(properties, "Cp0", E->data.Cp0, fp);
+    getFloatProperty(properties, "g0", E->data.g0, fp);
+    getFloatProperty(properties, "alpha0", E->data.alpha0, fp);
+    getFloatProperty(properties, "Ttop", E->data.Ttop, fp);
+    getFloatProperty(properties, "Tbottom", E->data.Tbottom, fp);
+    getFloatProperty(properties, "deltaT", E->data.ref_temperature, fp);
     getFloatProperty(properties, "gravacc", E->data.grav_acc, fp);
     getFloatProperty(properties, "thermexp", E->data.therm_exp, fp);
     getFloatProperty(properties, "refvisc", E->data.ref_viscosity, fp);
@@ -200,10 +254,87 @@ PyObject * pyCitcom_Const_set_properties(PyObject *self, PyObject *args)
     getFloatProperty(properties, "density_above", E->data.density_above, fp);
     getFloatProperty(properties, "density_below", E->data.density_below, fp);
 
-    E->data.therm_cond = E->data.therm_diff * E->data.density * E->data.Cp;
-    E->data.ref_temperature = E->control.Atemp * E->data.therm_diff
-	* E->data.ref_viscosity / (radius * radius * radius)
-	/ (E->data.density * E->data.grav_acc * E->data.therm_exp);
+    if(E->data.rho0 <= 0.0)
+        E->data.rho0 = E->data.density;
+    if(E->data.Cp0 <= 0.0)
+        E->data.Cp0 = E->data.Cp;
+    if(E->data.g0 <= 0.0)
+        E->data.g0 = E->data.grav_acc;
+    if(E->data.alpha0 <= 0.0)
+        E->data.alpha0 = E->data.therm_exp;
+    if(E->data.k0 <= 0.0)
+        E->data.k0 = E->data.therm_diff * E->data.rho0 * E->data.Cp0;
+    if(E->data.ks <= 0.0)
+        E->data.ks = E->data.k0;
+
+    if(!isfinite(E->data.ks) || !isfinite(E->data.k0) ||
+       !isfinite(E->data.rho0) || !isfinite(E->data.Cp0) ||
+       !isfinite(E->data.g0) || !isfinite(E->data.alpha0) ||
+       E->data.ks <= 0.0 || E->data.k0 <= 0.0 ||
+       E->data.rho0 <= 0.0 || E->data.Cp0 <= 0.0 ||
+       E->data.g0 <= 0.0 || E->data.alpha0 <= 0.0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "ks, k0, rho0, Cp0, g0, and alpha0 must be positive");
+        return NULL;
+    }
+
+    E->data.kappa0 = E->data.k0 / (E->data.rho0 * E->data.Cp0);
+    E->control.reference_conductivity = E->data.ks / E->data.k0;
+    if(E->control.requested_reference_conductivity >= 0.0 &&
+       fabs(E->control.requested_reference_conductivity
+            - E->control.reference_conductivity)
+       > 1.0e-6 * fmax(1.0, fabs(E->control.reference_conductivity))) {
+        PyErr_SetString(PyExc_ValueError,
+                        "reference_conductivity is derived as ks/k0");
+        return NULL;
+    }
+    E->data.therm_cond = E->data.k0;
+    E->data.therm_diff = E->data.kappa0;
+    E->data.density = E->data.rho0;
+    E->data.Cp = E->data.Cp0;
+    E->data.grav_acc = E->data.g0;
+    E->data.therm_exp = E->data.alpha0;
+
+    if((E->data.Ttop >= 0.0) != (E->data.Tbottom >= 0.0)) {
+        PyErr_SetString(PyExc_ValueError, "Ttop and Tbottom must be specified together");
+        return NULL;
+    }
+    if(E->data.Ttop >= 0.0) {
+        if(!isfinite(E->data.Ttop) || !isfinite(E->data.Tbottom) ||
+           E->data.Tbottom <= E->data.Ttop) {
+            PyErr_SetString(PyExc_ValueError,
+                            "Ttop and Tbottom must be finite with Tbottom > Ttop >= 0");
+            return NULL;
+        }
+        if(E->data.ref_temperature > 0.0)
+            fprintf(stderr, "WARNING: deltaT is deprecated and ignored; using Tbottom-Ttop\n");
+        if(E->control.surface_temp >= 0.0)
+            fprintf(stderr, "WARNING: surfaceT is deprecated and ignored; using Ttop/DeltaT\n");
+        E->data.ref_temperature = E->data.Tbottom - E->data.Ttop;
+        E->control.surface_temp = E->data.Ttop / E->data.ref_temperature;
+    }
+    else {
+        fprintf(stderr, "WARNING: Ttop/Tbottom absent; deltaT/surfaceT compatibility mode is deprecated\n");
+        if(E->control.surface_temp < 0.0)
+            E->control.surface_temp = 0.1;
+    }
+
+    if(E->data.ref_temperature > 0.0)
+        E->control.Atemp = E->data.rho0 * E->data.g0 * E->data.alpha0
+            * E->data.ref_temperature * radius * radius * radius
+            / (E->data.ref_viscosity * E->data.kappa0);
+    else
+        E->data.ref_temperature = E->control.Atemp * E->data.kappa0
+            * E->data.ref_viscosity / (radius * radius * radius)
+            / (E->data.rho0 * E->data.g0 * E->data.alpha0);
+
+    if(E->data.Ttop < 0.0) {
+        E->data.Ttop = E->control.surface_temp * E->data.ref_temperature;
+        E->data.Tbottom = E->data.Ttop + E->data.ref_temperature;
+    }
+    fprintf(stderr,
+            "Temperature reference:\nTtop = %.9g K\nTbottom = %.9g K\nDeltaT = %.9g K\n",
+            E->data.Ttop, E->data.Tbottom, E->data.ref_temperature);
 
     getFloatProperty(properties, "z_lith", E->viscosity.zlith, fp);
     getFloatProperty(properties, "z_410", E->viscosity.z410, fp);
@@ -378,7 +509,13 @@ PyObject * pyCitcom_Param_set_properties(PyObject *self, PyObject *args)
     getStringProperty(properties, "tf_file", E->control.tf_file, fp);
     getIntProperty(properties, "lith_age_time", E->control.lith_age_time, fp);
     getFloatProperty(properties, "lith_age_depth", E->control.lith_age_depth, fp);
+    getFloatProperty(properties, "max_plate_age_Ma",
+                     E->control.max_plate_age_Ma, fp);
     getFloatProperty(properties, "mantle_temp", E->control.lith_age_mantle_temp, fp);
+    getFloatProperty(properties, "bottom_tbl_thickness",
+                     E->control.bottom_tbl_thickness, fp);
+    getFloatProperty(properties, "bottom_tbl_diffusivity_ratio",
+                     E->control.bottom_tbl_diffusivity_ratio, fp);
 
     getFloatProperty(properties, "start_age", E->control.start_age, fp);
     getIntProperty(properties, "reset_startage", E->control.reset_startage, fp);
@@ -400,7 +537,13 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
-    float width;
+    float depth[PHASE_TRANSITIONS];
+    float density_jump[PHASE_TRANSITIONS];
+    float Ra[PHASE_TRANSITIONS];
+    float width[PHASE_TRANSITIONS];
+    float clapeyron[PHASE_TRANSITIONS];
+    float transT[PHASE_TRANSITIONS];
+    int i;
 
     if (!PyArg_ParseTuple(args, "OOO:Phase_set_properties",
 			  &obj, &properties, &out))
@@ -411,29 +554,27 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
 
     PUTS(("[CitcomS.solver.phase]\n"));
 
-    getFloatProperty(properties, "Ra_410", E->control.Ra_410, fp);
-    getFloatProperty(properties, "clapeyron410", E->control.clapeyron410, fp);
-    getFloatProperty(properties, "transT410", E->control.transT410, fp);
-    getFloatProperty(properties, "width410", width, fp);
+    getFloatVectorProperty(properties, "phase_depth", depth,
+                           PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_delta_rho", density_jump,
+                           PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_Ra", Ra,
+                           PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_width", width,
+                           PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_clapeyron", clapeyron,
+                           PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_transT", transT,
+                           PHASE_TRANSITIONS, fp);
 
-    if (width!=0.0)
-	E->control.inv_width410 = 1.0 / width;
-
-    getFloatProperty(properties, "Ra_670", E->control.Ra_670 , fp);
-    getFloatProperty(properties, "clapeyron670", E->control.clapeyron670, fp);
-    getFloatProperty(properties, "transT670", E->control.transT670, fp);
-    getFloatProperty(properties, "width670", width, fp);
-
-    if (width!=0.0)
-	E->control.inv_width670 = 1.0 / width;
-
-    getFloatProperty(properties, "Ra_cmb", E->control.Ra_cmb, fp);
-    getFloatProperty(properties, "clapeyroncmb", E->control.clapeyroncmb, fp);
-    getFloatProperty(properties, "transTcmb", E->control.transTcmb, fp);
-    getFloatProperty(properties, "widthcmb", width, fp);
-
-    if (width!=0.0)
-	E->control.inv_widthcmb = 1.0 / width;
+    for(i=0; i<PHASE_TRANSITIONS; i++) {
+        E->control.phase[i].depth = depth[i];
+        E->control.phase[i].density_jump = density_jump[i];
+        E->control.phase[i].Ra = Ra[i];
+        E->control.phase[i].clapeyron = clapeyron[i];
+        E->control.phase[i].transT = transT[i];
+        E->control.phase[i].inv_width = (width[i] == 0.0)? 0.0 : 1.0/width[i];
+    }
 
     PUTS(("\n"));
 

@@ -35,6 +35,7 @@
 
 void parallel_process_termination();
 void temperatures_conform_bcs();
+void myerror(struct All_variables *, char *);
 
 #include "initial_temperature.h"
 void debug_tic(struct All_variables *);
@@ -232,7 +233,8 @@ void read_tic_from_file(struct All_variables *E)
   void temperatures_conform_bcs();
 
   int ii, ll, mm;
-  float tt;
+  float tt, output_Ttop, output_Tbottom, output_DeltaT;
+  int dimensional_temperature_output;
   int i, m;
   char output_file[255], input_s[1000];
   FILE *fp;
@@ -251,7 +253,14 @@ void read_tic_from_file(struct All_variables *E)
     fprintf(E->fp,"Reading %s for initial temperature\n",output_file);
 
   fgets(input_s,1000,fp);
-  sscanf(input_s,"%d %d %f",&ll,&mm,&tt);
+  dimensional_temperature_output =
+      sscanf(input_s,"%d %d %f %f %f %f",&ll,&mm,&tt,
+             &output_Ttop,&output_Tbottom,&output_DeltaT) == 6;
+  if(dimensional_temperature_output &&
+     (output_DeltaT <= 0.0 ||
+      fabs((output_Tbottom-output_Ttop)-output_DeltaT) >
+      1.0e-5 * output_DeltaT))
+      myerror(E,"invalid dimensional temperature metadata in restart file");
 
   for(m=1;m<=E->sphere.caps_per_proc;m++) {
     fgets(input_s,1000,fp);
@@ -262,6 +271,8 @@ void read_tic_from_file(struct All_variables *E)
 
       /* Truncate the temperature to be within (0,1). */
       /* This might not be desirable in some situations. */
+      if(dimensional_temperature_output)
+          g = (g - output_Ttop) / output_DeltaT;
       E->T[m][i] = max(0.0,min(g,1.0));
       if(E->sx[m][3][i]>=1-300/6371.0 && E->T[m][i]<0.7)
 	 E->T[m][i]=0.7;
@@ -273,5 +284,3 @@ void read_tic_from_file(struct All_variables *E)
 
   return;
 }
-
-

@@ -117,9 +117,9 @@ void regional_global_derived_values(E)
    and time, timdir is the direction of time for advection. CPC 6/25/00 */
 
     /* Myr */
-    E->data.scalet = (E->data.radius_km*1e3*E->data.radius_km*1e3/E->data.therm_diff)/(1.e6*365.25*24*3600);
+    E->data.scalet = (E->data.radius_km*1e3*E->data.radius_km*1e3/E->data.kappa0)/(1.e6*365.25*24*3600);
     /* cm/yr */
-    E->data.scalev = (E->data.radius_km*1e3/E->data.therm_diff)/(100*365.25*24*3600);
+    E->data.scalev = (E->data.radius_km*1e3/E->data.kappa0)/(100*365.25*24*3600);
     E->data.timedir = E->control.Atemp / fabs(E->control.Atemp);
 
 

@@ -319,7 +319,8 @@ class Solver(Component):
         rayleigh = inv.float("rayleigh", default=1e+05)
         dissipation_number = inv.float("dissipation_number", default=0.0)
         gruneisen = inv.float("gruneisen", default=0.0)
-        surfaceT = inv.float("surfaceT", default=0.1)
+        # Deprecated compatibility input; explicit Ttop/Tbottom are preferred.
+        surfaceT = inv.float("surfaceT", default=-1.0)
         #adiabaticT0 = inv.float("adiabaticT0", default=0.4)
         Q0 = inv.float("Q0", default=0.0)
 

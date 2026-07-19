@@ -24,6 +24,7 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
@@ -127,6 +128,8 @@ void h5output_viscosity(struct All_variables *, int);
 void h5output_pressure(struct All_variables *, int);
 void h5output_stress(struct All_variables *, int);
 void h5output_k(struct All_variables *, int);
+static void h5output_conductivity_field(struct All_variables *,
+                                        const char *, const char *, int);
 void h5output_tracer(struct All_variables *, int);
 void h5output_surf_botm(struct All_variables *, int);
 void h5output_geoid(struct All_variables *, int);
@@ -316,6 +319,28 @@ static void h5output_timedep(struct All_variables *E, int cycles)
 
     if(E->output.k == 1)
         h5output_k(E, cycles);
+    if(E->output.kd == 1)
+        h5output_conductivity_field(E, "kd", "depth conductivity factor",
+                                    CONDUCTIVITY_KD);
+    if(E->output.kT == 1)
+        h5output_conductivity_field(E, "kT", "temperature conductivity factor",
+                                    CONDUCTIVITY_KT);
+    if(E->output.kC == 1)
+        h5output_conductivity_field(E, "kC", "composition conductivity factor",
+                                    CONDUCTIVITY_KC);
+    if(E->output.k_total == 1)
+        h5output_conductivity_field(E, "k_total", "total conductivity multiplier",
+                                    CONDUCTIVITY_K_TOTAL);
+    if(E->output.kappa_eff == 1)
+        h5output_conductivity_field(E, "kappa_eff",
+                                    "effective nondimensional thermal diffusivity",
+                                    CONDUCTIVITY_KAPPA_EFF);
+    if(E->output.rho_ref == 1)
+        h5output_conductivity_field(E, "rho_ref", "reference density",
+                                    CONDUCTIVITY_RHO_REF);
+    if(E->output.Cp == 1)
+        h5output_conductivity_field(E, "Cp", "reference heat capacity",
+                                    CONDUCTIVITY_CP);
 
     if (E->output.horiz_avg == 1)
         h5output_horiz_avg(E, cycles);
@@ -544,12 +569,14 @@ void h5output_temperature(struct All_variables *E, int cycles)
             {
                 n = k + i*nz + j*nz*nx;
                 m = k + j*mz + i*mz*my;
-                field->data[m] = E->T[1][n+1];
+                field->data[m] = E->data.Ttop
+                    + E->T[1][n+1] * E->data.ref_temperature;
             }
         }
     }
 
-    h5create_field(E->hdf5.file_id, field, "temperature", "temperature values on nodes");
+    h5create_field(E->hdf5.file_id, field, "temperature",
+                   "dimensional temperature values on nodes (K)");
     /* write to dataset */
     dataset = H5Dopen(E->hdf5.file_id, "/temperature");
     status  = h5write_field(dataset, field, 1, 1);
@@ -651,6 +678,16 @@ void h5output_pressure(struct All_variables *E, int cycles)
 
 void h5output_k(struct All_variables *E, int cycles)
 {
+    h5output_conductivity_field(E, "k", "total conductivity multiplier",
+                                CONDUCTIVITY_K_TOTAL);
+}
+
+
+static void h5output_conductivity_field(struct All_variables *E,
+                                        const char *name,
+                                        const char *description,
+                                        int component)
+{
     hid_t dataset;
     herr_t status;
     field_t *field;
@@ -678,14 +715,15 @@ void h5output_k(struct All_variables *E, int cycles)
             {
                 n = k + i*nz + j*nz*nx;
                 m = k + j*mz + i*mz*my;
-                field->data[m] = nodal_thermal_conductivity(E, 1, n+1);
+                field->data[m] = nodal_conductivity_diagnostic(
+                    E, 1, n+1, component);
             }
         }
     }
 
-    h5create_field(E->hdf5.file_id, field, "k", "nodal thermal conductivity multiplier");
+    h5create_field(E->hdf5.file_id, field, name, description);
 
-    dataset = H5Dopen(E->hdf5.file_id, "/k");
+    dataset = H5Dopen(E->hdf5.file_id, name);
     status  = h5write_field(dataset, field, 1, 1);
 
     status = H5Dclose(dataset);
@@ -1051,7 +1089,7 @@ void h5output_horiz_avg(struct All_variables *E, int cycles)
     /* Create /horiz_avg/ group */
     avg_group = h5create_group(file_id, "horiz_avg", (size_t)0);
     h5create_field(avg_group, E->hdf5.scalar1d, "temperature",
-                   "horizontal temperature average");
+                   "dimensional horizontal temperature average (K)");
     h5create_field(avg_group, E->hdf5.scalar1d, "velocity_xy",
                    "horizontal Vxy average (rms)");
     h5create_field(avg_group, E->hdf5.scalar1d, "velocity_z",
@@ -1064,7 +1102,8 @@ void h5output_horiz_avg(struct All_variables *E, int cycles)
 
     /* temperature horizontal average */
     for(k = 0; k < mz; k++)
-        field->data[k] = E->Have.T[k+1];
+        field->data[k] = E->data.Ttop
+            + E->Have.T[k+1] * E->data.ref_temperature;
     dataset = H5Dopen(file_id, "/horiz_avg/temperature");
     status = h5write_field(dataset, field, 0, (px == 0 && py == 0));
     status = H5Dclose(dataset);
@@ -1359,9 +1398,16 @@ void h5output_meta(struct All_variables *E)
 
     int n;
     int rank;
+    int phase_index;
     hsize_t *dims;
     double *data;
     float tmp;
+    float phase_depth[PHASE_TRANSITIONS];
+    float phase_density_jump[PHASE_TRANSITIONS];
+    float phase_Ra[PHASE_TRANSITIONS];
+    float phase_width[PHASE_TRANSITIONS];
+    float phase_clapeyron[PHASE_TRANSITIONS];
+    float phase_transT[PHASE_TRANSITIONS];
 
     input = h5create_group(E->hdf5.file_id, "input", (size_t)0);
 
@@ -1376,7 +1422,8 @@ void h5output_meta(struct All_variables *E)
 
     status = set_attribute_float(input, "finetunedt", E->advection.fine_tune_dt);
     status = set_attribute_float(input, "fixed_timestep", E->advection.fixed_timestep);
-    status = set_attribute_float(input, "inputdiffusivity", E->control.inputdiff);
+    status = set_attribute_float(input, "reference_conductivity",
+                                 E->control.reference_conductivity);
 
     status = set_attribute_int(input, "adv_sub_iterations", E->advection.temp_iterations);
 
@@ -1413,6 +1460,18 @@ void h5output_meta(struct All_variables *E)
 
     status = set_attribute_float(input, "density", E->data.density);
     status = set_attribute_float(input, "thermdiff", E->data.therm_diff);
+    status = set_attribute_float(input, "ks", E->data.ks);
+    status = set_attribute_float(input, "k0", E->data.k0);
+    status = set_attribute_float(input, "rho0", E->data.rho0);
+    status = set_attribute_float(input, "Cp0", E->data.Cp0);
+    status = set_attribute_float(input, "kappa0", E->data.kappa0);
+    status = set_attribute_float(input, "g0", E->data.g0);
+    status = set_attribute_float(input, "alpha0", E->data.alpha0);
+    status = set_attribute_float(input, "Ttop", E->data.Ttop);
+    status = set_attribute_float(input, "Tbottom", E->data.Tbottom);
+    status = set_attribute_float(input, "DeltaT", E->data.ref_temperature);
+    status = set_attribute_float(input, "deltaT", E->data.ref_temperature);
+    status = set_attribute_float(input, "therm_cond", E->data.therm_cond);
     status = set_attribute_float(input, "gravacc", E->data.grav_acc);
     status = set_attribute_float(input, "thermexp", E->data.therm_exp);
     status = set_attribute_float(input, "refvisc", E->data.ref_viscosity);
@@ -1484,29 +1543,31 @@ void h5output_meta(struct All_variables *E)
      * Phase.inventory
      */
 
-    status = set_attribute_float(input, "Ra_410", E->control.Ra_410);
-    status = set_attribute_float(input, "clapeyron410", E->control.clapeyron410);
-    status = set_attribute_float(input, "transT410", E->control.transT410);
-    status = set_attribute_float(input, "width410",
-                                 (E->control.inv_width410 == 0)?
-                                 E->control.inv_width410 :
-				 1.0/E->control.inv_width410);
+    for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+        phase_depth[phase_index] = E->control.phase[phase_index].depth;
+        phase_density_jump[phase_index] =
+            E->control.phase[phase_index].density_jump;
+        phase_Ra[phase_index] = E->control.phase[phase_index].Ra;
+        phase_width[phase_index] =
+            (E->control.phase[phase_index].inv_width == 0)? 0.0 :
+            1.0/E->control.phase[phase_index].inv_width;
+        phase_clapeyron[phase_index] =
+            E->control.phase[phase_index].clapeyron;
+        phase_transT[phase_index] = E->control.phase[phase_index].transT;
+    }
 
-    status = set_attribute_float(input, "Ra_670", E->control.Ra_670);
-    status = set_attribute_float(input, "clapeyron670", E->control.clapeyron670);
-    status = set_attribute_float(input, "transT670", E->control.transT670);
-    status = set_attribute_float(input, "width670",
-                                 (E->control.inv_width670 == 0)?
-                                 E->control.inv_width670 :
-				 1.0/E->control.inv_width670);
-
-    status = set_attribute_float(input, "Ra_cmb", E->control.Ra_cmb);
-    status = set_attribute_float(input, "clapeyroncmb", E->control.clapeyroncmb);
-    status = set_attribute_float(input, "transTcmb", E->control.transTcmb);
-    status = set_attribute_float(input, "widthcmb",
-                                 (E->control.inv_widthcmb == 0)?
-                                 E->control.inv_widthcmb :
-				 1.0/E->control.inv_widthcmb);
+    status = set_attribute_float_vector(input, "phase_depth",
+                                        PHASE_TRANSITIONS, phase_depth);
+    status = set_attribute_float_vector(input, "phase_delta_rho",
+                                        PHASE_TRANSITIONS, phase_density_jump);
+    status = set_attribute_float_vector(input, "phase_Ra",
+                                        PHASE_TRANSITIONS, phase_Ra);
+    status = set_attribute_float_vector(input, "phase_width",
+                                        PHASE_TRANSITIONS, phase_width);
+    status = set_attribute_float_vector(input, "phase_clapeyron",
+                                        PHASE_TRANSITIONS, phase_clapeyron);
+    status = set_attribute_float_vector(input, "phase_transT",
+                                        PHASE_TRANSITIONS, phase_transT);
 
     /*
      * Solver.inventory
