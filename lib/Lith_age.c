@@ -611,6 +611,7 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
   float depth, dist, dist2, daf, assimilate_new_temp,temp,temp1,temp2,temp3,temp4,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth,flag_depth2;
   float theta,phi,lat_max,lat_max1,lat_max2,lat_min,lat_min1,lat_min2,age,age1,age2,rad;
   float tt1,tt2,ttt1,ttt2,gap,wid_assim,v_trench;
+  double old_temperature;
   int m,j,nno,node,nox,noz,noy,gnox,gnoy,gnoz,nodeg,ii,i,k,nnn,ttt,intage;
   char pb_1[255],pb_2[255];
   FILE *fp1,*fp2;
@@ -684,7 +685,10 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
                 assim_depth=asm_depth*E->control.lith_age_depth;
                 if(depth <= assim_depth) {
                     daf = 0.5*depth/assim_depth;
+                    old_temperature = E->T[j][node];
                     E->T[j][node] = daf*E->T[j][node] + (1.0-daf)*assimilate_new_temp;
+                    E->assim_delta_T[j][node] +=
+                        E->T[j][node] - old_temperature;
                 }
 		/* add initial slabs */
 		/*if(intage<E->trench_visit_age && E->monitor.solution_cycles>0) {

@@ -681,6 +681,9 @@ struct Output {
     int Cp;
     int heating;      /* whether to output heating terms at elements */
     int profile_temperature; /* volume-weighted temperature depth histogram */
+    int profile_k;           /* GP total conductivity in W/(m K) */
+    int profile_viscosity_gp; /* log10 GP viscosity in Pa s */
+    int profile_flags[32];   /* registry-driven depth-frequency fields */
 
 
   /* flags used by GZDIR */
@@ -789,11 +792,16 @@ struct All_variables {
 
     double *rho;
     double *heating_adi[NCS];
+    double *heating_adi_base[NCS];
+    double *heating_phase_adi[NCS];
     double *heating_visc[NCS];
     double *heating_latent[NCS];
+    double *heating_internal[NCS];
+    double *heating_assim[NCS];
 
     double *P[NCS],*F[NCS],*H[NCS],*S[NCS],*U[NCS];
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
+    double *assim_delta_T[NCS];
     double *u1[NCS];
     double *temp[NCS],*temp1[NCS];
     float *NP[NCS],*edot[NCS],*Mass[NCS];

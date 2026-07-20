@@ -704,8 +704,13 @@ void allocate_common_vars(E)
   E->VIP[j] = (float *) malloc((nel+2)*sizeof(float));
 
   E->heating_adi[j]    = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_adi_base[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_phase_adi[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_visc[j]   = (double *) malloc((nel+1)*sizeof(double));
   E->heating_latent[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_internal[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_assim[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->assim_delta_T[j] = (double *) malloc((nno+1)*sizeof(double));
 
   /* lump mass matrix for the energy eqn */
   E->TMass[j] = (double *) malloc((nno+1)*sizeof(double));
@@ -838,16 +843,22 @@ void allocate_common_vars(E)
     for(i=1;i<=E->lmesh.nno;i++)
       E->sphere.cap[j].TB[k][i] = 0.0;
 
-  for(i=1;i<=E->lmesh.nno;i++)
+  for(i=1;i<=E->lmesh.nno;i++) {
      E->T[j][i] = 0.0;
+     E->assim_delta_T[j][i] = 0.0;
+  }
 
   for(i=1;i<=E->lmesh.nel;i++)   {
       E->mat[j][i]=1;
       E->VIP[j][i]=1.0;
 
       E->heating_adi[j][i] = 0;
+      E->heating_adi_base[j][i] = 0;
+      E->heating_phase_adi[j][i] = 0;
       E->heating_visc[j][i] = 0;
       E->heating_latent[j][i] = 1.0;
+      E->heating_internal[j][i] = 0;
+      E->heating_assim[j][i] = 0;
   }
 
   for(i=1;i<=E->lmesh.npno;i++)

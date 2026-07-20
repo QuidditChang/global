@@ -247,7 +247,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     double DT;
     double gradN_dot_gradT, mass_residual;
     double Q, rho, heating;
-    double depth_m, kd_el, kC, kE, kT, kgp, kappa_eff;
+    double kE, kT, kgp, kappa_eff;
     double rho_ref_gp, cp_gp;
     double Q_SCALE;        /* dimensional scale: k*DeltaT/R_earth  (W/m^2)  */
 
@@ -342,12 +342,8 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                 rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
             }
 
-            depth_m = (1.0 - 0.5 * (E->sx[m][3][E->ien[m][e].node[1]]
-                                    + E->sx[m][3][E->ien[m][e].node[5]]))
-                      * E->data.radius_km * 1.0e3;
-            kd_el = conductivity_depth_factor(E, depth_m);
-            kC = conductivity_element_composition_factor(E, m, e);
-            kE = kd_el * kC;
+            kE = conductivity_element_prefactor(
+                E, m, e, E->control.reference_conductivity);
 
             if(E->control.disptn_number == 0)
                 heating = rho * Q;
@@ -387,7 +383,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                     }
 
                     kT = conductivity_temperature_factor(E, T_gp);
-                    kgp = E->control.reference_conductivity * kE * kT;
+                    kgp = kE * kT;
                     kappa_eff = kgp / (rho_ref_gp * cp_gp);
                     if(!isfinite(kappa_eff) || kappa_eff < 0.0) {
                         fprintf(stderr,

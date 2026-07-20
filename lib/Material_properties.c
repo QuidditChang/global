@@ -386,6 +386,22 @@ double conductivity_element_composition_factor(struct All_variables *E,
 }
 
 
+double conductivity_element_prefactor(struct All_variables *E,
+                                      int cap, int element,
+                                      double reference_conductivity)
+{
+    double depth_m, kd, kC;
+
+    depth_m = (1.0 - 0.5
+        * (E->sx[cap][3][E->ien[cap][element].node[1]]
+           + E->sx[cap][3][E->ien[cap][element].node[5]]))
+        * E->data.radius_km * 1.0e3;
+    kd = conductivity_depth_factor(E, depth_m);
+    kC = conductivity_element_composition_factor(E, cap, element);
+    return reference_conductivity * kd * kC;
+}
+
+
 double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
                                     int component)
 {

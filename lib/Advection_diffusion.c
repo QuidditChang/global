@@ -31,6 +31,8 @@
 
 #include <sys/types.h>
 #include <math.h>
+#include <float.h>
+#include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 
@@ -73,6 +75,8 @@ static void element_residual(struct All_variables *E, int el,
                              unsigned int **FLAGS, int m);
 static void filter(struct All_variables *E);
 static void process_heating(struct All_variables *E, int psc_pass);
+static void measure_temperature_assimilation(struct All_variables *E);
+static void print_thermal_budget(struct All_variables *E);
 static void apply_smooth_sideTbc(struct All_variables *E);
 
 /* ============================================
@@ -323,6 +327,10 @@ void PG_timestep_solve(struct All_variables *E)
     E->advection.timestep *= E->advection.dt_reduced;
 
     iredo = 0;
+    /* A rejected thermal attempt must not contribute assimilation heat. */
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=1;i<=E->lmesh.nno;i++)
+            E->assim_delta_T[m][i] = 0.0;
     if (E->advection.ADVECTION) {
 
       predictor(E,E->T,E->Tdot);
@@ -418,6 +426,12 @@ void PG_timestep_solve(struct All_variables *E)
       lith_age_conform_tbc(E);
       assimilate_lith_conform_bcs(E);
   }
+
+  measure_temperature_assimilation(E);
+
+  if(E->control.disptn_number != 0)
+      process_heating(E, 0);
+  print_thermal_budget(E);
 
 
   return;
@@ -863,15 +877,12 @@ static void element_thermal_transport(struct All_variables *E, int cap,
                                       double *kappa_eff)
 {
     int i, j, node, iz;
-    double depth_m, kd, kC, kT, sfn;
+    double conductivity_prefactor, kT, sfn;
     const int ends = enodes[E->mesh.nsd];
     const int vpts = vpoints[E->mesh.nsd];
 
-    depth_m = (1.0 - 0.5 * (E->sx[cap][3][E->ien[cap][element].node[1]]
-                            + E->sx[cap][3][E->ien[cap][element].node[5]]))
-              * E->data.radius_km * 1.0e3;
-    kd = conductivity_depth_factor(E, depth_m);
-    kC = conductivity_element_composition_factor(E, cap, element);
+    conductivity_prefactor = conductivity_element_prefactor(
+        E, cap, element, reference_conductivity);
 
     for(i=1;i<=vpts;i++) {
         rho_gp[i] = 0.0;
@@ -892,7 +903,7 @@ static void element_thermal_transport(struct All_variables *E, int cap,
             parallel_process_termination();
         }
         kT = conductivity_temperature_factor(E, tgp[i]);
-        kgp[i] = reference_conductivity * kd * kT * kC;
+        kgp[i] = conductivity_prefactor * kT;
         kappa_eff[i] = kgp[i] / (rho_gp[i] * cp_gp[i]);
         if(!isfinite(kgp[i]) || !isfinite(kappa_eff[i]) ||
            kappa_eff[i] < 0.0) {
@@ -1255,6 +1266,7 @@ static void process_adi_heating(struct All_variables *E, int m,
 
 static void latent_heating(struct All_variables *E, int m,
                            double *heating_latent, double *heating_adi,
+                           double *heating_phase_adi,
                            float **B, float Ra, float clapeyron,
                            float depth, float transT, float inv_width)
 {
@@ -1294,7 +1306,9 @@ static void latent_heating(struct All_variables *E, int m,
         }
 
         /* correction on the adiabatic cooling term */
-        heating_adi[e] += matprop * temp2 * temp0;
+        temp = matprop * temp2 * temp0;
+        heating_adi[e] += temp;
+        heating_phase_adi[e] += temp;
 
         /* correction on the DT/Dt term */
         heating_latent[e] += temp3 * temp1;
@@ -1304,20 +1318,24 @@ static void latent_heating(struct All_variables *E, int m,
 
 
 static void process_latent_heating(struct All_variables *E, int m,
-                                   double *heating_latent, double *heating_adi)
+                                   double *heating_latent, double *heating_adi,
+                                   double *heating_phase_adi)
 {
     int e, phase_index, active_phase;
     struct Phase_transition *phase;
 
     /* reset */
-    for(e=1; e<=E->lmesh.nel; e++)
+    for(e=1; e<=E->lmesh.nel; e++) {
         heating_latent[e] = 1.0;
+        heating_phase_adi[e] = 0.0;
+    }
 
     active_phase = 0;
     for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
         phase = &E->control.phase[phase_index];
         if(phase->Ra != 0.0) {
             latent_heating(E, m, heating_latent, heating_adi,
+                           heating_phase_adi,
                            E->phase_B[phase_index], phase->Ra,
                            phase->clapeyron, phase->depth,
                            phase->transT, phase->inv_width);
@@ -1334,30 +1352,37 @@ static void process_latent_heating(struct All_variables *E, int m,
 }
 
 
-static double total_heating(struct All_variables *E, double **heating)
+static void heating_stats(struct All_variables *E, double **heating,
+                          double *total, double *maximum, double *minimum)
 {
     int m, e;
-    double sum, total;
+    double sum, local_max, local_min;
 
-    /* sum up within each processor */
     sum = 0;
+    local_max = -DBL_MAX;
+    local_min = DBL_MAX;
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
-        for(e=1; e<=E->lmesh.nel; e++)
+        for(e=1; e<=E->lmesh.nel; e++) {
             sum += heating[m][e] * E->eco[m][e].area;
+            local_max = max(local_max, heating[m][e]);
+            local_min = min(local_min, heating[m][e]);
+        }
     }
 
-    /* sum up for all processors */
-    MPI_Allreduce(&sum, &total, 1,
+    MPI_Allreduce(&sum, total, 1,
                   MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_max, maximum, 1,
+                  MPI_DOUBLE, MPI_MAX, E->parallel.world);
+    MPI_Allreduce(&local_min, minimum, 1,
+                  MPI_DOUBLE, MPI_MIN, E->parallel.world);
 
-    return total;
+    return;
 }
 
 
 static void process_heating(struct All_variables *E, int psc_pass)
 {
     int m;
-    double total_visc_heating, total_adi_heating;
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         if(psc_pass == 0) {
@@ -1365,24 +1390,146 @@ static void process_heating(struct All_variables *E, int psc_pass)
              * at first psc_pass */
             process_visc_heating(E, m, E->heating_visc[m]);
         }
-        process_adi_heating(E, m, E->heating_adi[m]);
-        process_latent_heating(E, m, E->heating_latent[m], E->heating_adi[m]);
+        process_adi_heating(E, m, E->heating_adi_base[m]);
+        memcpy(E->heating_adi[m], E->heating_adi_base[m],
+               (E->lmesh.nel+1)*sizeof(double));
+        process_latent_heating(E, m, E->heating_latent[m],
+                               E->heating_adi[m],
+                               E->heating_phase_adi[m]);
     }
 
-    /* compute total amount of visc/adi heating over all processors
-     * only at last psc_pass */
-    if(psc_pass == (E->advection.temp_iterations-1)) {
-        total_visc_heating = total_heating(E, E->heating_visc);
-        total_adi_heating = total_heating(E, E->heating_adi);
+    return;
+}
 
-        if(E->parallel.me == 0) {
-            fprintf(E->fp, "Step: %d, Total_heating(visc, adi): %g %g\n",
-                    E->monitor.solution_cycles,
-                    total_visc_heating, total_adi_heating);
-            fprintf(stderr, "Step: %d, Total_heating(visc, adi): %g %g\n",
-                    E->monitor.solution_cycles,
-                    total_visc_heating, total_adi_heating);
+
+static void measure_temperature_assimilation(struct All_variables *E)
+{
+    int m, e, i, a, node, nz;
+    double delta_t_gp, rho_cp_gp, integral, volume, weight;
+    double rtf[4][9];
+    struct Shape_function GN;
+    struct Shape_function_dA dOmega;
+    struct Shape_function_dx GNx;
+    void get_global_shape_fn();
+
+    const int ends = enodes[E->mesh.nsd];
+    const int vpts = vpoints[E->mesh.nsd];
+    const int lev = E->mesh.levmax;
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=E->lmesh.nel; e++)
+            E->heating_assim[m][e] = 0.0;
+
+    if(!E->control.lith_age || E->advection.timestep <= 0.0)
+        return;
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        for(e=1; e<=E->lmesh.nel; e++) {
+            get_global_shape_fn(E, e, &GN, &GNx, &dOmega, 0, 1,
+                                rtf, lev, m);
+            integral = 0.0;
+            volume = 0.0;
+            for(i=1; i<=vpts; i++) {
+                delta_t_gp = 0.0;
+                rho_cp_gp = 0.0;
+                for(a=1; a<=ends; a++) {
+                    node = E->ien[m][e].node[a];
+                    nz = ((node-1) % E->lmesh.noz) + 1;
+                    weight = E->N.vpt[GNVINDEX(a,i)];
+                    delta_t_gp += weight * E->assim_delta_T[m][node];
+                    rho_cp_gp += weight * E->refstate.rho[nz]
+                        * E->refstate.heat_capacity[nz];
+                }
+                weight = dOmega.vpt[i]
+                    * g_point[i].weight[E->mesh.nsd-1];
+                integral += rho_cp_gp * delta_t_gp * weight
+                    / E->advection.timestep;
+                volume += weight;
+            }
+            if(volume > 0.0)
+                E->heating_assim[m][e] = integral / volume;
         }
+    }
+
+    return;
+}
+
+
+static void print_thermal_row(FILE *fp, const char *name,
+                              double total, double maximum, double minimum)
+{
+    fprintf(fp, "%-20s  %+16.8e  %+16.8e  %+16.8e\n",
+            name, total, maximum, minimum);
+}
+
+
+static void print_thermal_budget(struct All_variables *E)
+{
+    int m, e, ez;
+    double Q, rho;
+    double total, maximum, minimum;
+    double *qtotal[NCS], *balance[NCS];
+    static const char separator[] =
+        "==============================================================================\n";
+    static const char rule[] =
+        "------------------------------------------------------------------------------\n";
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        qtotal[m] = (double *)malloc((E->lmesh.nel+1)*sizeof(double));
+        balance[m] = (double *)malloc((E->lmesh.nel+1)*sizeof(double));
+        for(e=1; e<=E->lmesh.nel; e++) {
+            ez = ((e-1) % E->lmesh.elz) + 1;
+            rho = 0.5 * (E->refstate.rho[ez]
+                         + E->refstate.rho[ez+1]);
+            Q = E->control.Q0;
+            if(E->control.tracer_enriched) {
+                Q *= 1.0 - E->composition.comp_el[m][0][e];
+                Q += E->composition.comp_el[m][0][e] * E->control.Q0ER;
+            }
+            E->heating_internal[m][e] = rho * Q;
+            qtotal[m][e] = E->heating_internal[m][e]
+                + E->heating_visc[m][e] - E->heating_adi[m][e]
+                + E->heating_assim[m][e];
+            balance[m][e] = E->heating_visc[m][e]
+                - E->heating_adi_base[m][e];
+        }
+    }
+
+    if(E->parallel.me == 0) {
+        fputs(separator, E->fp);
+        fprintf(E->fp, "THERMAL_BUDGET  step=%d\n",
+                E->monitor.solution_cycles);
+        fputs(rule, E->fp);
+        fprintf(E->fp, "%-20s  %16s  %16s  %16s\n",
+                "TERM", "TOTAL", "MAX", "MIN");
+        fputs(rule, E->fp);
+    }
+
+#define PRINT_HEATING_ROW(label, field) do { \
+    heating_stats(E, field, &total, &maximum, &minimum); \
+    if(E->parallel.me == 0) \
+        print_thermal_row(E->fp, label, total, maximum, minimum); \
+} while(0)
+
+    PRINT_HEATING_ROW("Qtotal", qtotal);
+    PRINT_HEATING_ROW("Qvisc", E->heating_visc);
+    PRINT_HEATING_ROW("Qadi", E->heating_adi);
+    PRINT_HEATING_ROW("Qadi_base", E->heating_adi_base);
+    PRINT_HEATING_ROW("Qphase_adi", E->heating_phase_adi);
+    PRINT_HEATING_ROW("Qinternal", E->heating_internal);
+    PRINT_HEATING_ROW("Qassim", E->heating_assim);
+    PRINT_HEATING_ROW("Qvisc-Qadi_base", balance);
+
+#undef PRINT_HEATING_ROW
+
+    if(E->parallel.me == 0) {
+        fputs(separator, E->fp);
+        fflush(E->fp);
+    }
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        free((void *)qtotal[m]);
+        free((void *)balance[m]);
     }
 
     return;

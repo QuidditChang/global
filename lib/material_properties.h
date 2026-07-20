@@ -36,6 +36,9 @@ double conductivity_temperature_factor(struct All_variables *E,
                                        double nondimensional_temperature);
 double conductivity_element_composition_factor(struct All_variables *E,
                                                int cap, int element);
+double conductivity_element_prefactor(struct All_variables *E,
+                                      int cap, int element,
+                                      double reference_conductivity);
 double nodal_thermal_conductivity(struct All_variables *E, int cap, int node);
 double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
                                     int component);
