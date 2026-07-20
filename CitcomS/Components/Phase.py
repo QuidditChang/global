@@ -49,17 +49,17 @@ class Phase(CitcomComponent):
         import pyre.inventory
 
 
-        phase_depth = pyre.inventory.list(
+        phase_depth = pyre.inventory.array(
             "phase_depth", default=[410.0/6371.0, 520.0/6371.0, 660.0/6371.0])
-        phase_delta_rho = pyre.inventory.list(
+        phase_delta_rho = pyre.inventory.array(
             "phase_delta_rho", default=[0.0, 0.0, 0.0])
-        phase_Ra = pyre.inventory.list(
+        phase_Ra = pyre.inventory.array(
             "phase_Ra", default=[0.0, 0.0, 0.0])
-        phase_width = pyre.inventory.list(
+        phase_width = pyre.inventory.array(
             "phase_width", default=[0.0058, 0.0058, 0.0058])
-        phase_clapeyron = pyre.inventory.list(
+        phase_clapeyron = pyre.inventory.array(
             "phase_clapeyron", default=[0.0235, 0.0, -0.0235])
-        phase_transT = pyre.inventory.list(
+        phase_transT = pyre.inventory.array(
             "phase_transT", default=[0.78, 0.78, 0.78])
 
 
