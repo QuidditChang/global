@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stddef.h>
 
-#define NPZ_MAX_ENTRIES 128
+#define NPZ_MAX_ENTRIES 512
 #define NPZ_MAX_NAME 128
 
 struct Npz_entry {

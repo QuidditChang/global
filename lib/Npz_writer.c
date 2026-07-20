@@ -129,9 +129,15 @@ static int add_array(struct Npz_writer *writer, const char *name,
     size_t payload_size, filename_size;
     long offset;
 
-    if (!writer->file || writer->failed ||
-        writer->entry_count >= NPZ_MAX_ENTRIES)
+    if (!writer->file || writer->failed)
         return -1;
+    if (writer->entry_count >= NPZ_MAX_ENTRIES) {
+        fprintf(stderr,
+                "NPZ entry capacity exceeded while adding '%s': %d >= %d\n",
+                name, writer->entry_count, NPZ_MAX_ENTRIES);
+        writer->failed = 1;
+        return -1;
+    }
     if (make_npy(&payload, &payload_size, descr, data, item_size,
                  ndim, shape) != 0) {
         writer->failed = 1;
