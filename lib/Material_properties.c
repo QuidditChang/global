@@ -342,20 +342,20 @@ double conductivity_depth_factor(struct All_variables *E,
 double conductivity_temperature_factor(struct All_variables *E,
                                        double nondimensional_temperature)
 {
-    const double conductivity_reference_temperature_k = 300.0;
-    double dimensional_temperature;
+    double dimensional_temperature, surface_temperature;
 
     if(E->control.kT_exponent == 0.0)
         return 1.0;
 
-    dimensional_temperature = E->data.Ttop
+    surface_temperature = E->data.Ttop;
+    dimensional_temperature = surface_temperature
         + nondimensional_temperature * E->data.ref_temperature;
     /* Do not let numerical undershoot alter the evolved T*.  The conductivity
        lookup alone is bounded at the explicit dimensional top temperature. */
-    if(dimensional_temperature < E->data.Ttop)
-        dimensional_temperature = E->data.Ttop;
+    if(dimensional_temperature < surface_temperature)
+        dimensional_temperature = surface_temperature;
 
-    return pow(conductivity_reference_temperature_k / dimensional_temperature,
+    return pow(surface_temperature / dimensional_temperature,
                (double)E->control.kT_exponent);
 }
 
