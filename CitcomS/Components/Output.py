@@ -54,6 +54,7 @@ class Output(CitcomComponent):
                                                       "hdf5"]))
         output_optional = inv.str("output_optional",
                                   default="surf,botm,tracer")
+        profile_optional = inv.str("profile_optional", default="")
 
         # experimental vtk output
         gzdir_vtkio = inv.int("gzdir_vtkio", default=0)

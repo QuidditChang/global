@@ -69,6 +69,7 @@ void output_common_input(struct All_variables *E)
 
     input_string("output_format", E->output.format, "ascii",m);
     input_string("output_optional", E->output.optional, "surf,botm,tracer",m);
+    profile_input(E);
 
     /* gzdir type of I/O */
     E->output.gzdir.vtk_io = 0;

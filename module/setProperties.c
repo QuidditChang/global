@@ -443,6 +443,7 @@ PyObject * pyCitcom_Output_set_properties(PyObject *self, PyObject *args)
 
     getStringProperty(properties, "output_format", E->output.format, fp);
     getStringProperty(properties, "output_optional", E->output.optional, fp);
+    getStringProperty(properties, "profile_optional", E->output.profile_optional, fp);
 
     getIntProperty(properties, "gzdir_vtkio", E->output.gzdir.vtk_io, fp);
     getIntProperty(properties, "gzdir_rnr", E->output.gzdir.rnr, fp);

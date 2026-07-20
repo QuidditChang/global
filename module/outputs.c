@@ -59,6 +59,26 @@ PyObject * pyCitcom_output(PyObject *self, PyObject *args)
 }
 
 
+char pyCitcom_output_profiles__doc__[] = "";
+char pyCitcom_output_profiles__name__[] = "output_profiles";
+
+PyObject * pyCitcom_output_profiles(PyObject *self, PyObject *args)
+{
+    PyObject *obj;
+    struct All_variables* E;
+    int cycles;
+
+    if (!PyArg_ParseTuple(args, "Oi:output_profiles", &obj, &cycles))
+        return NULL;
+
+    E = (struct All_variables*)(PyCObject_AsVoidPtr(obj));
+    output_profiles(E, cycles);
+
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+
 char pyCitcom_output_finalize__doc__[] = "";
 char pyCitcom_output_finalize__name__[] = "output_finalize";
 

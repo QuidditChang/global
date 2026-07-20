@@ -37,6 +37,9 @@ void output_common_input(struct All_variables *);
 void output(struct All_variables *, int);
 void output_time(struct All_variables *, int);
 void output_checkpoint(struct All_variables *);
+void profile_input(struct All_variables *);
+void profile_parse_optional(struct All_variables *);
+void output_profiles(struct All_variables *, int);
 
 FILE* output_open(char *, char *);
 

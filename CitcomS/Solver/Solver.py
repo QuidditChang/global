@@ -115,6 +115,8 @@ class Solver(Component):
                 application.controller.inventory.monitoringFrequency)
             print >> stream, ("checkpointFrequency=%d" %
                 application.controller.inventory.checkpointFrequency)
+            print >> stream, ("profileMonitoringFrequency=%d" %
+                application.controller.inventory.profileMonitoringFrequency)
             print >> stream
 
         self.setProperties(stream)
@@ -230,6 +232,16 @@ class Solver(Component):
             output(self.all_variables, step)
 
         output_time(self.all_variables, step)
+        return
+
+
+    def save_profiles(self, profileMonitoringFrequency):
+        if profileMonitoringFrequency <= 0:
+            return
+        step = self.step
+        if not (step % profileMonitoringFrequency):
+            from CitcomSLib import output_profiles
+            output_profiles(self.all_variables, step)
         return
 
 

@@ -641,6 +641,7 @@ struct gzd_struc{
 struct Output {
     char format[20];  /* ascii or hdf5 */
     char optional[1000]; /* comma-delimited list of objects to output */
+    char profile_optional[1000]; /* comma-delimited depth-frequency fields */
 
     int llmax;  /* max degree of spherical harmonics output */
 
@@ -679,6 +680,7 @@ struct Output {
     int rho_ref;
     int Cp;
     int heating;      /* whether to output heating terms at elements */
+    int profile_temperature; /* volume-weighted temperature depth histogram */
 
 
   /* flags used by GZDIR */

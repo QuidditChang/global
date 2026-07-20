@@ -79,7 +79,9 @@ am__objects_1 = libCitcomS_a-Advection_diffusion.$(OBJEXT) \
 	libCitcomS_a-Lith_age.$(OBJEXT) \
 	libCitcomS_a-Material_properties.$(OBJEXT) \
 	libCitcomS_a-Nodal_mesh.$(OBJEXT) \
+	libCitcomS_a-Npz_writer.$(OBJEXT) \
 	libCitcomS_a-Output.$(OBJEXT) \
+	libCitcomS_a-Profile_output.$(OBJEXT) \
 	libCitcomS_a-Output_gzdir.$(OBJEXT) \
 	libCitcomS_a-Output_h5.$(OBJEXT) \
 	libCitcomS_a-Pan_problem_misc_functions.$(OBJEXT) \
@@ -134,7 +136,7 @@ am__objects_2 = Advection_diffusion.lo BC_util.lo Checkpoints.lo \
 	Element_calculations.lo General_matrix_functions.lo \
 	Ggrd_handling.lo Global_operations.lo Initial_temperature.lo \
 	Instructions.lo Interuption.lo Lith_age.lo \
-	Material_properties.lo Nodal_mesh.lo Output.lo Output_gzdir.lo \
+	Material_properties.lo Nodal_mesh.lo Npz_writer.lo Output.lo Profile_output.lo Output_gzdir.lo \
 	Output_h5.lo Pan_problem_misc_functions.lo Parallel_util.lo \
 	Parsing.lo Phase_change.lo Problem_related.lo \
 	Process_buoyancy.lo Shape_functions.lo Size_does_matter.lo \
@@ -347,8 +349,11 @@ sources = \
 	Material_properties.c \
 	material_properties.h \
 	Nodal_mesh.c \
+	Npz_writer.c \
+	npz_writer.h \
 	Output.c \
 	output.h \
+	Profile_output.c \
 	Output_gzdir.c \
 	Output_h5.c \
 	output_h5.h \
@@ -503,7 +508,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Lith_age.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Material_properties.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Nodal_mesh.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Npz_writer.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Output.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Profile_output.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Output_gzdir.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Output_h5.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Pan_problem_misc_functions.Plo@am__quote@
@@ -559,7 +566,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Lith_age.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Material_properties.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Nodal_mesh.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Npz_writer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Output.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Profile_output.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Output_gzdir.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Output_h5.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libCitcomS_a-Pan_problem_misc_functions.Po@am__quote@
@@ -875,6 +884,20 @@ libCitcomS_a-Nodal_mesh.obj: Nodal_mesh.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Nodal_mesh.obj `if test -f 'Nodal_mesh.c'; then $(CYGPATH_W) 'Nodal_mesh.c'; else $(CYGPATH_W) '$(srcdir)/Nodal_mesh.c'; fi`
 
+libCitcomS_a-Npz_writer.o: Npz_writer.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Npz_writer.o -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo" -c -o libCitcomS_a-Npz_writer.o `test -f 'Npz_writer.c' || echo '$(srcdir)/'`Npz_writer.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo" "$(DEPDIR)/libCitcomS_a-Npz_writer.Po"; else rm -f "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='Npz_writer.c' object='libCitcomS_a-Npz_writer.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Npz_writer.o `test -f 'Npz_writer.c' || echo '$(srcdir)/'`Npz_writer.c
+
+libCitcomS_a-Npz_writer.obj: Npz_writer.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Npz_writer.obj -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo" -c -o libCitcomS_a-Npz_writer.obj `if test -f 'Npz_writer.c'; then $(CYGPATH_W) 'Npz_writer.c'; else $(CYGPATH_W) '$(srcdir)/Npz_writer.c'; fi`; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo" "$(DEPDIR)/libCitcomS_a-Npz_writer.Po"; else rm -f "$(DEPDIR)/libCitcomS_a-Npz_writer.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='Npz_writer.c' object='libCitcomS_a-Npz_writer.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Npz_writer.obj `if test -f 'Npz_writer.c'; then $(CYGPATH_W) 'Npz_writer.c'; else $(CYGPATH_W) '$(srcdir)/Npz_writer.c'; fi`
+
 libCitcomS_a-Output.o: Output.c
 @am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Output.o -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Output.Tpo" -c -o libCitcomS_a-Output.o `test -f 'Output.c' || echo '$(srcdir)/'`Output.c; \
 @am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/libCitcomS_a-Output.Tpo" "$(DEPDIR)/libCitcomS_a-Output.Po"; else rm -f "$(DEPDIR)/libCitcomS_a-Output.Tpo"; exit 1; fi
@@ -888,6 +911,20 @@ libCitcomS_a-Output.obj: Output.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='Output.c' object='libCitcomS_a-Output.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Output.obj `if test -f 'Output.c'; then $(CYGPATH_W) 'Output.c'; else $(CYGPATH_W) '$(srcdir)/Output.c'; fi`
+
+libCitcomS_a-Profile_output.o: Profile_output.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Profile_output.o -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo" -c -o libCitcomS_a-Profile_output.o `test -f 'Profile_output.c' || echo '$(srcdir)/'`Profile_output.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo" "$(DEPDIR)/libCitcomS_a-Profile_output.Po"; else rm -f "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='Profile_output.c' object='libCitcomS_a-Profile_output.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Profile_output.o `test -f 'Profile_output.c' || echo '$(srcdir)/'`Profile_output.c
+
+libCitcomS_a-Profile_output.obj: Profile_output.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Profile_output.obj -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo" -c -o libCitcomS_a-Profile_output.obj `if test -f 'Profile_output.c'; then $(CYGPATH_W) 'Profile_output.c'; else $(CYGPATH_W) '$(srcdir)/Profile_output.c'; fi`; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo" "$(DEPDIR)/libCitcomS_a-Profile_output.Po"; else rm -f "$(DEPDIR)/libCitcomS_a-Profile_output.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='Profile_output.c' object='libCitcomS_a-Profile_output.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -c -o libCitcomS_a-Profile_output.obj `if test -f 'Profile_output.c'; then $(CYGPATH_W) 'Profile_output.c'; else $(CYGPATH_W) '$(srcdir)/Profile_output.c'; fi`
 
 libCitcomS_a-Output_gzdir.o: Output_gzdir.c
 @am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libCitcomS_a_CFLAGS) $(CFLAGS) -MT libCitcomS_a-Output_gzdir.o -MD -MP -MF "$(DEPDIR)/libCitcomS_a-Output_gzdir.Tpo" -c -o libCitcomS_a-Output_gzdir.o `test -f 'Output_gzdir.c' || echo '$(srcdir)/'`Output_gzdir.c; \

@@ -1548,6 +1548,7 @@ void output_init(struct  All_variables *E)
 #endif
 
     output_parse_optional(E);
+    profile_parse_optional(E);
 }
 
 

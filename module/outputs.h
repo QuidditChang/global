@@ -32,6 +32,10 @@ extern char pyCitcom_output__name__[];
 extern char pyCitcom_output__doc__[];
 PyObject * pyCitcom_output(PyObject *, PyObject *);
 
+extern char pyCitcom_output_profiles__name__[];
+extern char pyCitcom_output_profiles__doc__[];
+PyObject * pyCitcom_output_profiles(PyObject *, PyObject *);
+
 extern char pyCitcom_output_finalize__name__[];
 extern char pyCitcom_output_finalize__doc__[];
 PyObject * pyCitcom_output_finalize(PyObject *, PyObject *);

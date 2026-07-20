@@ -89,8 +89,11 @@ sources = \
 	Material_properties.c \
 	material_properties.h \
 	Nodal_mesh.c \
+	Npz_writer.c \
+	npz_writer.h \
 	Output.c \
 	output.h \
+	Profile_output.c \
 	Output_gzdir.c \
 	Output_h5.c \
 	output_h5.h \
