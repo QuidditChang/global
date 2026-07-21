@@ -390,11 +390,14 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     int npno, neq;
     int m, j, count, lev;
     int valid;
+    int restart_search;
 
     double alpha, beta, omega,sq_vdotv;
     double r0dotrt, r1dotrt;
     double residual, dpressure, dvelocity;
     double initial_rnorm, relative_residual, rnorm;
+    double recursive_rnorm, recursive_relative_residual, drift_ratio;
+    double denominator, numerator;
 
     double *F[NCS];
     double *r1[NCS], *r2[NCS], *pt[NCS], *p1[NCS], *p2[NCS];
@@ -471,6 +474,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
     valid = 1;
     r0dotrt = alpha = omega = 0;
+    restart_search = 0;
 
     while( (count < *steps_max) &&
            ((E->control.ala_pressure_buoyancy &&
@@ -484,22 +488,36 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
         /* r1dotrt = <r1, rt> */
         r1dotrt = global_pdot(E, r1, rt, lev);
-        if(r1dotrt == 0.0) {
-            /* XXX: can we resume the computation when BiCGstab failed? */
-            fprintf(E->fp, "BiCGstab method failed!!\n");
-            fprintf(stderr, "BiCGstab method failed!!\n");
+        if(!isfinite(r1dotrt) || fabs(r1dotrt) <= 1.0e-300) {
+            fprintf(E->fp, "BiCGStab breakdown: invalid <r,rt>\n");
+            fprintf(stderr, "BiCGStab breakdown: invalid <r,rt>\n");
             parallel_process_termination();
         }
 
 
         /* update search direction */
-        if(count == 0)
+        if(count == 0 || restart_search) {
             for (m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++)
                     p2[m][j] = r1[m][j];
+            restart_search = 0;
+        }
         else {
             /* p2 = r1 + <r1,rt>/<r0,rt> * alpha/omega * (p1 - omega*v0) */
+            if(!isfinite(r0dotrt) || fabs(r0dotrt) <= 1.0e-300 ||
+               !isfinite(omega) || fabs(omega) <= 1.0e-300) {
+                fprintf(E->fp,
+                        "BiCGStab breakdown: invalid beta denominator\n");
+                fprintf(stderr,
+                        "BiCGStab breakdown: invalid beta denominator\n");
+                parallel_process_termination();
+            }
             beta = (r1dotrt / r0dotrt) * (alpha / omega);
+            if(!isfinite(beta)) {
+                fprintf(E->fp, "BiCGStab breakdown: non-finite beta\n");
+                fprintf(stderr, "BiCGStab breakdown: non-finite beta\n");
+                parallel_process_termination();
+            }
             for(m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++)
                     p2[m][j] = r1[m][j] + beta
@@ -507,7 +525,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         }
 
 
-        /* preconditioner BPI ~= inv(K), pt = BPI*p2 */
+        /* pressure Schur-diagonal preconditioner */
         for(m=1; m<=E->sphere.caps_per_proc; m++)
             for(j=1; j<=npno; j++)
                 pt[m][j] = E->BPI[lev][m][j] * p2[m][j];
@@ -531,7 +549,18 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
 
         /* alpha = r1dotrt / <rt, v0> */
-        alpha = r1dotrt / global_pdot(E, rt, v0, lev);
+        denominator = global_pdot(E, rt, v0, lev);
+        if(!isfinite(denominator) || fabs(denominator) <= 1.0e-300) {
+            fprintf(E->fp, "BiCGStab breakdown: invalid alpha denominator\n");
+            fprintf(stderr, "BiCGStab breakdown: invalid alpha denominator\n");
+            parallel_process_termination();
+        }
+        alpha = r1dotrt / denominator;
+        if(!isfinite(alpha)) {
+            fprintf(E->fp, "BiCGStab breakdown: non-finite alpha\n");
+            fprintf(stderr, "BiCGStab breakdown: non-finite alpha\n");
+            parallel_process_termination();
+        }
 
 
         /* s0 = r1 - alpha * v0 */
@@ -540,7 +569,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                 s0[m][j] = r1[m][j] - alpha * v0[m][j];
 
 
-        /* preconditioner BPI ~= inv(K), st = BPI*s0 */
+        /* pressure Schur-diagonal preconditioner */
         for(m=1; m<=E->sphere.caps_per_proc; m++)
             for(j=1; j<=npno; j++)
                 st[m][j] = E->BPI[lev][m][j] * s0[m][j];
@@ -564,13 +593,30 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
 
         /* omega = <t0, s0> / <t0, t0> */
-        omega = global_pdot(E, t0, s0, lev) / global_pdot(E, t0, t0, lev);
+        numerator = global_pdot(E, t0, s0, lev);
+        denominator = global_pdot(E, t0, t0, lev);
+        if(!isfinite(numerator) || !isfinite(denominator) ||
+           fabs(denominator) <= 1.0e-300) {
+            fprintf(E->fp, "BiCGStab breakdown: invalid omega denominator\n");
+            fprintf(stderr, "BiCGStab breakdown: invalid omega denominator\n");
+            parallel_process_termination();
+        }
+        omega = numerator / denominator;
+        if(!isfinite(omega)) {
+            fprintf(E->fp, "BiCGStab breakdown: non-finite omega\n");
+            fprintf(stderr, "BiCGStab breakdown: non-finite omega\n");
+            parallel_process_termination();
+        }
 
 
         /* r2 = s0 - omega * t0 */
         for(m=1; m<=E->sphere.caps_per_proc; m++)
             for(j=1; j<=npno; j++)
                 r2[m][j] = s0[m][j] - omega * t0[m][j];
+
+        recursive_rnorm = sqrt(global_pdot(E, r2, r2, lev));
+        recursive_relative_residual = (initial_rnorm > 0.0)
+            ? recursive_rnorm / initial_rnorm : 0.0;
 
 
         /* P = P + alpha * pt + omega * st */
@@ -599,6 +645,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         rnorm = sqrt(global_pdot(E, t0, t0, lev));
         relative_residual = (initial_rnorm > 0.0)
             ? rnorm / initial_rnorm : 0.0;
+        drift_ratio = (relative_residual > 0.0)
+            ? recursive_relative_residual / relative_residual : 1.0;
         if(E->control.ala_pressure_buoyancy)
             residual = relative_residual;
 
@@ -618,8 +666,26 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                                        dvelocity, dpressure);
             if(E->control.ala_pressure_buoyancy)
                 fprintf(E->fp,
-                        "ALA BiCGStab relative continuity residual = %e\n",
-                        relative_residual);
+                        "ALA BiCGStab relative continuity residual = %e "
+                        "recursive=%e drift=%e\n",
+                        relative_residual, recursive_relative_residual,
+                        drift_ratio);
+        }
+
+        /* Re-anchor the recurrence to the explicitly assembled B*u residual.
+         * This limits finite-precision drift in long strict-ALA solves. */
+        if(E->control.ala_pressure_buoyancy &&
+           ((count % 20) == 0 || drift_ratio > 10.0 || drift_ratio < 0.1)) {
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++) {
+                    r2[m][j] = t0[m][j];
+                    rt[m][j] = t0[m][j];
+                }
+            restart_search = 1;
+            if(E->parallel.me == 0)
+                fprintf(E->fp,
+                        "ALA BiCGStab restarted from explicit residual at "
+                        "iteration %d\n", count);
         }
 
 
