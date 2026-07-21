@@ -675,7 +675,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         /* Re-anchor the recurrence to the explicitly assembled B*u residual.
          * This limits finite-precision drift in long strict-ALA solves. */
         if(E->control.ala_pressure_buoyancy &&
-           ((count % 20) == 0 || drift_ratio > 10.0 || drift_ratio < 0.1)) {
+           (drift_ratio > 10.0 || drift_ratio < 0.1)) {
             for(m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++) {
                     r2[m][j] = t0[m][j];
