@@ -1021,14 +1021,19 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         /* which compressible solver to use: "cg" or "bicg" */
         getStringProperty(properties, "uzawa", E->control.uzawa, fp);
         if(strcmp(E->control.uzawa, "cg") == 0) {
+            if(E->control.ala_pressure_buoyancy)
+                myerror(E,
+                        "compressible_formulation=ala requires uzawa=bicg");
             /* more convergence parameters for "cg" */
             getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
             getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
         }
         else if(strcmp(E->control.uzawa, "bicg") == 0) {
-            if(E->control.ala_pressure_buoyancy)
-                myerror(E, "compressible_formulation=ala currently requires uzawa=cg");
+            getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
+            getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
         }
+        else
+            myerror(E, "Error: unknown Uzawa iteration");
     }
 
     PUTS(("\n"));
