@@ -168,6 +168,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     void assemble_c_u();
     void assemble_div_u();
+    void assemble_div_rho_u();
     void assemble_del2_u();
     void assemble_grad_p();
     void strip_bcs_from_residual();
@@ -286,8 +287,11 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         strip_bcs_from_residual(E, E->u1, lev);
 
 
-        /* F = div(u1) */
-        assemble_div_u(E, E->u1, F, lev);
+        /* Apply the same continuity operator used by the initial residual. */
+        if(E->control.inv_gruneisen != 0)
+            assemble_div_rho_u(E, E->u1, F, lev);
+        else
+            assemble_div_u(E, E->u1, F, lev);
 
 
         /* alpha = <r1, z1> / <s2, F> */
@@ -298,7 +302,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             alpha = 0.0;
 
 
-        /* r2 = r1 - alpha * div(u1) */
+        /* r2 = r1 - alpha * continuity_operator(u1) */
         for(m=1; m<=E->sphere.caps_per_proc; m++)
             for(j=1; j<=npno; j++)
                 r2[m][j] = r1[m][j] - alpha * F[m][j];
@@ -317,7 +321,10 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
 
         /* compute velocity and incompressibility residual */
-        assemble_div_u(E, V, F, lev);
+        if(E->control.inv_gruneisen != 0)
+            assemble_div_rho_u(E, V, F, lev);
+        else
+            assemble_div_u(E, V, F, lev);
         incompressibility_residual(E, V, F);
 
         /* compute velocity and pressure corrections */
