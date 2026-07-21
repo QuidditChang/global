@@ -510,16 +510,21 @@ void read_initial_settings(struct All_variables *E)
   }
 
   if(E->control.inv_gruneisen != 0) {
-      /* which compressible solver to use: "cg" or "bicg" */
+      /* which compressible solver to use: "cg" or "bicg".
+       * Strict ALA uses the complete pressure-continuity operator through
+       * the BiCGStab path. */
       input_string("uzawa",E->control.uzawa,"cg",m);
       if(strcmp(E->control.uzawa, "cg") == 0) {
+          if(E->control.ala_pressure_buoyancy)
+              myerror(E,
+                      "compressible_formulation=ala requires uzawa=bicg");
           /* more convergence parameters for "cg" */
           input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
           input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
       }
       else if(strcmp(E->control.uzawa, "bicg") == 0) {
-          if(E->control.ala_pressure_buoyancy)
-              myerror(E, "compressible_formulation=ala currently requires uzawa=cg");
+          input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
+          input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
       }
       else
           myerror(E, "Error: unknown Uzawa iteration\n");

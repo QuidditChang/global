@@ -768,6 +768,54 @@ return;
 }
 
 
+/* ==============================================================
+   Assemble the strict-ALA pressure operator (D+C)^T * P.
+   This is the exact discrete transpose of assemble_div_rho_u().
+   ============================================================== */
+
+void assemble_grad_rho_p(struct All_variables *E,
+                         double **P, double **gradP, int lev)
+{
+  int m,e,i,j1,j2,j3,p,a,b,nel,neq;
+  void strip_bcs_from_residual();
+
+  const int ends=enodes[E->mesh.nsd];
+  const int dims=E->mesh.nsd;
+
+  for(m=1;m<=E->sphere.caps_per_proc;m++) {
+    nel=E->lmesh.NEL[lev];
+    neq=E->lmesh.NEQ[lev];
+
+    for(i=0;i<neq;i++)
+      gradP[m][i] = 0.0;
+
+    for(e=1;e<=nel;e++) {
+      if(0.0==P[m][e])
+        continue;
+
+      for(a=1;a<=ends;a++) {
+        p = (a-1)*dims;
+        b = E->IEN[lev][m][e].node[a];
+        j1 = E->ID[lev][m][b].doff[1];
+        j2 = E->ID[lev][m][b].doff[2];
+        j3 = E->ID[lev][m][b].doff[3];
+        gradP[m][j1] += (E->elt_del[lev][m][e].g[p][0]
+                         + E->elt_c[lev][m][e].c[p][0]) * P[m][e];
+        gradP[m][j2] += (E->elt_del[lev][m][e].g[p+1][0]
+                         + E->elt_c[lev][m][e].c[p+1][0]) * P[m][e];
+        gradP[m][j3] += (E->elt_del[lev][m][e].g[p+2][0]
+                         + E->elt_c[lev][m][e].c[p+2][0]) * P[m][e];
+      }
+    }
+  }
+
+  (E->solver.exchange_id_d)(E, gradP, lev);
+  strip_bcs_from_residual(E,gradP,lev);
+
+  return;
+}
+
+
 double assemble_dAhatp_entry(E,e,level,m)
      struct All_variables *E;
      int e,level,m;
@@ -979,20 +1027,6 @@ return;
 }
 
 
-static double ala_pressure_buoyancy_coefficient(struct All_variables *E,
-                                                int el)
-{
-  int nz;
-
-  if(!E->control.ala_pressure_buoyancy ||
-     E->control.inv_gruneisen == 0.0)
-    return 0.0;
-
-  nz = ((el-1) % E->lmesh.elz) + 1;
-  return E->refstate.ala_beta[nz];
-}
-
-
 /*=================================================================
   Function to create the element force vector (allowing for velocity b.c.'s)
   ================================================================= */
@@ -1011,7 +1045,6 @@ void get_elt_f(E,el,elt_f,bcs,m)
   const unsigned int vbc_flag[] = {0, VBX, VBY, VBZ};
 
   double force[9],force_at_gs[9],elt_k[24*24];
-  double ala_pressure_coeff, ala_pressure_force;
   double rtf[4][9];
 
   void get_global_shape_fn();
@@ -1039,14 +1072,10 @@ void get_elt_f(E,el,elt_f,bcs,m)
   for(p=1;p<=ends;p++)
     force[p] = E->buoyancy[m][E->ien[m][el].node[p]];
 
-  ala_pressure_coeff = ala_pressure_buoyancy_coefficient(E,el);
-  ala_pressure_force = ala_pressure_coeff * E->P[m][el];
-
   for(j=1;j<=vpts;j++)       {   /*compute force at each int point */
     force_at_gs[j] = 0.0;
     for(k=1;k<=ends;k++)
       force_at_gs[j] += force[k] * E->N.vpt[GNVINDEX(k,j)] ;
-    force_at_gs[j] -= ala_pressure_force;
     }
 
   for(i=1;i<=dims;i++)  {
@@ -1058,6 +1087,12 @@ void get_elt_f(E,el,elt_f,bcs,m)
         elt_f[p] += force_at_gs[j] * E->N.vpt[GNVINDEX(a,j)]
            *dOmega.vpt[j]*g_point[j].weight[dims-1]
            *E->element_Cc.vpt[BVINDEX(3,i,a,j)];
+
+      /* Strict ALA pressure buoyancy is -C^T*p.  Use the same
+       * element matrix as continuity so the two operators are adjoints. */
+      if(E->control.ala_pressure_buoyancy)
+        elt_f[p] -= E->elt_c[E->mesh.levmax][m][el].c[p][0]
+                    * E->P[m][el];
 
 	  /* imposed velocity terms */
 

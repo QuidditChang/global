@@ -168,7 +168,6 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     void assemble_c_u();
     void assemble_div_u();
-    void assemble_div_rho_u();
     void assemble_del2_u();
     void assemble_grad_p();
     void strip_bcs_from_residual();
@@ -287,11 +286,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         strip_bcs_from_residual(E, E->u1, lev);
 
 
-        /* Apply the same continuity operator used by the initial residual. */
-        if(E->control.inv_gruneisen != 0)
-            assemble_div_rho_u(E, E->u1, F, lev);
-        else
-            assemble_div_u(E, E->u1, F, lev);
+        /* The outer CG path follows CitcomS' split compressible strategy:
+         * C*u is held on the outer-loop right hand side. */
+        assemble_div_u(E, E->u1, F, lev);
 
 
         /* alpha = <r1, z1> / <s2, F> */
@@ -302,7 +299,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             alpha = 0.0;
 
 
-        /* r2 = r1 - alpha * continuity_operator(u1) */
+        /* r2 = r1 - alpha * div(u1) */
         for(m=1; m<=E->sphere.caps_per_proc; m++)
             for(j=1; j<=npno; j++)
                 r2[m][j] = r1[m][j] - alpha * F[m][j];
@@ -321,10 +318,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
 
         /* compute velocity and incompressibility residual */
-        if(E->control.inv_gruneisen != 0)
-            assemble_div_rho_u(E, V, F, lev);
-        else
-            assemble_div_u(E, V, F, lev);
+        assemble_div_u(E, V, F, lev);
         incompressibility_residual(E, V, F);
 
         /* compute velocity and pressure corrections */
@@ -384,6 +378,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     void assemble_div_rho_u();
     void assemble_del2_u();
     void assemble_grad_p();
+    void assemble_grad_rho_p();
     void strip_bcs_from_residual();
     int  solve_del2_u();
     void parallel_process_termination();
@@ -399,6 +394,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     double alpha, beta, omega,sq_vdotv;
     double r0dotrt, r1dotrt;
     double residual, dpressure, dvelocity;
+    double initial_rnorm, relative_residual, rnorm;
 
     double *F[NCS];
     double *r1[NCS], *r2[NCS], *pt[NCS], *p1[NCS], *p2[NCS];
@@ -440,6 +436,9 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
             F[m][j] = FF[m][j];
 
 
+    /* FF already contains the current -C^T*P force contribution.  The
+     * pressure increment operator below must therefore apply both the
+     * standard gradient and the strict-ALA C^T response. */
     /* calculate the initial velocity residual */
     v_res = initial_vel_residual(E, V, P, F, imp);
 
@@ -447,6 +446,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     /* initial residual r1 = div(rho_ref*V) */
     assemble_div_rho_u(E, V, r1, lev);
     residual = incompressibility_residual(E, V, r1);
+    initial_rnorm = sqrt(global_pdot(E, r1, r1, lev));
+    relative_residual = (initial_rnorm > 0.0) ? 1.0 : 0.0;
 
 
     /* initial conjugate residual rt = r1 */
@@ -472,8 +473,12 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     r0dotrt = alpha = omega = 0;
 
     while( (count < *steps_max) &&
-           ((E->monitor.incompressibility >= E->control.tole_comp) &&
-            (dpressure >= imp) && (dvelocity >= imp)) )  {
+           ((E->control.ala_pressure_buoyancy &&
+             relative_residual >= E->control.tole_comp) ||
+            (!E->control.ala_pressure_buoyancy &&
+             E->monitor.incompressibility >= E->control.tole_comp)) &&
+           (E->control.ala_pressure_buoyancy ||
+            ((dpressure >= imp) && (dvelocity >= imp))) )  {
 
 
 
@@ -508,8 +513,11 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                 pt[m][j] = E->BPI[lev][m][j] * p2[m][j];
 
 
-        /* solve K*u0 = grad(pt) for u1 */
-        assemble_grad_p(E, pt, F, lev);
+        /* solve K*u0 = (D+C)^T*pt for strict ALA */
+        if(E->control.ala_pressure_buoyancy)
+            assemble_grad_rho_p(E, pt, F, lev);
+        else
+            assemble_grad_p(E, pt, F, lev);
         valid = solve_del2_u(E, u0, F, imp*v_res, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
@@ -538,8 +546,11 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                 st[m][j] = E->BPI[lev][m][j] * s0[m][j];
 
 
-        /* solve K*u1 = grad(st) for u1 */
-        assemble_grad_p(E, st, F, lev);
+        /* solve K*u1 = (D+C)^T*st for strict ALA */
+        if(E->control.ala_pressure_buoyancy)
+            assemble_grad_rho_p(E, st, F, lev);
+        else
+            assemble_grad_p(E, st, F, lev);
         valid = solve_del2_u(E, E->u1, F, imp*v_res, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 2\n", stderr);
@@ -584,7 +595,12 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
         /* compute velocity and incompressibility residual */
         assemble_div_rho_u(E, V, t0, lev);
-        incompressibility_residual(E, V, t0);
+        residual = incompressibility_residual(E, V, t0);
+        rnorm = sqrt(global_pdot(E, t0, t0, lev));
+        relative_residual = (initial_rnorm > 0.0)
+            ? rnorm / initial_rnorm : 0.0;
+        if(E->control.ala_pressure_buoyancy)
+            residual = relative_residual;
 
         /* compute velocity and pressure corrections */
         dpressure = sqrt( global_pdot(E, s0, s0, lev)
@@ -600,6 +616,10 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         if(E->control.print_convergence && E->parallel.me==0) {
             print_convergence_progress(E, count, time0, sq_vdotv,
                                        dvelocity, dpressure);
+            if(E->control.ala_pressure_buoyancy)
+                fprintf(E->fp,
+                        "ALA BiCGStab relative continuity residual = %e\n",
+                        relative_residual);
         }
 
 
@@ -617,7 +637,23 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         /* shift <r0, rt> = <r1, rt> */
         r0dotrt = r1dotrt;
 
-    } /* end loop for conjugate gradient */
+    } /* end loop for BiCGStab */
+
+    if(E->control.ala_pressure_buoyancy &&
+       relative_residual >= E->control.tole_comp) {
+        if(E->parallel.me == 0) {
+            fprintf(stderr,
+                    "Strict ALA BiCGStab failed to reach relative continuity "
+                    "tolerance: residual=%e tolerance=%e iterations=%d\n",
+                    relative_residual, E->control.tole_comp, count);
+            fprintf(E->fp,
+                    "Strict ALA BiCGStab failed to reach relative continuity "
+                    "tolerance: residual=%e tolerance=%e iterations=%d\n",
+                    relative_residual, E->control.tole_comp, count);
+            fflush(E->fp);
+        }
+        parallel_process_termination();
+    }
 
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
