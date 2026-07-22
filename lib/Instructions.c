@@ -509,6 +509,22 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "compressible_formulation must be tala or ala");
   }
 
+  input_boolean("ala_schur_symmetry_check",
+                &(E->control.ala_schur_symmetry_check),"off",m);
+  input_double("ala_schur_symmetry_tolerance",
+               &(E->control.ala_schur_symmetry_tolerance),"1.0e-3",m);
+  input_double("ala_inner_accuracy_max",
+               &(E->control.ala_inner_accuracy_max),"1.0e-4",m);
+  input_double("ala_inner_accuracy_factor",
+               &(E->control.ala_inner_accuracy_factor),"1.0e-2",m);
+
+  if(E->control.ala_schur_symmetry_tolerance <= 0.0)
+      myerror(E, "ala_schur_symmetry_tolerance must be positive");
+  if(E->control.ala_inner_accuracy_max <= 0.0)
+      myerror(E, "ala_inner_accuracy_max must be positive");
+  if(E->control.ala_inner_accuracy_factor <= 0.0)
+      myerror(E, "ala_inner_accuracy_factor must be positive");
+
   if(E->control.inv_gruneisen != 0) {
       /* which compressible solver to use: "cg" or "bicg".
        * Strict ALA uses the complete pressure-continuity operator through
@@ -979,6 +995,10 @@ void global_default_values(E)
     E->control.EMULTIGRID = 0;
     E->control.augmented_Lagr = 0;
     E->control.augmented = 0.0;
+    E->control.ala_schur_symmetry_check = 0;
+    E->control.ala_schur_symmetry_tolerance = 1.0e-3;
+    E->control.ala_inner_accuracy_max = 1.0e-4;
+    E->control.ala_inner_accuracy_factor = 1.0e-2;
 
     E->control.GRID_TYPE=1;
 

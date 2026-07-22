@@ -1017,6 +1017,21 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "compressible_formulation must be tala or ala");
     }
 
+    getIntProperty(properties, "ala_schur_symmetry_check",
+                   E->control.ala_schur_symmetry_check, fp);
+    getDoubleProperty(properties, "ala_schur_symmetry_tolerance",
+                      E->control.ala_schur_symmetry_tolerance, fp);
+    getDoubleProperty(properties, "ala_inner_accuracy_max",
+                      E->control.ala_inner_accuracy_max, fp);
+    getDoubleProperty(properties, "ala_inner_accuracy_factor",
+                      E->control.ala_inner_accuracy_factor, fp);
+    if(E->control.ala_schur_symmetry_tolerance <= 0.0)
+        myerror(E, "ala_schur_symmetry_tolerance must be positive");
+    if(E->control.ala_inner_accuracy_max <= 0.0)
+        myerror(E, "ala_inner_accuracy_max must be positive");
+    if(E->control.ala_inner_accuracy_factor <= 0.0)
+        myerror(E, "ala_inner_accuracy_factor must be positive");
+
     if(E->control.inv_gruneisen != 0) {
         /* which compressible solver to use: "cg" or "bicg" */
         getStringProperty(properties, "uzawa", E->control.uzawa, fp);

@@ -1704,6 +1704,14 @@ void h5output_meta(struct All_variables *E)
 
     status = set_attribute_double(input, "accuracy", E->control.accuracy);
     status = set_attribute_float(input, "tole_compressibility", E->control.tole_comp);
+    status = set_attribute_int(input, "ala_schur_symmetry_check",
+                               E->control.ala_schur_symmetry_check);
+    status = set_attribute_double(input, "ala_schur_symmetry_tolerance",
+                                  E->control.ala_schur_symmetry_tolerance);
+    status = set_attribute_double(input, "ala_inner_accuracy_max",
+                                  E->control.ala_inner_accuracy_max);
+    status = set_attribute_double(input, "ala_inner_accuracy_factor",
+                                  E->control.ala_inner_accuracy_factor);
 
     status = set_attribute_int(input, "mg_cycle", E->control.mg_cycle);
     status = set_attribute_int(input, "down_heavy", E->control.down_heavy);

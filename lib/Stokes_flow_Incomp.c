@@ -34,6 +34,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include <stdlib.h>
+#include <string.h>
 
 void myerror(struct All_variables *,char *);
 
@@ -54,8 +55,11 @@ static double initial_vel_residual(struct All_variables *E,
                                    double imp);
 static double incompressibility_residual(struct All_variables *E,
                                          double **V, double **r);
+static double strict_ala_inner_relative_accuracy(struct All_variables *E,
+                                                 double outer_relative_residual);
 static double strict_ala_inner_accuracy(struct All_variables *E,
-                                        double **F, int lev, double imp);
+                                        double **F, int lev,
+                                        double relative_accuracy);
 
 
 /* Master loop for pressure and (hence) velocity field */
@@ -125,16 +129,35 @@ static void print_convergence_progress(struct All_variables *E,
 }
 
 
+static double strict_ala_inner_relative_accuracy(
+    struct All_variables *E, double outer_relative_residual)
+{
+    double candidate, floor_accuracy, relative_accuracy;
+
+    floor_accuracy = (E->control.tole_comp > 0.0)
+        ? 0.1 * E->control.tole_comp : 1.0e-12;
+    candidate = E->control.ala_inner_accuracy_factor
+        * max(outer_relative_residual, 0.0);
+
+    if(candidate <= floor_accuracy)
+        relative_accuracy = floor_accuracy;
+    else
+        /* Quantize by decades so the inexact Schur operator only changes at
+         * explicit Krylov restart points. */
+        relative_accuracy = pow(10.0, ceil(log10(candidate) - 1.0e-12));
+
+    relative_accuracy = min(relative_accuracy,
+                            E->control.ala_inner_accuracy_max);
+    return max(relative_accuracy, floor_accuracy);
+}
+
+
 static double strict_ala_inner_accuracy(struct All_variables *E,
-                                        double **F, int lev, double imp)
+                                        double **F, int lev,
+                                        double relative_accuracy)
 {
     double global_vdot();
-    double relative_accuracy, rhs_norm;
-
-    relative_accuracy = imp;
-    if(E->control.tole_comp > 0.0)
-        relative_accuracy = min(relative_accuracy,
-                                0.1 * E->control.tole_comp);
+    double rhs_norm;
 
     rhs_norm = sqrt(global_vdot(E, F, F, lev) / E->mesh.neq);
 
@@ -417,6 +440,10 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     double initial_rnorm, relative_residual, rnorm;
     double recursive_rnorm, recursive_relative_residual, drift_ratio;
     double denominator, numerator, inner_accuracy;
+    double inner_relative_accuracy, previous_inner_relative_accuracy;
+    double symmetry_left, symmetry_right, symmetry_defect;
+    double max_symmetry_defect, curvature_p, curvature_s;
+    int symmetry_sample_count, nonpositive_curvature_count;
 
     double *F[NCS];
     double *r1[NCS], *r2[NCS], *pt[NCS], *p1[NCS], *p2[NCS];
@@ -494,6 +521,10 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     valid = 1;
     r0dotrt = alpha = omega = 0;
     restart_search = 0;
+    previous_inner_relative_accuracy = -1.0;
+    max_symmetry_defect = 0.0;
+    symmetry_sample_count = 0;
+    nonpositive_curvature_count = 0;
 
     while( (count < *steps_max) &&
            ((E->control.ala_pressure_buoyancy &&
@@ -503,6 +534,35 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
            (E->control.ala_pressure_buoyancy ||
             ((dpressure >= imp) && (dvelocity >= imp))) )  {
 
+
+        inner_relative_accuracy = strict_ala_inner_relative_accuracy(
+            E, relative_residual);
+        if(previous_inner_relative_accuracy > 0.0 &&
+           fabs(inner_relative_accuracy - previous_inner_relative_accuracy)
+             > 1.0e-12 * previous_inner_relative_accuracy) {
+            /* A changed inner tolerance changes the approximate K inverse.
+             * Re-anchor BiCGStab before using the new inexact Schur operator. */
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++) {
+                    r1[m][j] = t0[m][j];
+                    rt[m][j] = t0[m][j];
+                }
+            restart_search = 1;
+            r0dotrt = alpha = omega = 0.0;
+            if(E->parallel.me == 0) {
+                fprintf(E->fp,
+                        "ALA inner relative accuracy changed %.3e -> %.3e; "
+                        "restarting BiCGStab at iteration %d\n",
+                        previous_inner_relative_accuracy,
+                        inner_relative_accuracy, count);
+                fprintf(stderr,
+                        "ALA inner relative accuracy changed %.3e -> %.3e; "
+                        "restarting BiCGStab at iteration %d\n",
+                        previous_inner_relative_accuracy,
+                        inner_relative_accuracy, count);
+            }
+        }
+        previous_inner_relative_accuracy = inner_relative_accuracy;
 
 
         /* r1dotrt = <r1, rt> */
@@ -556,7 +616,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         else
             assemble_grad_p(E, pt, F, lev);
         inner_accuracy = E->control.ala_pressure_buoyancy
-            ? strict_ala_inner_accuracy(E, F, lev, imp) : imp * v_res;
+            ? strict_ala_inner_accuracy(E, F, lev,
+                                        inner_relative_accuracy) : imp * v_res;
         valid = solve_del2_u(E, u0, F, inner_accuracy, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
@@ -602,7 +663,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         else
             assemble_grad_p(E, st, F, lev);
         inner_accuracy = E->control.ala_pressure_buoyancy
-            ? strict_ala_inner_accuracy(E, F, lev, imp) : imp * v_res;
+            ? strict_ala_inner_accuracy(E, F, lev,
+                                        inner_relative_accuracy) : imp * v_res;
         valid = solve_del2_u(E, E->u1, F, inner_accuracy, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 2\n", stderr);
@@ -613,6 +675,27 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
         /* t0 = div(rho_ref * u1) */
         assemble_div_rho_u(E, E->u1, t0, lev);
+
+        if(E->control.ala_pressure_buoyancy &&
+           E->control.ala_schur_symmetry_check) {
+            /* v0=S*pt and t0=S*st are already available.  This checks the
+             * actual inexact Schur applications without another K solve. */
+            symmetry_left = global_pdot(E, pt, t0, lev);
+            symmetry_right = global_pdot(E, st, v0, lev);
+            symmetry_defect = fabs(symmetry_left - symmetry_right)
+                / (fabs(symmetry_left) + fabs(symmetry_right) + 1.0e-300);
+            curvature_p = global_pdot(E, pt, v0, lev);
+            curvature_s = global_pdot(E, st, t0, lev);
+            if(!isfinite(symmetry_defect) || !isfinite(curvature_p) ||
+               !isfinite(curvature_s)) {
+                symmetry_defect = 1.0;
+                nonpositive_curvature_count++;
+            }
+            else if(curvature_p <= 0.0 || curvature_s <= 0.0)
+                nonpositive_curvature_count++;
+            max_symmetry_defect = max(max_symmetry_defect, symmetry_defect);
+            symmetry_sample_count++;
+        }
 
 
         /* omega = <t0, s0> / <t0, t0> */
@@ -690,9 +773,18 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
             if(E->control.ala_pressure_buoyancy)
                 fprintf(E->fp,
                         "ALA BiCGStab relative continuity residual = %e "
-                        "recursive=%e drift=%e\n",
+                        "recursive=%e drift=%e inner_rel=%e\n",
                         relative_residual, recursive_relative_residual,
-                        drift_ratio);
+                        drift_ratio, inner_relative_accuracy);
+            if(E->control.ala_pressure_buoyancy &&
+               E->control.ala_schur_symmetry_check) {
+                fprintf(E->fp,
+                        "ALA Schur symmetry defect = %e curvature=(%e,%e)\n",
+                        symmetry_defect, curvature_p, curvature_s);
+                fprintf(stderr,
+                        "ALA Schur symmetry defect = %e curvature=(%e,%e)\n",
+                        symmetry_defect, curvature_p, curvature_s);
+            }
         }
 
         /* Re-anchor the recurrence to the explicitly assembled B*u residual.
@@ -727,6 +819,30 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         r0dotrt = r1dotrt;
 
     } /* end loop for BiCGStab */
+
+    if(E->control.ala_pressure_buoyancy &&
+       E->control.ala_schur_symmetry_check && E->parallel.me == 0) {
+        fprintf(E->fp,
+                "ALA Schur CG suitability: max_symmetry_defect=%e "
+                "tolerance=%e samples=%d nonpositive_curvature=%d result=%s\n",
+                max_symmetry_defect,
+                E->control.ala_schur_symmetry_tolerance,
+                symmetry_sample_count,
+                nonpositive_curvature_count,
+                (symmetry_sample_count > 0 && max_symmetry_defect <=
+                     E->control.ala_schur_symmetry_tolerance &&
+                 nonpositive_curvature_count == 0) ? "PASS" : "FAIL");
+        fprintf(stderr,
+                "ALA Schur CG suitability: max_symmetry_defect=%e "
+                "tolerance=%e samples=%d nonpositive_curvature=%d result=%s\n",
+                max_symmetry_defect,
+                E->control.ala_schur_symmetry_tolerance,
+                symmetry_sample_count,
+                nonpositive_curvature_count,
+                (symmetry_sample_count > 0 && max_symmetry_defect <=
+                     E->control.ala_schur_symmetry_tolerance &&
+                 nonpositive_curvature_count == 0) ? "PASS" : "FAIL");
+    }
 
     if(E->control.ala_pressure_buoyancy &&
        relative_residual >= E->control.tole_comp) {

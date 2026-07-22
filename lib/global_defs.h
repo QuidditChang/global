@@ -468,6 +468,12 @@ struct CONTROL {
     int ala_pressure_buoyancy;
     char compressible_formulation[20];
 
+    /* strict-ALA Krylov diagnostics and inexact velocity solves */
+    int ala_schur_symmetry_check;
+    double ala_schur_symmetry_tolerance;
+    double ala_inner_accuracy_max;
+    double ala_inner_accuracy_factor;
+
     /* surface temperature */
     float surface_temp;
 

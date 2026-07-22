@@ -106,6 +106,14 @@ class Incompressible(CitcomComponent):
                                             default="tala",
                                             validator=prop.choice(["tala",
                                                                    "ala"]))
+        ala_schur_symmetry_check = prop.bool("ala_schur_symmetry_check",
+                                             default=False)
+        ala_schur_symmetry_tolerance = prop.float(
+            "ala_schur_symmetry_tolerance", default=1.0e-3)
+        ala_inner_accuracy_max = prop.float("ala_inner_accuracy_max",
+                                            default=1.0e-4)
+        ala_inner_accuracy_factor = prop.float("ala_inner_accuracy_factor",
+                                               default=1.0e-2)
         uzawa = prop.str("uzawa", default="cg",
                          validator=prop.choice(["cg", "bicg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)
