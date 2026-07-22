@@ -54,6 +54,8 @@ static double initial_vel_residual(struct All_variables *E,
                                    double imp);
 static double incompressibility_residual(struct All_variables *E,
                                          double **V, double **r);
+static double strict_ala_inner_accuracy(struct All_variables *E,
+                                        double **F, int lev, double imp);
 
 
 /* Master loop for pressure and (hence) velocity field */
@@ -120,6 +122,23 @@ static void print_convergence_progress(struct All_variables *E,
             dvelocity, dpressure, E->monitor.solution_cycles);
 
     return;
+}
+
+
+static double strict_ala_inner_accuracy(struct All_variables *E,
+                                        double **F, int lev, double imp)
+{
+    double global_vdot();
+    double relative_accuracy, rhs_norm;
+
+    relative_accuracy = imp;
+    if(E->control.tole_comp > 0.0)
+        relative_accuracy = min(relative_accuracy,
+                                0.1 * E->control.tole_comp);
+
+    rhs_norm = sqrt(global_vdot(E, F, F, lev) / E->mesh.neq);
+
+    return max(relative_accuracy * rhs_norm, 1.0e-14);
 }
 
 
@@ -397,7 +416,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     double residual, dpressure, dvelocity;
     double initial_rnorm, relative_residual, rnorm;
     double recursive_rnorm, recursive_relative_residual, drift_ratio;
-    double denominator, numerator;
+    double denominator, numerator, inner_accuracy;
 
     double *F[NCS];
     double *r1[NCS], *r2[NCS], *pt[NCS], *p1[NCS], *p2[NCS];
@@ -536,7 +555,9 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
             assemble_grad_rho_p(E, pt, F, lev);
         else
             assemble_grad_p(E, pt, F, lev);
-        valid = solve_del2_u(E, u0, F, imp*v_res, lev);
+        inner_accuracy = E->control.ala_pressure_buoyancy
+            ? strict_ala_inner_accuracy(E, F, lev, imp) : imp * v_res;
+        valid = solve_del2_u(E, u0, F, inner_accuracy, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
             fputs("Warning: solver not converging! 1\n", E->fp);
@@ -580,7 +601,9 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
             assemble_grad_rho_p(E, st, F, lev);
         else
             assemble_grad_p(E, st, F, lev);
-        valid = solve_del2_u(E, E->u1, F, imp*v_res, lev);
+        inner_accuracy = E->control.ala_pressure_buoyancy
+            ? strict_ala_inner_accuracy(E, F, lev, imp) : imp * v_res;
+        valid = solve_del2_u(E, E->u1, F, inner_accuracy, lev);
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 2\n", stderr);
             fputs("Warning: solver not converging! 2\n", E->fp);
@@ -675,7 +698,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         /* Re-anchor the recurrence to the explicitly assembled B*u residual.
          * This limits finite-precision drift in long strict-ALA solves. */
         if(E->control.ala_pressure_buoyancy &&
-           (drift_ratio > 10.0 || drift_ratio < 0.1)) {
+           ((count % 20) == 0 || drift_ratio > 10.0 || drift_ratio < 0.1)) {
             for(m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++) {
                     r2[m][j] = t0[m][j];
