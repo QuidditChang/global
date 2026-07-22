@@ -132,15 +132,19 @@ static void print_convergence_progress(struct All_variables *E,
 static double strict_ala_inner_relative_accuracy(
     struct All_variables *E, double outer_relative_residual)
 {
-    double candidate, floor_accuracy, relative_accuracy;
+    double candidate, final_accuracy, relative_accuracy;
 
-    floor_accuracy = (E->control.tole_comp > 0.0)
-        ? 0.1 * E->control.tole_comp : 1.0e-12;
+    /* The user cap may deliberately request a tighter K solve than the
+     * conventional 0.1*outer-tolerance forcing target. */
+    final_accuracy = E->control.ala_inner_accuracy_max;
+    if(E->control.tole_comp > 0.0)
+        final_accuracy = min(final_accuracy,
+                             0.1 * E->control.tole_comp);
     candidate = E->control.ala_inner_accuracy_factor
         * max(outer_relative_residual, 0.0);
 
-    if(candidate <= floor_accuracy)
-        relative_accuracy = floor_accuracy;
+    if(candidate <= final_accuracy)
+        relative_accuracy = final_accuracy;
     else
         /* Quantize by decades so the inexact Schur operator only changes at
          * explicit Krylov restart points. */
@@ -148,7 +152,7 @@ static double strict_ala_inner_relative_accuracy(
 
     relative_accuracy = min(relative_accuracy,
                             E->control.ala_inner_accuracy_max);
-    return max(relative_accuracy, floor_accuracy);
+    return max(relative_accuracy, final_accuracy);
 }
 
 
