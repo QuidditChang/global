@@ -278,6 +278,19 @@ static double **allocate_nodal_field(struct All_variables *E)
 }
 
 
+static double **allocate_element_field(struct All_variables *E)
+{
+    int m, field_size;
+    double **field;
+
+    field_size = max(E->lmesh.nel, E->lmesh.npno) + 1;
+    field = (double **)malloc(NCS * sizeof(double *));
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        field[m] = (double *)calloc(field_size, sizeof(double));
+    return field;
+}
+
+
 static double **allocate_equation_field(struct All_variables *E)
 {
     int m;
@@ -301,6 +314,12 @@ static void free_nodal_field(struct All_variables *E, double **field)
 
 
 static void free_equation_field(struct All_variables *E, double **field)
+{
+    free_nodal_field(E, field);
+}
+
+
+static void free_element_field(struct All_variables *E, double **field)
 {
     free_nodal_field(E, field);
 }
@@ -713,8 +732,15 @@ static void write_ala_residual(struct All_variables *E)
 {
     int m, e;
     double volume, rdiv, rbeta, rala, relative, denominator;
-    double local[5], global_sum[4], global_linf;
+    double scale_density, characteristic_scale, active_scale_cutoff;
+    double global_cancellation_l2, elementwise_relative_l2;
+    double active_relative_l2, active_volume_fraction;
+    double active_fraction_above_threshold;
+    double local_sum[6], global_sum[5], global_linf;
+    double local_active[3], global_active[3];
     double **div_u, **beta_u;
+    static const double active_scale_fraction = 1.0e-6;
+    static const double relative_alert_threshold = 1.0e-1;
     static const char separator[] =
         "==============================================================================\n";
     static const char rule[] =
@@ -722,12 +748,12 @@ static void write_ala_residual(struct All_variables *E)
     void assemble_div_u();
     void assemble_c_u();
 
-    div_u = allocate_nodal_field(E);
-    beta_u = allocate_nodal_field(E);
+    div_u = allocate_element_field(E);
+    beta_u = allocate_element_field(E);
     assemble_div_u(E, E->U, div_u, E->mesh.levmax);
     assemble_c_u(E, E->U, beta_u, E->mesh.levmax);
 
-    for(e=0; e<5; e++) local[e] = 0.0;
+    for(e=0; e<6; e++) local_sum[e] = 0.0;
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         for(e=1; e<=E->lmesh.nel; e++) {
             volume = E->eco[m][e].area;
@@ -738,39 +764,89 @@ static void write_ala_residual(struct All_variables *E)
             denominator = fabs(rdiv) + fabs(rbeta);
             relative = fabs(rdiv + rbeta)
                 / max(denominator, 1.0e-30 * volume);
-            local[0] += volume * rala * rala;
-            local[1] += volume * fabs(rala);
-            local[2] += volume * relative * relative;
-            local[3] += volume;
-            local[4] = max(local[4], fabs(rala));
+            scale_density = denominator / volume;
+            local_sum[0] += volume * rala * rala;
+            local_sum[1] += volume * fabs(rala);
+            local_sum[2] += volume * relative * relative;
+            local_sum[3] += volume;
+            local_sum[4] += volume * scale_density * scale_density;
+            local_sum[5] = max(local_sum[5], fabs(rala));
         }
     }
-    MPI_Allreduce(local, global_sum, 4, MPI_DOUBLE, MPI_SUM,
+    MPI_Allreduce(local_sum, global_sum, 5, MPI_DOUBLE, MPI_SUM,
                   E->parallel.world);
-    MPI_Allreduce(&local[4], &global_linf, 1, MPI_DOUBLE, MPI_MAX,
+    MPI_Allreduce(&local_sum[5], &global_linf, 1, MPI_DOUBLE, MPI_MAX,
                   E->parallel.world);
+
+    characteristic_scale = sqrt(global_sum[4]
+                                  / max(global_sum[3], 1.0e-300));
+    active_scale_cutoff = active_scale_fraction * characteristic_scale;
+    global_cancellation_l2 = sqrt(global_sum[0]
+                                   / max(global_sum[4], 1.0e-300));
+    elementwise_relative_l2 = sqrt(global_sum[2]
+                                    / max(global_sum[3], 1.0e-300));
+
+    for(e=0; e<3; e++) local_active[e] = 0.0;
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        for(e=1; e<=E->lmesh.nel; e++) {
+            volume = E->eco[m][e].area;
+            if(volume <= 0.0) continue;
+            rdiv = div_u[m][e];
+            rbeta = beta_u[m][e];
+            denominator = fabs(rdiv) + fabs(rbeta);
+            scale_density = denominator / volume;
+            if(scale_density < active_scale_cutoff) continue;
+            relative = fabs(rdiv + rbeta)
+                / max(denominator, 1.0e-30 * volume);
+            local_active[0] += volume;
+            local_active[1] += volume * relative * relative;
+            if(relative > relative_alert_threshold)
+                local_active[2] += volume;
+        }
+    }
+    MPI_Allreduce(local_active, global_active, 3, MPI_DOUBLE, MPI_SUM,
+                  E->parallel.world);
+    active_volume_fraction = global_active[0]
+        / max(global_sum[3], 1.0e-300);
+    active_relative_l2 = sqrt(global_active[1]
+                               / max(global_active[0], 1.0e-300));
+    active_fraction_above_threshold = global_active[2]
+        / max(global_active[0], 1.0e-300);
 
     if(E->parallel.me == 0) {
         fputs(separator, E->fp);
         fprintf(E->fp, "ALA_CONTINUITY_RESIDUAL  step=%d\n",
                 E->monitor.solution_cycles);
         fputs(rule, E->fp);
-        fprintf(E->fp, "%-26s  %16s\n", "METRIC", "VALUE");
+        fprintf(E->fp, "%-30s  %16s\n", "METRIC", "VALUE");
         fputs(rule, E->fp);
-        fprintf(E->fp, "%-26s  %+16.8e\n", "L2",
+        fprintf(E->fp, "%-30s  %+16.8e\n", "L2",
                 sqrt(global_sum[0] / global_sum[3]));
-        fprintf(E->fp, "%-26s  %+16.8e\n", "Linf", global_linf);
-        fprintf(E->fp, "%-26s  %+16.8e\n",
+        fprintf(E->fp, "%-30s  %+16.8e\n", "Linf", global_linf);
+        fprintf(E->fp, "%-30s  %+16.8e\n",
                 "volume_weighted_mean_abs",
                 global_sum[1] / global_sum[3]);
-        fprintf(E->fp, "%-26s  %+16.8e\n", "relative_L2",
-                sqrt(global_sum[2] / global_sum[3]));
+        fprintf(E->fp, "%-30s  %+16.8e\n", "solver_div_v",
+                E->monitor.incompressibility);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "global_cancellation_L2",
+                global_cancellation_l2);
+        fprintf(E->fp, "%-30s  %+16.8e\n",
+                "elementwise_relative_L2", elementwise_relative_l2);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "active_scale_cutoff",
+                active_scale_cutoff);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "active_volume_fraction",
+                active_volume_fraction);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "active_relative_L2",
+                active_relative_l2);
+        fprintf(E->fp, "%-30s  %+16.8e\n",
+                "active_fraction_rel_gt_0.1",
+                active_fraction_above_threshold);
         fputs(separator, E->fp);
         fflush(E->fp);
     }
 
-    free_nodal_field(E, div_u);
-    free_nodal_field(E, beta_u);
+    free_element_field(E, div_u);
+    free_element_field(E, beta_u);
 }
 
 
