@@ -477,6 +477,9 @@ struct CONTROL {
     double ala_div_v_tolerance;
     double ala_update_tolerance;
     int ala_consecutive_steps;
+    int ala_depth_diagnostics;
+    int ala_depth_diagnostic_interval;
+    int ala_depth_diagnostic_bins;
 
     /* surface temperature */
     float surface_temp;

@@ -1033,6 +1033,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_update_tolerance, fp);
     getIntProperty(properties, "ala_consecutive_steps",
                    E->control.ala_consecutive_steps, fp);
+    getIntProperty(properties, "ala_depth_diagnostics",
+                   E->control.ala_depth_diagnostics, fp);
+    getIntProperty(properties, "ala_depth_diagnostic_interval",
+                   E->control.ala_depth_diagnostic_interval, fp);
+    getIntProperty(properties, "ala_depth_diagnostic_bins",
+                   E->control.ala_depth_diagnostic_bins, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
         myerror(E, "ala_schur_symmetry_tolerance must be positive");
     if(E->control.ala_inner_accuracy_max <= 0.0)
@@ -1045,6 +1051,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_update_tolerance must be positive");
     if(E->control.ala_consecutive_steps < 1)
         myerror(E, "ala_consecutive_steps must be at least one");
+    if(E->control.ala_depth_diagnostic_interval < 1)
+        myerror(E, "ala_depth_diagnostic_interval must be at least one");
+    if(E->control.ala_depth_diagnostic_bins < 1 ||
+       E->control.ala_depth_diagnostic_bins > 128)
+        myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */

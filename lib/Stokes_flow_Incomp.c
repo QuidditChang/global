@@ -63,6 +63,9 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
                                           double **div_u, int lev,
                                           double *mass_norm,
                                           double *cancellation_l2);
+static void strict_ala_depth_diagnostics(struct All_variables *E,
+                                         double **r, double **div_u,
+                                         int lev, int iteration);
 static double strict_ala_inner_relative_accuracy(struct All_variables *E,
                                                  double outer_relative_residual);
 static double strict_ala_inner_accuracy(struct All_variables *E,
@@ -125,6 +128,116 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
                   E->parallel.world);
     *mass_norm = sqrt(max(global[0], 0.0));
     *cancellation_l2 = sqrt(global[0] / max(global[1], 1.0e-300));
+}
+
+
+static void strict_ala_depth_diagnostics(struct All_variables *E,
+                                         double **r, double **div_u,
+                                         int lev, int iteration)
+{
+    int m, e, b, bins, nel, local_ez, global_ez, global_elz;
+    int fields;
+    double volume, div_e, c_e, scale_e, depth_km, r2;
+    double cancellation, correlation, d_over_c, residual_fraction;
+    double *local, *global;
+    double local_summary[5], global_summary[5];
+
+    if(!E->control.ala_depth_diagnostics)
+        return;
+    if(iteration != 0 &&
+       (iteration % E->control.ala_depth_diagnostic_interval) != 0)
+        return;
+
+    global_elz = E->mesh.ELZ[lev];
+    bins = min(E->control.ala_depth_diagnostic_bins, global_elz);
+    fields = 7;
+    local = (double *)calloc(bins * fields, sizeof(double));
+    global = (double *)calloc(bins * fields, sizeof(double));
+    if(local == NULL || global == NULL)
+        myerror(E, "Unable to allocate ALA depth diagnostics");
+
+    for(b=0; b<5; b++)
+        local_summary[b] = 0.0;
+
+    nel = E->lmesh.NEL[lev];
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=nel; e++) {
+            volume = E->eco[m][e].area;
+            if(volume <= 0.0)
+                continue;
+            local_ez = (e - 1) % E->lmesh.ELZ[lev] + 1;
+            global_ez = E->lmesh.EZS[lev] + local_ez;
+            b = ((global_ez - 1) * bins) / global_elz;
+            b = min(max(b, 0), bins - 1);
+
+            depth_km = (1.0 - 0.5 *
+                        (E->sx[m][3][local_ez] +
+                         E->sx[m][3][local_ez+1]))
+                * E->data.radius_km;
+            div_e = div_u[m][e];
+            c_e = r[m][e] - div_e;
+            scale_e = fabs(div_e) + fabs(c_e);
+            r2 = r[m][e] * r[m][e] / volume;
+
+            local[b*fields] += div_e * div_e / volume;
+            local[b*fields+1] += c_e * c_e / volume;
+            local[b*fields+2] += r2;
+            local[b*fields+3] += div_e * c_e / volume;
+            local[b*fields+4] += scale_e * scale_e / volume;
+            local[b*fields+5] += volume;
+            local[b*fields+6] += depth_km * volume;
+
+            local_summary[0] += r2;
+            local_summary[1] += depth_km * r2;
+            if(depth_km <= 200.0)
+                local_summary[2] += r2;
+            if(depth_km <= 410.0)
+                local_summary[3] += r2;
+            if(depth_km <= 660.0)
+                local_summary[4] += r2;
+        }
+
+    MPI_Allreduce(local, global, bins * fields, MPI_DOUBLE, MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(local_summary, global_summary, 5, MPI_DOUBLE, MPI_SUM,
+                  E->parallel.world);
+
+    if(E->parallel.me == 0) {
+        fprintf(E->fp,
+                "ALA_DEPTH_CONTINUITY iteration=%d solver=%s bins=%d "
+                "residual_mean_depth_km=%e top200_fraction=%e "
+                "top410_fraction=%e top660_fraction=%e\n",
+                iteration, E->control.uzawa, bins,
+                global_summary[1] / max(global_summary[0], 1.0e-300),
+                global_summary[2] / max(global_summary[0], 1.0e-300),
+                global_summary[3] / max(global_summary[0], 1.0e-300),
+                global_summary[4] / max(global_summary[0], 1.0e-300));
+        fprintf(E->fp,
+                "ALA_DEPTH_BIN bin depth_km residual_fraction cancellation "
+                "D_over_C D_C_correlation\n");
+        for(b=bins-1; b>=0; b--) {
+            residual_fraction = global[b*fields+2]
+                / max(global_summary[0], 1.0e-300);
+            cancellation = sqrt(global[b*fields+2]
+                                / max(global[b*fields+4], 1.0e-300));
+            d_over_c = sqrt(global[b*fields]
+                            / max(global[b*fields+1], 1.0e-300));
+            correlation = global[b*fields+3]
+                / sqrt(max(global[b*fields] * global[b*fields+1],
+                           1.0e-300));
+            correlation = min(max(correlation, -1.0), 1.0);
+            depth_km = global[b*fields+6]
+                / max(global[b*fields+5], 1.0e-300);
+            fprintf(E->fp,
+                    "ALA_DEPTH_BIN %d %e %e %e %e %e\n",
+                    b, depth_km, residual_fraction, cancellation,
+                    d_over_c, correlation);
+        }
+        fflush(E->fp);
+    }
+
+    free((void *)local);
+    free((void *)global);
 }
 
 void solve_constrained_flow_iterative_pseudo_surf(E)
@@ -542,6 +655,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 cancellation_l2, mass_relative_residual,
                 relative_residual);
     }
+    strict_ala_depth_diagnostics(E, r, div_u, lev, count);
 
     /* A fixed inner target keeps the approximate Schur operator as
      * stationary as the RHS-relative multigrid stopping rule permits. */
@@ -698,6 +812,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                         E->control.ala_div_v_tolerance,
                         E->control.ala_update_tolerance);
         }
+        strict_ala_depth_diagnostics(E, explicit_r, div_u, lev, count);
 
         rho_old = rho;
 
@@ -911,6 +1026,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                     cancellation_l2, mass_relative_residual,
                     relative_residual);
     }
+    if(E->control.ala_pressure_buoyancy)
+        strict_ala_depth_diagnostics(E, r1, div_u, lev, count);
 
 
     valid = 1;
@@ -1215,6 +1332,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                         symmetry_defect, curvature_p, curvature_s);
             }
         }
+        if(E->control.ala_pressure_buoyancy)
+            strict_ala_depth_diagnostics(E, t0, div_u, lev, count);
 
         /* Re-anchor the recurrence to the explicitly assembled B*u residual.
          * This limits finite-precision drift in long strict-ALA solves. */

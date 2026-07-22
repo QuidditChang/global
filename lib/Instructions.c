@@ -525,6 +525,12 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_update_tolerance),"1.0e-3",m);
   input_int("ala_consecutive_steps",
             &(E->control.ala_consecutive_steps),"3",m);
+  input_boolean("ala_depth_diagnostics",
+                &(E->control.ala_depth_diagnostics),"off",m);
+  input_int("ala_depth_diagnostic_interval",
+            &(E->control.ala_depth_diagnostic_interval),"5",m);
+  input_int("ala_depth_diagnostic_bins",
+            &(E->control.ala_depth_diagnostic_bins),"8",m);
 
   if(E->control.ala_schur_symmetry_tolerance <= 0.0)
       myerror(E, "ala_schur_symmetry_tolerance must be positive");
@@ -538,6 +544,11 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_update_tolerance must be positive");
   if(E->control.ala_consecutive_steps < 1)
       myerror(E, "ala_consecutive_steps must be at least one");
+  if(E->control.ala_depth_diagnostic_interval < 1)
+      myerror(E, "ala_depth_diagnostic_interval must be at least one");
+  if(E->control.ala_depth_diagnostic_bins < 1 ||
+     E->control.ala_depth_diagnostic_bins > 128)
+      myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1023,6 +1034,9 @@ void global_default_values(E)
     E->control.ala_div_v_tolerance = 1.0e-7;
     E->control.ala_update_tolerance = 1.0e-3;
     E->control.ala_consecutive_steps = 3;
+    E->control.ala_depth_diagnostics = 0;
+    E->control.ala_depth_diagnostic_interval = 5;
+    E->control.ala_depth_diagnostic_bins = 8;
 
     E->control.GRID_TYPE=1;
 
