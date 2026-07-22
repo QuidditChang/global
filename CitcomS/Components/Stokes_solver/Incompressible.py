@@ -122,7 +122,7 @@ class Incompressible(CitcomComponent):
                                           default=1.0e-3)
         ala_consecutive_steps = prop.int("ala_consecutive_steps", default=3)
         uzawa = prop.str("uzawa", default="cg",
-                         validator=prop.choice(["cg", "bicg"]))
+                         validator=prop.choice(["cg", "bicg", "ala_cg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)
         relative_err_accuracy = prop.float("relative_err_accuracy", default=0.001)
         remove_rigid_rotation = prop.bool("remove_rigid_rotation", default=True)

@@ -1047,17 +1047,24 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_consecutive_steps must be at least one");
 
     if(E->control.inv_gruneisen != 0) {
-        /* which compressible solver to use: "cg" or "bicg" */
+        /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
         getStringProperty(properties, "uzawa", E->control.uzawa, fp);
         if(strcmp(E->control.uzawa, "cg") == 0) {
             if(E->control.ala_pressure_buoyancy)
                 myerror(E,
-                        "compressible_formulation=ala requires uzawa=bicg");
+                        "strict ALA requires uzawa=bicg or uzawa=ala_cg");
             /* more convergence parameters for "cg" */
             getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
             getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
         }
         else if(strcmp(E->control.uzawa, "bicg") == 0) {
+            getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
+            getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
+        }
+        else if(strcmp(E->control.uzawa, "ala_cg") == 0) {
+            if(!E->control.ala_pressure_buoyancy)
+                myerror(E,
+                        "uzawa=ala_cg requires compressible_formulation=ala");
             getIntProperty(properties, "compress_iter_maxstep", E->control.compress_iter_maxstep, fp);
             getFloatProperty(properties, "relative_err_accuracy", E->control.relative_err_accuracy, fp);
         }

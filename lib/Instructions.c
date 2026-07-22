@@ -540,19 +540,25 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_consecutive_steps must be at least one");
 
   if(E->control.inv_gruneisen != 0) {
-      /* which compressible solver to use: "cg" or "bicg".
-       * Strict ALA uses the complete pressure-continuity operator through
-       * the BiCGStab path. */
+      /* "cg" is the legacy split compressible solver.  Strict ALA may use
+       * BiCGStab or its dedicated complete-operator PCG experiment. */
       input_string("uzawa",E->control.uzawa,"cg",m);
       if(strcmp(E->control.uzawa, "cg") == 0) {
           if(E->control.ala_pressure_buoyancy)
               myerror(E,
-                      "compressible_formulation=ala requires uzawa=bicg");
+                      "strict ALA requires uzawa=bicg or uzawa=ala_cg");
           /* more convergence parameters for "cg" */
           input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
           input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
       }
       else if(strcmp(E->control.uzawa, "bicg") == 0) {
+          input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
+          input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
+      }
+      else if(strcmp(E->control.uzawa, "ala_cg") == 0) {
+          if(!E->control.ala_pressure_buoyancy)
+              myerror(E,
+                      "uzawa=ala_cg requires compressible_formulation=ala");
           input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
           input_float("relative_err_accuracy",&(E->control.relative_err_accuracy),"0.001",m);
       }

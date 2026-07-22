@@ -47,6 +47,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                                     double **V, double **P, double **F,
                                     double imp, int *steps_max);
+static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
+                                       double **V, double **P, double **F,
+                                       double imp, int *steps_max);
 static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
                                       double **V, double **P, double **F,
                                       double imp, int *steps_max);
@@ -220,6 +223,9 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
     else {
         if(strcmp(E->control.uzawa, "cg") == 0)
             residual = solve_Ahat_p_fhat_iterCG(E, V, P, F, imp, steps_max);
+        else if(strcmp(E->control.uzawa, "ala_cg") == 0)
+            residual = solve_Ahat_p_fhat_ALA_PCG(E, V, P, F, imp,
+                                                steps_max);
         else if(strcmp(E->control.uzawa, "bicg") == 0)
             residual = solve_Ahat_p_fhat_BiCG(E, V, P, F, imp, steps_max);
         else
@@ -451,6 +457,331 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     return(residual);
 }
+
+/* Solve strict ALA pressure correction using preconditioned conjugate
+ * gradients on S=(D+C) K^-1 (D+C)^T.  Unlike the legacy compressible CG
+ * path, this applies the complete continuity operator and its transpose.
+ */
+
+static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
+                                       double **V, double **P, double **FF,
+                                       double imp, int *steps_max)
+{
+    void assemble_div_rho_u();
+    void assemble_grad_rho_p();
+    void strip_bcs_from_residual();
+    void parallel_process_termination();
+    int solve_del2_u();
+
+    double global_vdot(), global_pdot();
+    double CPU_time0();
+
+    int npno, neq, lev;
+    int m, j, count, valid;
+    int restart_search;
+    int hybrid_consecutive_count, hybrid_converged;
+    int nonpositive_curvature_count;
+
+    double alpha, beta, rho, rho_old, curvature;
+    double min_curvature, sq_vdotv;
+    double residual, dpressure, dvelocity;
+    double initial_rnorm, rnorm, relative_residual;
+    double recursive_rnorm, recursive_relative_residual, drift_ratio;
+    double initial_mass_norm, mass_norm, mass_relative_residual;
+    double cancellation_l2;
+    double inner_accuracy, inner_relative_accuracy;
+    double time0;
+
+    double *F[NCS];
+    double *r[NCS], *z[NCS], *p[NCS], *q[NCS];
+    double *explicit_r[NCS], *div_u[NCS];
+
+    npno = E->lmesh.npno;
+    neq = E->lmesh.neq;
+    lev = E->mesh.levmax;
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        F[m] = (double *)malloc(neq*sizeof(double));
+        r[m] = (double *)malloc((npno+1)*sizeof(double));
+        z[m] = (double *)malloc((npno+1)*sizeof(double));
+        p[m] = (double *)malloc((npno+1)*sizeof(double));
+        q[m] = (double *)malloc((npno+1)*sizeof(double));
+        explicit_r[m] = (double *)malloc((npno+1)*sizeof(double));
+        div_u[m] = (double *)malloc((npno+1)*sizeof(double));
+    }
+
+    time0 = CPU_time0();
+    count = 0;
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(j=0; j<neq; j++)
+            F[m][j] = FF[m][j];
+
+    /* FF contains the current -C^T*P forcing.  Pressure increments below
+     * apply the complete strict-ALA transpose explicitly. */
+    initial_vel_residual(E, V, P, F, imp);
+
+    assemble_div_rho_u(E, V, r, lev);
+    residual = incompressibility_residual(E, V, r);
+    initial_rnorm = sqrt(global_pdot(E, r, r, lev));
+    relative_residual = (initial_rnorm > 0.0) ? 1.0 : 0.0;
+    strict_ala_continuity_metrics(E, V, r, div_u, lev,
+                                  &initial_mass_norm, &cancellation_l2);
+    mass_norm = initial_mass_norm;
+    mass_relative_residual = (initial_mass_norm > 0.0) ? 1.0 : 0.0;
+
+    sq_vdotv = sqrt(E->monitor.vdotv);
+    dpressure = 1.0;
+    dvelocity = 1.0;
+    if(E->control.print_convergence && E->parallel.me == 0) {
+        print_convergence_progress(E, count, time0, sq_vdotv,
+                                   dvelocity, dpressure);
+        fprintf(E->fp,
+                "ALA PCG continuity residuals: cancellation=%e "
+                "mass_relative=%e algebraic_relative=%e\n",
+                cancellation_l2, mass_relative_residual,
+                relative_residual);
+    }
+
+    /* A fixed inner target keeps the approximate Schur operator as
+     * stationary as the RHS-relative multigrid stopping rule permits. */
+    inner_relative_accuracy = E->control.ala_inner_accuracy_max;
+    rho_old = 0.0;
+    restart_search = 1;
+    hybrid_consecutive_count = 0;
+    hybrid_converged = 0;
+    nonpositive_curvature_count = 0;
+    min_curvature = 1.0e300;
+
+    while(count < *steps_max &&
+          (cancellation_l2 >= E->control.tole_comp ||
+           (E->control.ala_hybrid_convergence && !hybrid_converged))) {
+
+        for(m=1; m<=E->sphere.caps_per_proc; m++)
+            for(j=1; j<=npno; j++)
+                z[m][j] = E->BPI[lev][m][j] * r[m][j];
+
+        rho = global_pdot(E, r, z, lev);
+        if(!isfinite(rho) || rho <= 1.0e-300) {
+            if(E->parallel.me == 0) {
+                fprintf(E->fp,
+                        "ALA PCG breakdown: invalid preconditioned residual "
+                        "<r,z>=%e\n", rho);
+                fprintf(stderr,
+                        "ALA PCG breakdown: invalid preconditioned residual "
+                        "<r,z>=%e\n", rho);
+            }
+            parallel_process_termination();
+        }
+
+        if(restart_search) {
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++)
+                    p[m][j] = z[m][j];
+            restart_search = 0;
+        }
+        else {
+            beta = rho / rho_old;
+            if(!isfinite(beta)) {
+                if(E->parallel.me == 0) {
+                    fprintf(E->fp, "ALA PCG breakdown: non-finite beta\n");
+                    fprintf(stderr, "ALA PCG breakdown: non-finite beta\n");
+                }
+                parallel_process_termination();
+            }
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++)
+                    p[m][j] = z[m][j] + beta * p[m][j];
+        }
+
+        assemble_grad_rho_p(E, p, F, lev);
+        inner_accuracy = strict_ala_inner_accuracy(
+            E, F, lev, inner_relative_accuracy);
+        valid = solve_del2_u(E, E->u1, F, inner_accuracy, lev);
+        if(!valid) {
+            if(E->parallel.me == 0) {
+                fputs("ALA PCG inner velocity solve failed\n", stderr);
+                fputs("ALA PCG inner velocity solve failed\n", E->fp);
+            }
+            parallel_process_termination();
+        }
+        strip_bcs_from_residual(E, E->u1, lev);
+        assemble_div_rho_u(E, E->u1, q, lev);
+
+        curvature = global_pdot(E, p, q, lev);
+        if(!isfinite(curvature) || curvature <= 1.0e-300) {
+            nonpositive_curvature_count++;
+            if(E->parallel.me == 0) {
+                fprintf(E->fp,
+                        "ALA PCG breakdown: nonpositive Schur curvature=%e "
+                        "at iteration %d\n", curvature, count);
+                fprintf(stderr,
+                        "ALA PCG breakdown: nonpositive Schur curvature=%e "
+                        "at iteration %d\n", curvature, count);
+            }
+            parallel_process_termination();
+        }
+        min_curvature = min(min_curvature, curvature);
+        alpha = rho / curvature;
+        if(!isfinite(alpha)) {
+            if(E->parallel.me == 0) {
+                fprintf(E->fp, "ALA PCG breakdown: non-finite alpha\n");
+                fprintf(stderr, "ALA PCG breakdown: non-finite alpha\n");
+            }
+            parallel_process_termination();
+        }
+
+        for(m=1; m<=E->sphere.caps_per_proc; m++) {
+            for(j=1; j<=npno; j++) {
+                P[m][j] += alpha * p[m][j];
+                r[m][j] -= alpha * q[m][j];
+            }
+            for(j=0; j<neq; j++)
+                V[m][j] -= alpha * E->u1[m][j];
+        }
+
+        recursive_rnorm = sqrt(global_pdot(E, r, r, lev));
+        recursive_relative_residual = (initial_rnorm > 0.0)
+            ? recursive_rnorm / initial_rnorm : 0.0;
+
+        assemble_div_rho_u(E, V, explicit_r, lev);
+        residual = incompressibility_residual(E, V, explicit_r);
+        rnorm = sqrt(global_pdot(E, explicit_r, explicit_r, lev));
+        relative_residual = (initial_rnorm > 0.0)
+            ? rnorm / initial_rnorm : 0.0;
+        strict_ala_continuity_metrics(E, V, explicit_r, div_u, lev,
+                                      &mass_norm, &cancellation_l2);
+        mass_relative_residual = (initial_mass_norm > 0.0)
+            ? mass_norm / initial_mass_norm : 0.0;
+        drift_ratio = (relative_residual > 0.0)
+            ? recursive_relative_residual / relative_residual : 1.0;
+        residual = cancellation_l2;
+
+        dpressure = fabs(alpha) * sqrt(
+            global_pdot(E, p, p, lev) /
+            (1.0e-32 + global_pdot(E, P, P, lev)));
+        dvelocity = fabs(alpha) * sqrt(
+            global_vdot(E, E->u1, E->u1, lev) /
+            (1.0e-32 + E->monitor.vdotv));
+
+        count++;
+        if(E->control.ala_hybrid_convergence) {
+            if(E->monitor.incompressibility <
+                   E->control.ala_div_v_tolerance &&
+               dvelocity < E->control.ala_update_tolerance &&
+               dpressure < E->control.ala_update_tolerance)
+                hybrid_consecutive_count++;
+            else
+                hybrid_consecutive_count = 0;
+            if(hybrid_consecutive_count >= E->control.ala_consecutive_steps)
+                hybrid_converged = 1;
+        }
+
+        sq_vdotv = sqrt(E->monitor.vdotv);
+        if(E->control.print_convergence && E->parallel.me == 0) {
+            print_convergence_progress(E, count, time0, sq_vdotv,
+                                       dvelocity, dpressure);
+            fprintf(E->fp,
+                    "ALA PCG continuity residuals: cancellation=%e "
+                    "mass_relative=%e algebraic_relative=%e "
+                    "recursive_algebraic=%e drift=%e inner_rel=%e "
+                    "curvature=%e\n",
+                    cancellation_l2, mass_relative_residual,
+                    relative_residual, recursive_relative_residual,
+                    drift_ratio, inner_relative_accuracy, curvature);
+            if(E->control.ala_hybrid_convergence)
+                fprintf(E->fp,
+                        "ALA hybrid convergence streak = %d/%d "
+                        "limits: div/v<%e updates<%e\n",
+                        hybrid_consecutive_count,
+                        E->control.ala_consecutive_steps,
+                        E->control.ala_div_v_tolerance,
+                        E->control.ala_update_tolerance);
+        }
+
+        rho_old = rho;
+
+        /* Explicit replacement protects a long inexact PCG run from residual
+         * drift.  Replacement also restarts the conjugate direction. */
+        if((count % 20) == 0 || drift_ratio > 10.0 || drift_ratio < 0.1) {
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++)
+                    r[m][j] = explicit_r[m][j];
+            restart_search = 1;
+            if(E->parallel.me == 0)
+                fprintf(E->fp,
+                        "ALA PCG restarted from explicit residual at "
+                        "iteration %d\n", count);
+        }
+    }
+
+    if(E->parallel.me == 0) {
+        fprintf(E->fp,
+                "ALA PCG operator audit: minimum_curvature=%e "
+                "nonpositive_curvature=%d iterations=%d "
+                "Schur_applications=%d pressure_velocity_solves=%d\n",
+                min_curvature, nonpositive_curvature_count, count, count,
+                count);
+        fprintf(stderr,
+                "ALA PCG operator audit: minimum_curvature=%e "
+                "nonpositive_curvature=%d iterations=%d "
+                "Schur_applications=%d pressure_velocity_solves=%d\n",
+                min_curvature, nonpositive_curvature_count, count, count,
+                count);
+    }
+
+    if(E->parallel.me == 0 &&
+       cancellation_l2 < E->control.tole_comp &&
+       (!E->control.ala_hybrid_convergence || hybrid_converged)) {
+        fprintf(E->fp,
+                "Strict ALA PCG converged by physical continuity: "
+                "cancellation=%e tolerance=%e mass_relative=%e "
+                "algebraic_relative=%e iterations=%d\n",
+                cancellation_l2, E->control.tole_comp,
+                mass_relative_residual, relative_residual, count);
+        fflush(E->fp);
+    }
+
+    if(cancellation_l2 >= E->control.tole_comp ||
+       (E->control.ala_hybrid_convergence && !hybrid_converged)) {
+        if(E->parallel.me == 0) {
+            fprintf(E->fp,
+                    "Strict ALA PCG failed physical continuity: "
+                    "cancellation=%e tolerance=%e mass_relative=%e "
+                    "algebraic_relative=%e hybrid_streak=%d/%d "
+                    "iterations=%d\n",
+                    cancellation_l2, E->control.tole_comp,
+                    mass_relative_residual, relative_residual,
+                    hybrid_consecutive_count,
+                    E->control.ala_consecutive_steps, count);
+            fprintf(stderr,
+                    "Strict ALA PCG failed physical continuity: "
+                    "cancellation=%e tolerance=%e mass_relative=%e "
+                    "algebraic_relative=%e hybrid_streak=%d/%d "
+                    "iterations=%d\n",
+                    cancellation_l2, E->control.tole_comp,
+                    mass_relative_residual, relative_residual,
+                    hybrid_consecutive_count,
+                    E->control.ala_consecutive_steps, count);
+            fflush(E->fp);
+        }
+        parallel_process_termination();
+    }
+
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        free((void *)F[m]);
+        free((void *)r[m]);
+        free((void *)z[m]);
+        free((void *)p[m]);
+        free((void *)q[m]);
+        free((void *)explicit_r[m]);
+        free((void *)div_u[m]);
+    }
+
+    *steps_max = count;
+    return(residual);
+}
+
 
 /* Solve compressible Stokes flow using
  * bi-conjugate gradient stablized (BiCG-stab) iterations
