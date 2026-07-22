@@ -739,10 +739,13 @@ void construct_stiffness_B_matrix(E)
     construct_elt_ks(E);
   }
 
-  build_diagonal_of_Ahat(E);
-
   if (E->control.NMULTIGRID || (E->control.NASSEMBLE && !E->control.CONJ_GRAD))
     rebuild_BI_on_boundary(E);
+
+  /* BPI approximates diag((D+C) K^-1 (D+C)^T) with BI.  Build it only after
+     the parallel-boundary BI correction so the pressure preconditioner does
+     not retain stale subdomain-interface velocity scaling. */
+  build_diagonal_of_Ahat(E);
 
 
   return;
@@ -827,5 +830,3 @@ void construct_mat_group(E)
 
   return;
 }
-
-

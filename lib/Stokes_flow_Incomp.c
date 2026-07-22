@@ -594,6 +594,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int restart_search;
     int hybrid_consecutive_count, hybrid_converged;
     int nonpositive_curvature_count;
+    int local_invalid_bpi, global_invalid_bpi;
 
     double alpha, beta, rho, rho_old, curvature;
     double min_curvature, sq_vdotv;
@@ -603,6 +604,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double initial_mass_norm, mass_norm, mass_relative_residual;
     double cancellation_l2;
     double inner_accuracy, inner_relative_accuracy;
+    double local_bpi_min, local_bpi_max;
+    double global_bpi_min, global_bpi_max;
     double time0;
 
     double *F[NCS];
@@ -625,6 +628,39 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
 
     time0 = CPU_time0();
     count = 0;
+
+    local_bpi_min = 1.0e300;
+    local_bpi_max = 0.0;
+    local_invalid_bpi = 0;
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(j=1; j<=npno; j++) {
+            if(!isfinite(E->BPI[lev][m][j]) || E->BPI[lev][m][j] <= 0.0)
+                local_invalid_bpi++;
+            else {
+                local_bpi_min = min(local_bpi_min, E->BPI[lev][m][j]);
+                local_bpi_max = max(local_bpi_max, E->BPI[lev][m][j]);
+            }
+        }
+    MPI_Allreduce(&local_bpi_min, &global_bpi_min, 1, MPI_DOUBLE, MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_bpi_max, &global_bpi_max, 1, MPI_DOUBLE, MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&local_invalid_bpi, &global_invalid_bpi, 1, MPI_INT, MPI_SUM,
+                  E->parallel.world);
+    if(E->parallel.me == 0) {
+        fprintf(E->fp,
+                "ALA PCG pressure preconditioner = %s "
+                "BPI_range=(%e,%e) invalid=%d\n",
+                E->control.precondition ? "on" : "off",
+                global_bpi_min, global_bpi_max, global_invalid_bpi);
+        fprintf(stderr,
+                "ALA PCG pressure preconditioner = %s "
+                "BPI_range=(%e,%e) invalid=%d\n",
+                E->control.precondition ? "on" : "off",
+                global_bpi_min, global_bpi_max, global_invalid_bpi);
+    }
+    if(global_invalid_bpi)
+        parallel_process_termination();
 
     for(m=1; m<=E->sphere.caps_per_proc; m++)
         for(j=0; j<neq; j++)

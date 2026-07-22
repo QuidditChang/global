@@ -602,31 +602,34 @@ void build_diagonal_of_Ahat(E)
     double assemble_dAhatp_entry();
 
     double BU;
-    int m,e,npno,neq,level;
+    int m,e,npno,level;
 
- for (level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+  /* Initialize every level and cap before honoring the off switch.  The old
+     early return initialized only the first level/cap and left the remaining
+     entries stale even though all strict-ALA Krylov paths read BPI. */
+  for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+      npno=E->lmesh.NPNO[level];
+      for(e=1;e<=npno;e++)
+        E->BPI[level][m][e]=1.0;
+    }
 
-   for (m=1;m<=E->sphere.caps_per_proc;m++)    {
-
-     npno = E->lmesh.NPNO[level];
-     neq=E->lmesh.NEQ[level];
-
-     for(e=1;e<=npno;e++)
-	E->BPI[level][m][e]=1.0;
-
-     if(!E->control.precondition)
-	return;
-
-     for(e=1;e<=npno;e++)  {
-	BU=assemble_dAhatp_entry(E,e,level,m);
-	if(BU != 0.0)
-	    E->BPI[level][m][e] = 1.0/BU;
-	else
-	    E->BPI[level][m][e] = 1.0;
-        }
-     }
-
+  if(!E->control.precondition)
     return;
+
+  for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+      npno=E->lmesh.NPNO[level];
+      for(e=1;e<=npno;e++) {
+        BU=assemble_dAhatp_entry(E,e,level,m);
+        if(BU != 0.0)
+          E->BPI[level][m][e]=1.0/BU;
+        else
+          E->BPI[level][m][e]=1.0;
+      }
+    }
+
+  return;
 }
 
 
