@@ -1025,12 +1025,26 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_inner_accuracy_max, fp);
     getDoubleProperty(properties, "ala_inner_accuracy_factor",
                       E->control.ala_inner_accuracy_factor, fp);
+    getIntProperty(properties, "ala_hybrid_convergence",
+                   E->control.ala_hybrid_convergence, fp);
+    getDoubleProperty(properties, "ala_div_v_tolerance",
+                      E->control.ala_div_v_tolerance, fp);
+    getDoubleProperty(properties, "ala_update_tolerance",
+                      E->control.ala_update_tolerance, fp);
+    getIntProperty(properties, "ala_consecutive_steps",
+                   E->control.ala_consecutive_steps, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
         myerror(E, "ala_schur_symmetry_tolerance must be positive");
     if(E->control.ala_inner_accuracy_max <= 0.0)
         myerror(E, "ala_inner_accuracy_max must be positive");
     if(E->control.ala_inner_accuracy_factor <= 0.0)
         myerror(E, "ala_inner_accuracy_factor must be positive");
+    if(E->control.ala_div_v_tolerance <= 0.0)
+        myerror(E, "ala_div_v_tolerance must be positive");
+    if(E->control.ala_update_tolerance <= 0.0)
+        myerror(E, "ala_update_tolerance must be positive");
+    if(E->control.ala_consecutive_steps < 1)
+        myerror(E, "ala_consecutive_steps must be at least one");
 
     if(E->control.inv_gruneisen != 0) {
         /* which compressible solver to use: "cg" or "bicg" */

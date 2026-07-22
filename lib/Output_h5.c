@@ -1712,6 +1712,14 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_inner_accuracy_max);
     status = set_attribute_double(input, "ala_inner_accuracy_factor",
                                   E->control.ala_inner_accuracy_factor);
+    status = set_attribute_int(input, "ala_hybrid_convergence",
+                               E->control.ala_hybrid_convergence);
+    status = set_attribute_double(input, "ala_div_v_tolerance",
+                                  E->control.ala_div_v_tolerance);
+    status = set_attribute_double(input, "ala_update_tolerance",
+                                  E->control.ala_update_tolerance);
+    status = set_attribute_int(input, "ala_consecutive_steps",
+                               E->control.ala_consecutive_steps);
 
     status = set_attribute_int(input, "mg_cycle", E->control.mg_cycle);
     status = set_attribute_int(input, "down_heavy", E->control.down_heavy);

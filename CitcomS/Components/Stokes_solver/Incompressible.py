@@ -114,6 +114,13 @@ class Incompressible(CitcomComponent):
                                             default=1.0e-4)
         ala_inner_accuracy_factor = prop.float("ala_inner_accuracy_factor",
                                                default=1.0e-2)
+        ala_hybrid_convergence = prop.bool("ala_hybrid_convergence",
+                                           default=False)
+        ala_div_v_tolerance = prop.float("ala_div_v_tolerance",
+                                         default=1.0e-7)
+        ala_update_tolerance = prop.float("ala_update_tolerance",
+                                          default=1.0e-3)
+        ala_consecutive_steps = prop.int("ala_consecutive_steps", default=3)
         uzawa = prop.str("uzawa", default="cg",
                          validator=prop.choice(["cg", "bicg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)

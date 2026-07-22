@@ -437,6 +437,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     int m, j, count, lev;
     int valid;
     int restart_search;
+    int hybrid_consecutive_count, hybrid_converged;
 
     double alpha, beta, omega,sq_vdotv;
     double r0dotrt, r1dotrt;
@@ -529,10 +530,13 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     max_symmetry_defect = 0.0;
     symmetry_sample_count = 0;
     nonpositive_curvature_count = 0;
+    hybrid_consecutive_count = 0;
+    hybrid_converged = 0;
 
     while( (count < *steps_max) &&
            ((E->control.ala_pressure_buoyancy &&
-             relative_residual >= E->control.tole_comp) ||
+             (relative_residual >= E->control.tole_comp &&
+              !hybrid_converged)) ||
             (!E->control.ala_pressure_buoyancy &&
              E->monitor.incompressibility >= E->control.tole_comp)) &&
            (E->control.ala_pressure_buoyancy ||
@@ -769,6 +773,19 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
         count++;
 
+        if(E->control.ala_pressure_buoyancy &&
+           E->control.ala_hybrid_convergence) {
+            if(E->monitor.incompressibility <
+                   E->control.ala_div_v_tolerance &&
+               dvelocity < E->control.ala_update_tolerance &&
+               dpressure < E->control.ala_update_tolerance)
+                hybrid_consecutive_count++;
+            else
+                hybrid_consecutive_count = 0;
+            if(hybrid_consecutive_count >= E->control.ala_consecutive_steps)
+                hybrid_converged = 1;
+        }
+
 	sq_vdotv = sqrt(E->monitor.vdotv);
 
         if(E->control.print_convergence && E->parallel.me==0) {
@@ -780,6 +797,15 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                         "recursive=%e drift=%e inner_rel=%e\n",
                         relative_residual, recursive_relative_residual,
                         drift_ratio, inner_relative_accuracy);
+            if(E->control.ala_pressure_buoyancy &&
+               E->control.ala_hybrid_convergence)
+                fprintf(E->fp,
+                        "ALA hybrid convergence streak = %d/%d "
+                        "limits: div/v<%e updates<%e\n",
+                        hybrid_consecutive_count,
+                        E->control.ala_consecutive_steps,
+                        E->control.ala_div_v_tolerance,
+                        E->control.ala_update_tolerance);
             if(E->control.ala_pressure_buoyancy &&
                E->control.ala_schur_symmetry_check) {
                 fprintf(E->fp,
@@ -848,17 +874,39 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                  nonpositive_curvature_count == 0) ? "PASS" : "FAIL");
     }
 
+    if(E->control.ala_pressure_buoyancy && E->parallel.me == 0 &&
+       (relative_residual < E->control.tole_comp || hybrid_converged)) {
+        if(relative_residual < E->control.tole_comp)
+            fprintf(E->fp,
+                    "Strict ALA BiCGStab converged by relative continuity: "
+                    "residual=%e tolerance=%e iterations=%d\n",
+                    relative_residual, E->control.tole_comp, count);
+        else
+            fprintf(E->fp,
+                    "Strict ALA BiCGStab converged by hybrid criterion: "
+                    "div/v=%e dv/v=%e dp/p=%e consecutive=%d iterations=%d\n",
+                    E->monitor.incompressibility, dvelocity, dpressure,
+                    hybrid_consecutive_count, count);
+        fflush(E->fp);
+    }
+
     if(E->control.ala_pressure_buoyancy &&
-       relative_residual >= E->control.tole_comp) {
+       relative_residual >= E->control.tole_comp && !hybrid_converged) {
         if(E->parallel.me == 0) {
             fprintf(stderr,
-                    "Strict ALA BiCGStab failed to reach relative continuity "
-                    "tolerance: residual=%e tolerance=%e iterations=%d\n",
-                    relative_residual, E->control.tole_comp, count);
+                    "Strict ALA BiCGStab failed both convergence criteria: "
+                    "relative=%e tolerance=%e hybrid_streak=%d/%d "
+                    "iterations=%d\n",
+                    relative_residual, E->control.tole_comp,
+                    hybrid_consecutive_count,
+                    E->control.ala_consecutive_steps, count);
             fprintf(E->fp,
-                    "Strict ALA BiCGStab failed to reach relative continuity "
-                    "tolerance: residual=%e tolerance=%e iterations=%d\n",
-                    relative_residual, E->control.tole_comp, count);
+                    "Strict ALA BiCGStab failed both convergence criteria: "
+                    "relative=%e tolerance=%e hybrid_streak=%d/%d "
+                    "iterations=%d\n",
+                    relative_residual, E->control.tole_comp,
+                    hybrid_consecutive_count,
+                    E->control.ala_consecutive_steps, count);
             fflush(E->fp);
         }
         parallel_process_termination();
