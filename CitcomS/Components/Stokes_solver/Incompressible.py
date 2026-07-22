@@ -129,6 +129,12 @@ class Incompressible(CitcomComponent):
             "ala_depth_diagnostic_interval", default=5)
         ala_depth_diagnostic_bins = prop.int("ala_depth_diagnostic_bins",
                                               default=8)
+        ala_coarse_residual_diagnostics = prop.bool(
+            "ala_coarse_residual_diagnostics", default=False)
+        ala_coarse_residual_interval = prop.int(
+            "ala_coarse_residual_interval", default=5)
+        ala_coarse_residual_levels = prop.int(
+            "ala_coarse_residual_levels", default=3)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",

@@ -1041,6 +1041,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_depth_diagnostic_interval, fp);
     getIntProperty(properties, "ala_depth_diagnostic_bins",
                    E->control.ala_depth_diagnostic_bins, fp);
+    getIntProperty(properties, "ala_coarse_residual_diagnostics",
+                   E->control.ala_coarse_residual_diagnostics, fp);
+    getIntProperty(properties, "ala_coarse_residual_interval",
+                   E->control.ala_coarse_residual_interval, fp);
+    getIntProperty(properties, "ala_coarse_residual_levels",
+                   E->control.ala_coarse_residual_levels, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1062,6 +1068,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_depth_diagnostic_bins < 1 ||
        E->control.ala_depth_diagnostic_bins > 128)
         myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
+    if(E->control.ala_coarse_residual_interval < 1)
+        myerror(E, "ala_coarse_residual_interval must be at least one");
+    if(E->control.ala_coarse_residual_levels < 1 ||
+       E->control.ala_coarse_residual_levels > 10)
+        myerror(E, "ala_coarse_residual_levels must be between 1 and 10");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
