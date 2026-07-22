@@ -55,6 +55,11 @@ static double initial_vel_residual(struct All_variables *E,
                                    double imp);
 static double incompressibility_residual(struct All_variables *E,
                                          double **V, double **r);
+static void strict_ala_continuity_metrics(struct All_variables *E,
+                                          double **V, double **r,
+                                          double **div_u, int lev,
+                                          double *mass_norm,
+                                          double *cancellation_l2);
 static double strict_ala_inner_relative_accuracy(struct All_variables *E,
                                                  double outer_relative_residual);
 static double strict_ala_inner_accuracy(struct All_variables *E,
@@ -83,6 +88,40 @@ void solve_constrained_flow_iterative(E)
     p_to_nodes(E,E->P,E->NP,E->mesh.levmax);
 
     return;
+}
+
+
+static void strict_ala_continuity_metrics(struct All_variables *E,
+                                          double **V, double **r,
+                                          double **div_u, int lev,
+                                          double *mass_norm,
+                                          double *cancellation_l2)
+{
+    int m, e, nel;
+    double volume, div_e, c_e, scale_e;
+    double local[2], global[2];
+    void assemble_div_u();
+
+    assemble_div_u(E, V, div_u, lev);
+    local[0] = 0.0;
+    local[1] = 0.0;
+    nel = E->lmesh.NEL[lev];
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=nel; e++) {
+            volume = E->eco[m][e].area;
+            if(volume <= 0.0)
+                continue;
+            div_e = div_u[m][e];
+            c_e = r[m][e] - div_e;
+            scale_e = fabs(div_e) + fabs(c_e);
+            local[0] += r[m][e] * r[m][e] / volume;
+            local[1] += scale_e * scale_e / volume;
+        }
+
+    MPI_Allreduce(local, global, 2, MPI_DOUBLE, MPI_SUM,
+                  E->parallel.world);
+    *mass_norm = sqrt(max(global[0], 0.0));
+    *cancellation_l2 = sqrt(global[0] / max(global[1], 1.0e-300));
 }
 
 void solve_constrained_flow_iterative_pseudo_surf(E)
@@ -443,6 +482,8 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     double r0dotrt, r1dotrt;
     double residual, dpressure, dvelocity;
     double initial_rnorm, relative_residual, rnorm;
+    double initial_mass_norm, mass_norm, mass_relative_residual;
+    double cancellation_l2;
     double recursive_rnorm, recursive_relative_residual, drift_ratio;
     double denominator, numerator, inner_accuracy;
     double inner_relative_accuracy, previous_inner_relative_accuracy;
@@ -453,7 +494,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     double *F[NCS];
     double *r1[NCS], *r2[NCS], *pt[NCS], *p1[NCS], *p2[NCS];
     double *rt[NCS], *v0[NCS], *s0[NCS], *st[NCS], *t0[NCS];
-    double *u0[NCS];
+    double *u0[NCS], *div_u[NCS];
     double *shuffle[NCS];
 
     double time0, v_res;
@@ -476,6 +517,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         s0[m] = (double *)malloc((npno+1)*sizeof(double));
         st[m] = (double *)malloc((npno+1)*sizeof(double));
         t0[m] = (double *)malloc((npno+1)*sizeof(double));
+        div_u[m] = (double *)malloc((npno+1)*sizeof(double));
 
         u0[m] = (double *)malloc(neq*sizeof(double));
     }
@@ -502,6 +544,17 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     residual = incompressibility_residual(E, V, r1);
     initial_rnorm = sqrt(global_pdot(E, r1, r1, lev));
     relative_residual = (initial_rnorm > 0.0) ? 1.0 : 0.0;
+    if(E->control.ala_pressure_buoyancy) {
+        strict_ala_continuity_metrics(E, V, r1, div_u, lev,
+                                      &initial_mass_norm, &cancellation_l2);
+        mass_norm = initial_mass_norm;
+        mass_relative_residual = (initial_mass_norm > 0.0) ? 1.0 : 0.0;
+    }
+    else {
+        initial_mass_norm = mass_norm = initial_rnorm;
+        mass_relative_residual = relative_residual;
+        cancellation_l2 = relative_residual;
+    }
 
 
     /* initial conjugate residual rt = r1 */
@@ -520,6 +573,12 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     if (E->control.print_convergence && E->parallel.me==0)  {
         print_convergence_progress(E, count, time0, sq_vdotv,
                                    dvelocity, dpressure);
+        if(E->control.ala_pressure_buoyancy)
+            fprintf(E->fp,
+                    "ALA continuity residuals: cancellation=%e "
+                    "mass_relative=%e algebraic_relative=%e\n",
+                    cancellation_l2, mass_relative_residual,
+                    relative_residual);
     }
 
 
@@ -535,8 +594,9 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
     while( (count < *steps_max) &&
            ((E->control.ala_pressure_buoyancy &&
-             (relative_residual >= E->control.tole_comp &&
-              !hybrid_converged)) ||
+             (cancellation_l2 >= E->control.tole_comp ||
+              (E->control.ala_hybrid_convergence &&
+               !hybrid_converged))) ||
             (!E->control.ala_pressure_buoyancy &&
              E->monitor.incompressibility >= E->control.tole_comp)) &&
            (E->control.ala_pressure_buoyancy ||
@@ -544,7 +604,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 
 
         inner_relative_accuracy = strict_ala_inner_relative_accuracy(
-            E, relative_residual);
+            E, mass_relative_residual);
         if(previous_inner_relative_accuracy > 0.0 &&
            fabs(inner_relative_accuracy - previous_inner_relative_accuracy)
              > 1.0e-12 * previous_inner_relative_accuracy) {
@@ -759,10 +819,16 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         rnorm = sqrt(global_pdot(E, t0, t0, lev));
         relative_residual = (initial_rnorm > 0.0)
             ? rnorm / initial_rnorm : 0.0;
+        if(E->control.ala_pressure_buoyancy) {
+            strict_ala_continuity_metrics(E, V, t0, div_u, lev,
+                                          &mass_norm, &cancellation_l2);
+            mass_relative_residual = (initial_mass_norm > 0.0)
+                ? mass_norm / initial_mass_norm : 0.0;
+        }
         drift_ratio = (relative_residual > 0.0)
             ? recursive_relative_residual / relative_residual : 1.0;
         if(E->control.ala_pressure_buoyancy)
-            residual = relative_residual;
+            residual = cancellation_l2;
 
         /* compute velocity and pressure corrections */
         dpressure = sqrt( global_pdot(E, s0, s0, lev)
@@ -793,8 +859,10 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                                        dvelocity, dpressure);
             if(E->control.ala_pressure_buoyancy)
                 fprintf(E->fp,
-                        "ALA BiCGStab relative continuity residual = %e "
-                        "recursive=%e drift=%e inner_rel=%e\n",
+                        "ALA continuity residuals: cancellation=%e "
+                        "mass_relative=%e algebraic_relative=%e "
+                        "recursive_algebraic=%e drift=%e inner_rel=%e\n",
+                        cancellation_l2, mass_relative_residual,
                         relative_residual, recursive_relative_residual,
                         drift_ratio, inner_relative_accuracy);
             if(E->control.ala_pressure_buoyancy &&
@@ -875,36 +943,35 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     }
 
     if(E->control.ala_pressure_buoyancy && E->parallel.me == 0 &&
-       (relative_residual < E->control.tole_comp || hybrid_converged)) {
-        if(relative_residual < E->control.tole_comp)
-            fprintf(E->fp,
-                    "Strict ALA BiCGStab converged by relative continuity: "
-                    "residual=%e tolerance=%e iterations=%d\n",
-                    relative_residual, E->control.tole_comp, count);
-        else
-            fprintf(E->fp,
-                    "Strict ALA BiCGStab converged by hybrid criterion: "
-                    "div/v=%e dv/v=%e dp/p=%e consecutive=%d iterations=%d\n",
-                    E->monitor.incompressibility, dvelocity, dpressure,
-                    hybrid_consecutive_count, count);
+       cancellation_l2 < E->control.tole_comp &&
+       (!E->control.ala_hybrid_convergence || hybrid_converged)) {
+        fprintf(E->fp,
+                "Strict ALA BiCGStab converged by physical continuity: "
+                "cancellation=%e tolerance=%e mass_relative=%e "
+                "algebraic_relative=%e iterations=%d\n",
+                cancellation_l2, E->control.tole_comp,
+                mass_relative_residual, relative_residual, count);
         fflush(E->fp);
     }
 
     if(E->control.ala_pressure_buoyancy &&
-       relative_residual >= E->control.tole_comp && !hybrid_converged) {
+       (cancellation_l2 >= E->control.tole_comp ||
+        (E->control.ala_hybrid_convergence && !hybrid_converged))) {
         if(E->parallel.me == 0) {
             fprintf(stderr,
-                    "Strict ALA BiCGStab failed both convergence criteria: "
-                    "relative=%e tolerance=%e hybrid_streak=%d/%d "
-                    "iterations=%d\n",
-                    relative_residual, E->control.tole_comp,
+                    "Strict ALA BiCGStab failed physical continuity: "
+                    "cancellation=%e tolerance=%e mass_relative=%e "
+                    "algebraic_relative=%e hybrid_streak=%d/%d iterations=%d\n",
+                    cancellation_l2, E->control.tole_comp,
+                    mass_relative_residual, relative_residual,
                     hybrid_consecutive_count,
                     E->control.ala_consecutive_steps, count);
             fprintf(E->fp,
-                    "Strict ALA BiCGStab failed both convergence criteria: "
-                    "relative=%e tolerance=%e hybrid_streak=%d/%d "
-                    "iterations=%d\n",
-                    relative_residual, E->control.tole_comp,
+                    "Strict ALA BiCGStab failed physical continuity: "
+                    "cancellation=%e tolerance=%e mass_relative=%e "
+                    "algebraic_relative=%e hybrid_streak=%d/%d iterations=%d\n",
+                    cancellation_l2, E->control.tole_comp,
+                    mass_relative_residual, relative_residual,
                     hybrid_consecutive_count,
                     E->control.ala_consecutive_steps, count);
             fflush(E->fp);
@@ -925,6 +992,7 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
         free((void *) s0[m]);
         free((void *) st[m]);
         free((void *) t0[m]);
+        free((void *) div_u[m]);
 
         free((void *) u0[m]);
     }
