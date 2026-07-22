@@ -1039,6 +1039,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_depth_diagnostic_interval, fp);
     getIntProperty(properties, "ala_depth_diagnostic_bins",
                    E->control.ala_depth_diagnostic_bins, fp);
+    getIntProperty(properties, "ala_radial_line_preconditioner",
+                   E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
         myerror(E, "ala_schur_symmetry_tolerance must be positive");
     if(E->control.ala_inner_accuracy_max <= 0.0)
@@ -1082,6 +1084,13 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         else
             myerror(E, "Error: unknown Uzawa iteration");
     }
+    if(E->control.ala_radial_line_preconditioner &&
+       (!E->control.precondition ||
+        !E->control.ala_pressure_buoyancy ||
+        strcmp(E->control.uzawa,"ala_cg") != 0))
+        myerror(E,
+                "ala_radial_line_preconditioner requires precond=on, "
+                "compressible_formulation=ala, and uzawa=ala_cg");
 
     PUTS(("\n"));
 

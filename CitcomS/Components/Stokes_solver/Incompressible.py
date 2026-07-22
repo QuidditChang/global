@@ -127,6 +127,8 @@ class Incompressible(CitcomComponent):
             "ala_depth_diagnostic_interval", default=5)
         ala_depth_diagnostic_bins = prop.int("ala_depth_diagnostic_bins",
                                               default=8)
+        ala_radial_line_preconditioner = prop.bool(
+            "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",
                          validator=prop.choice(["cg", "bicg", "ala_cg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)

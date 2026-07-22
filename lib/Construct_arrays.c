@@ -723,6 +723,7 @@ void construct_stiffness_B_matrix(E)
 {
   void build_diagonal_of_K();
   void build_diagonal_of_Ahat();
+  void build_radial_line_Ahat_preconditioner();
   void project_viscosity();
   void construct_node_maps();
   void construct_node_ks();
@@ -743,6 +744,8 @@ void construct_stiffness_B_matrix(E)
      subsequent offside-node BI reconstruction can contain nonpositive ghost
      entries and is only for the velocity multigrid path. */
   build_diagonal_of_Ahat(E);
+  if(E->control.ala_radial_line_preconditioner)
+    build_radial_line_Ahat_preconditioner(E);
 
   if (E->control.NMULTIGRID || (E->control.NASSEMBLE && !E->control.CONJ_GRAD))
     rebuild_BI_on_boundary(E);

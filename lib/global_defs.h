@@ -480,6 +480,7 @@ struct CONTROL {
     int ala_depth_diagnostics;
     int ala_depth_diagnostic_interval;
     int ala_depth_diagnostic_bins;
+    int ala_radial_line_preconditioner;
 
     /* surface temperature */
     float surface_temp;
@@ -802,6 +803,9 @@ struct All_variables {
     int *Node_k_id[MAX_LEVELS][NCS];
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
+    double *ALA_BPI_line_diag[MAX_LEVELS][NCS];
+    double *ALA_BPI_line_lower[MAX_LEVELS][NCS];
+    unsigned char *ALA_BPI_line_valid[MAX_LEVELS][NCS];
 
     double *rho;
     double *heating_adi[NCS];

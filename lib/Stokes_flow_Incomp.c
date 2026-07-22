@@ -71,6 +71,54 @@ static double strict_ala_inner_relative_accuracy(struct All_variables *E,
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
+static void apply_ala_pressure_preconditioner(struct All_variables *E,
+                                              double **r, double **z,
+                                              double **work, int lev);
+
+
+static void apply_ala_pressure_preconditioner(struct All_variables *E,
+                                              double **r, double **z,
+                                              double **work, int lev)
+{
+    int m,j,col,k,e,elz,ncolumns,npno;
+
+    npno=E->lmesh.NPNO[lev];
+    if(!E->control.ala_radial_line_preconditioner) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++)
+                z[m][j]=E->BPI[lev][m][j]*r[m][j];
+        return;
+    }
+
+    elz=E->lmesh.ELZ[lev];
+    ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(col=0;col<ncolumns;col++) {
+            if(!E->ALA_BPI_line_valid[lev][m][col+1]) {
+                for(k=0;k<elz;k++) {
+                    e=col*elz+k+1;
+                    z[m][e]=E->BPI[lev][m][e]*r[m][e];
+                }
+                continue;
+            }
+
+            e=col*elz+1;
+            work[m][e]=r[m][e];
+            for(k=1;k<elz;k++) {
+                e=col*elz+k+1;
+                work[m][e]=r[m][e]-
+                    E->ALA_BPI_line_lower[lev][m][e]*work[m][e-1];
+            }
+            for(k=0;k<elz;k++) {
+                e=col*elz+k+1;
+                z[m][e]=work[m][e]/E->ALA_BPI_line_diag[lev][m][e];
+            }
+            for(k=elz-2;k>=0;k--) {
+                e=col*elz+k+1;
+                z[m][e]-=E->ALA_BPI_line_lower[lev][m][e+1]*z[m][e+1];
+            }
+        }
+}
 
 
 /* Master loop for pressure and (hence) velocity field */
@@ -611,6 +659,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double *F[NCS];
     double *r[NCS], *z[NCS], *p[NCS], *q[NCS];
     double *explicit_r[NCS], *div_u[NCS];
+    double *preconditioner_work[NCS];
 
     npno = E->lmesh.npno;
     neq = E->lmesh.neq;
@@ -624,6 +673,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         q[m] = (double *)malloc((npno+1)*sizeof(double));
         explicit_r[m] = (double *)malloc((npno+1)*sizeof(double));
         div_u[m] = (double *)malloc((npno+1)*sizeof(double));
+        preconditioner_work[m] =
+            (double *)malloc((npno+1)*sizeof(double));
     }
 
     time0 = CPU_time0();
@@ -649,14 +700,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                   E->parallel.world);
     if(E->parallel.me == 0) {
         fprintf(E->fp,
-                "ALA PCG pressure preconditioner = %s "
+                "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d\n",
                 E->control.precondition ? "on" : "off",
+                E->control.ala_radial_line_preconditioner
+                    ? "radial_line" : "diagonal",
                 global_bpi_min, global_bpi_max, global_invalid_bpi);
         fprintf(stderr,
-                "ALA PCG pressure preconditioner = %s "
+                "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d\n",
                 E->control.precondition ? "on" : "off",
+                E->control.ala_radial_line_preconditioner
+                    ? "radial_line" : "diagonal",
                 global_bpi_min, global_bpi_max, global_invalid_bpi);
     }
     if(global_invalid_bpi)
@@ -707,9 +762,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
           (cancellation_l2 >= E->control.tole_comp ||
            (E->control.ala_hybrid_convergence && !hybrid_converged))) {
 
-        for(m=1; m<=E->sphere.caps_per_proc; m++)
-            for(j=1; j<=npno; j++)
-                z[m][j] = E->BPI[lev][m][j] * r[m][j];
+        apply_ala_pressure_preconditioner(
+            E,r,z,preconditioner_work,lev);
 
         rho = global_pdot(E, r, z, lev);
         if(!isfinite(rho) || rho <= 1.0e-300) {
@@ -927,6 +981,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         free((void *)q[m]);
         free((void *)explicit_r[m]);
         free((void *)div_u[m]);
+        free((void *)preconditioner_work[m]);
     }
 
     *steps_max = count;

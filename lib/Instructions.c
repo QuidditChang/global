@@ -531,6 +531,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_depth_diagnostic_interval),"5",m);
   input_int("ala_depth_diagnostic_bins",
             &(E->control.ala_depth_diagnostic_bins),"8",m);
+  input_boolean("ala_radial_line_preconditioner",
+                &(E->control.ala_radial_line_preconditioner),"off",m);
 
   if(E->control.ala_schur_symmetry_tolerance <= 0.0)
       myerror(E, "ala_schur_symmetry_tolerance must be positive");
@@ -576,6 +578,13 @@ void read_initial_settings(struct All_variables *E)
       else
           myerror(E, "Error: unknown Uzawa iteration\n");
   }
+  if(E->control.ala_radial_line_preconditioner &&
+     (!E->control.precondition ||
+      !E->control.ala_pressure_buoyancy ||
+      strcmp(E->control.uzawa,"ala_cg") != 0))
+      myerror(E,
+              "ala_radial_line_preconditioner requires precond=on, "
+              "compressible_formulation=ala, and uzawa=ala_cg");
 
   /* Deprecated compatibility input.  Explicit Ttop/Tbottom are read below. */
   input_float("surfaceT",&(E->control.surface_temp),"-1.0",m);
@@ -858,6 +867,12 @@ void allocate_common_vars(E)
 
     E->EVI[i][j] = (float *) malloc((nel+1)*vpoints[E->mesh.nsd]*sizeof(float));
     E->BPI[i][j] = (double *) malloc((npno+1)*sizeof(double));
+    E->ALA_BPI_line_diag[i][j] =
+        (double *) malloc((npno+1)*sizeof(double));
+    E->ALA_BPI_line_lower[i][j] =
+        (double *) malloc((npno+1)*sizeof(double));
+    E->ALA_BPI_line_valid[i][j] =
+        (unsigned char *) malloc((elx*ely+1)*sizeof(unsigned char));
 
     E->ID[i][j]  = (struct ID *)    malloc((nno+1)*sizeof(struct ID));
     E->VI[i][j]  = (float *)        malloc((nno+1)*sizeof(float));
@@ -1037,6 +1052,7 @@ void global_default_values(E)
     E->control.ala_depth_diagnostics = 0;
     E->control.ala_depth_diagnostic_interval = 5;
     E->control.ala_depth_diagnostic_bins = 8;
+    E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;
 
