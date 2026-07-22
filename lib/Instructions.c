@@ -533,6 +533,12 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_depth_diagnostic_interval),"5",m);
   input_int("ala_depth_diagnostic_bins",
             &(E->control.ala_depth_diagnostic_bins),"8",m);
+  input_boolean("ala_coarse_residual_diagnostics",
+                &(E->control.ala_coarse_residual_diagnostics),"off",m);
+  input_int("ala_coarse_residual_interval",
+            &(E->control.ala_coarse_residual_interval),"5",m);
+  input_int("ala_coarse_residual_levels",
+            &(E->control.ala_coarse_residual_levels),"3",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
 
@@ -555,6 +561,11 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_depth_diagnostic_bins < 1 ||
      E->control.ala_depth_diagnostic_bins > 128)
       myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
+  if(E->control.ala_coarse_residual_interval < 1)
+      myerror(E, "ala_coarse_residual_interval must be at least one");
+  if(E->control.ala_coarse_residual_levels < 1 ||
+     E->control.ala_coarse_residual_levels > 10)
+      myerror(E, "ala_coarse_residual_levels must be between 1 and 10");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1057,6 +1068,9 @@ void global_default_values(E)
     E->control.ala_depth_diagnostics = 0;
     E->control.ala_depth_diagnostic_interval = 5;
     E->control.ala_depth_diagnostic_bins = 8;
+    E->control.ala_coarse_residual_diagnostics = 0;
+    E->control.ala_coarse_residual_interval = 5;
+    E->control.ala_coarse_residual_levels = 3;
     E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;

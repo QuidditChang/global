@@ -66,6 +66,8 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
 static void strict_ala_depth_diagnostics(struct All_variables *E,
                                          double **r, double **div_u,
                                          int lev, int iteration);
+static void strict_ala_coarse_residual_diagnostics(
+    struct All_variables *E, double **r, int lev, int iteration);
 static double strict_ala_inner_relative_accuracy(struct All_variables *E,
                                                  double outer_relative_residual);
 static double strict_ala_inner_accuracy(struct All_variables *E,
@@ -286,6 +288,105 @@ static void strict_ala_depth_diagnostics(struct All_variables *E,
 
     free((void *)local);
     free((void *)global);
+}
+
+
+static void strict_ala_coarse_residual_diagnostics(
+    struct All_variables *E, double **r, int lev, int iteration)
+{
+    int m, e, ex, ey, ez, offset, factor;
+    int elx, ely, elz, parent_elx, parent_ely, parent_elz, parent_nel;
+    int parent_ex, parent_ey, parent_e;
+    double volume, fine_energy, coarse_energy, coarse_fraction;
+    double local_fine_energy, global_fine_energy;
+    double local_coarse_energy, global_coarse_energy;
+    double *parent_r, *parent_volume;
+
+    if(!E->control.ala_coarse_residual_diagnostics)
+        return;
+    if(iteration != 0 &&
+       (iteration % E->control.ala_coarse_residual_interval) != 0)
+        return;
+
+    elx = E->lmesh.ELX[lev];
+    ely = E->lmesh.ELY[lev];
+    elz = E->lmesh.ELZ[lev];
+    local_fine_energy = 0.0;
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=E->lmesh.NEL[lev]; e++) {
+            volume = E->eco[m][e].area;
+            if(volume > 0.0)
+                local_fine_energy += r[m][e] * r[m][e] / volume;
+        }
+    MPI_Allreduce(&local_fine_energy, &global_fine_energy, 1, MPI_DOUBLE,
+                  MPI_SUM, E->parallel.world);
+
+    if(E->parallel.me == 0)
+        fprintf(E->fp,
+                "ALA_COARSE_RESIDUAL iteration=%d solver=%s fine_energy=%e\n",
+                iteration, E->control.uzawa, global_fine_energy);
+
+    factor = 1;
+    for(offset=1; offset<=E->control.ala_coarse_residual_levels; offset++) {
+        factor *= 2;
+        if(elx % factor || ely % factor || elz % factor)
+            myerror(E, "ALA coarse residual levels require locally divisible "
+                    "element dimensions");
+
+        parent_elx = elx / factor;
+        parent_ely = ely / factor;
+        parent_elz = elz / factor;
+        parent_nel = parent_elx * parent_ely * parent_elz;
+        parent_r = (double *)calloc(parent_nel, sizeof(double));
+        parent_volume = (double *)calloc(parent_nel, sizeof(double));
+        if(parent_r == NULL || parent_volume == NULL)
+            myerror(E, "Unable to allocate ALA coarse residual diagnostics");
+
+        local_coarse_energy = 0.0;
+        for(m=1; m<=E->sphere.caps_per_proc; m++) {
+            memset(parent_r, 0, parent_nel * sizeof(double));
+            memset(parent_volume, 0, parent_nel * sizeof(double));
+            for(ey=1; ey<=ely; ey++)
+                for(ex=1; ex<=elx; ex++)
+                    for(ez=1; ez<=elz; ez++) {
+                        e = ez + (ex-1)*elz + (ey-1)*elz*elx;
+                        volume = E->eco[m][e].area;
+                        if(volume <= 0.0)
+                            continue;
+                        parent_ex = (ex-1) / factor;
+                        parent_ey = (ey-1) / factor;
+                        parent_e = (ez-1) / factor
+                            + parent_ex*parent_elz
+                            + parent_ey*parent_elz*parent_elx;
+                        parent_r[parent_e] += r[m][e];
+                        parent_volume[parent_e] += volume;
+                    }
+            for(parent_e=0; parent_e<parent_nel; parent_e++)
+                if(parent_volume[parent_e] > 0.0)
+                    local_coarse_energy += parent_r[parent_e]
+                        * parent_r[parent_e] / parent_volume[parent_e];
+        }
+        MPI_Allreduce(&local_coarse_energy, &global_coarse_energy, 1,
+                      MPI_DOUBLE, MPI_SUM, E->parallel.world);
+
+        fine_energy = max(global_fine_energy, 0.0);
+        coarse_energy = max(global_coarse_energy, 0.0);
+        coarse_fraction = (fine_energy > 0.0)
+            ? coarse_energy / fine_energy : 0.0;
+        if(coarse_fraction < -1.0e-12 || coarse_fraction > 1.0+1.0e-12)
+            myerror(E, "ALA coarse residual fraction is outside [0,1]");
+        coarse_fraction = min(max(coarse_fraction, 0.0), 1.0);
+        if(E->parallel.me == 0)
+            fprintf(E->fp,
+                    "ALA_COARSE_LEVEL offset=%d coarse_fraction=%e "
+                    "coarse_energy=%e\n",
+                    offset, coarse_fraction, coarse_energy);
+
+        free((void *)parent_r);
+        free((void *)parent_volume);
+    }
+    if(E->parallel.me == 0)
+        fflush(E->fp);
 }
 
 void solve_constrained_flow_iterative_pseudo_surf(E)
@@ -749,6 +850,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 relative_residual);
     }
     strict_ala_depth_diagnostics(E, r, div_u, lev, count);
+    strict_ala_coarse_residual_diagnostics(E, r, lev, count);
 
     /* A fixed inner target keeps the approximate Schur operator as
      * stationary as the RHS-relative multigrid stopping rule permits. */
@@ -905,6 +1007,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                         E->control.ala_update_tolerance);
         }
         strict_ala_depth_diagnostics(E, explicit_r, div_u, lev, count);
+        strict_ala_coarse_residual_diagnostics(E, explicit_r, lev, count);
 
         rho_old = rho;
 

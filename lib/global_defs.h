@@ -481,6 +481,9 @@ struct CONTROL {
     int ala_depth_diagnostics;
     int ala_depth_diagnostic_interval;
     int ala_depth_diagnostic_bins;
+    int ala_coarse_residual_diagnostics;
+    int ala_coarse_residual_interval;
+    int ala_coarse_residual_levels;
     int ala_radial_line_preconditioner;
 
     /* surface temperature */
