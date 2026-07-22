@@ -517,6 +517,8 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_inner_accuracy_max),"1.0e-4",m);
   input_double("ala_inner_accuracy_factor",
                &(E->control.ala_inner_accuracy_factor),"1.0e-2",m);
+  input_int("ala_pcg_restart_interval",
+            &(E->control.ala_pcg_restart_interval),"20",m);
   input_boolean("ala_hybrid_convergence",
                 &(E->control.ala_hybrid_convergence),"off",m);
   input_double("ala_div_v_tolerance",
@@ -540,6 +542,8 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_inner_accuracy_max must be positive");
   if(E->control.ala_inner_accuracy_factor <= 0.0)
       myerror(E, "ala_inner_accuracy_factor must be positive");
+  if(E->control.ala_pcg_restart_interval < 1)
+      myerror(E, "ala_pcg_restart_interval must be at least one");
   if(E->control.ala_div_v_tolerance <= 0.0)
       myerror(E, "ala_div_v_tolerance must be positive");
   if(E->control.ala_update_tolerance <= 0.0)
@@ -1045,6 +1049,7 @@ void global_default_values(E)
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;
     E->control.ala_inner_accuracy_max = 1.0e-4;
     E->control.ala_inner_accuracy_factor = 1.0e-2;
+    E->control.ala_pcg_restart_interval = 20;
     E->control.ala_hybrid_convergence = 0;
     E->control.ala_div_v_tolerance = 1.0e-7;
     E->control.ala_update_tolerance = 1.0e-3;

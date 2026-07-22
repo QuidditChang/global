@@ -114,6 +114,8 @@ class Incompressible(CitcomComponent):
                                             default=1.0e-4)
         ala_inner_accuracy_factor = prop.float("ala_inner_accuracy_factor",
                                                default=1.0e-2)
+        ala_pcg_restart_interval = prop.int("ala_pcg_restart_interval",
+                                            default=20)
         ala_hybrid_convergence = prop.bool("ala_hybrid_convergence",
                                            default=False)
         ala_div_v_tolerance = prop.float("ala_div_v_tolerance",

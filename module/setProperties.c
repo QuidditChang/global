@@ -1025,6 +1025,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_inner_accuracy_max, fp);
     getDoubleProperty(properties, "ala_inner_accuracy_factor",
                       E->control.ala_inner_accuracy_factor, fp);
+    getIntProperty(properties, "ala_pcg_restart_interval",
+                   E->control.ala_pcg_restart_interval, fp);
     getIntProperty(properties, "ala_hybrid_convergence",
                    E->control.ala_hybrid_convergence, fp);
     getDoubleProperty(properties, "ala_div_v_tolerance",
@@ -1047,6 +1049,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_inner_accuracy_max must be positive");
     if(E->control.ala_inner_accuracy_factor <= 0.0)
         myerror(E, "ala_inner_accuracy_factor must be positive");
+    if(E->control.ala_pcg_restart_interval < 1)
+        myerror(E, "ala_pcg_restart_interval must be at least one");
     if(E->control.ala_div_v_tolerance <= 0.0)
         myerror(E, "ala_div_v_tolerance must be positive");
     if(E->control.ala_update_tolerance <= 0.0)

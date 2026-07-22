@@ -701,18 +701,20 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(E->parallel.me == 0) {
         fprintf(E->fp,
                 "ALA PCG pressure preconditioner = %s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d\n",
+                "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_radial_line_preconditioner
                     ? "radial_line" : "diagonal",
-                global_bpi_min, global_bpi_max, global_invalid_bpi);
+                global_bpi_min, global_bpi_max, global_invalid_bpi,
+                E->control.ala_pcg_restart_interval);
         fprintf(stderr,
                 "ALA PCG pressure preconditioner = %s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d\n",
+                "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_radial_line_preconditioner
                     ? "radial_line" : "diagonal",
-                global_bpi_min, global_bpi_max, global_invalid_bpi);
+                global_bpi_min, global_bpi_max, global_invalid_bpi,
+                E->control.ala_pcg_restart_interval);
     }
     if(global_invalid_bpi)
         parallel_process_termination();
@@ -908,7 +910,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
 
         /* Explicit replacement protects a long inexact PCG run from residual
          * drift.  Replacement also restarts the conjugate direction. */
-        if((count % 20) == 0 || drift_ratio > 10.0 || drift_ratio < 0.1) {
+        if((count % E->control.ala_pcg_restart_interval) == 0 ||
+           drift_ratio > 10.0 || drift_ratio < 0.1) {
             for(m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++)
                     r[m][j] = explicit_r[m][j];

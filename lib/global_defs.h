@@ -473,6 +473,7 @@ struct CONTROL {
     double ala_schur_symmetry_tolerance;
     double ala_inner_accuracy_max;
     double ala_inner_accuracy_factor;
+    int ala_pcg_restart_interval;
     int ala_hybrid_convergence;
     double ala_div_v_tolerance;
     double ala_update_tolerance;
