@@ -729,6 +729,7 @@ void construct_stiffness_B_matrix(E)
   void construct_node_ks();
   void construct_elt_ks();
   void rebuild_BI_on_boundary();
+  int lev,m,j;
 
   if (E->control.NMULTIGRID)
     project_viscosity(E);
@@ -739,6 +740,14 @@ void construct_stiffness_B_matrix(E)
   else {
     construct_elt_ks(E);
   }
+
+  /* Preserve the positive assembled inverse velocity diagonal before the
+     multigrid boundary reconstruction mutates BI ghost entries.  The strict
+     ALA coarse pressure operator needs this fixed SPD diagonal. */
+  for(lev=E->mesh.gridmin;lev<=E->mesh.gridmax;lev++)
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+      for(j=0;j<E->lmesh.NEQ[lev];j++)
+        E->ALA_velocity_BI[lev][m][j]=E->BI[lev][m][j];
 
   /* BPI requires the positive assembled Jacobi inverse built above.  The
      subsequent offside-node BI reconstruction can contain nonpositive ghost

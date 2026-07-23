@@ -135,6 +135,13 @@ class Incompressible(CitcomComponent):
             "ala_coarse_residual_interval", default=5)
         ala_coarse_residual_levels = prop.int(
             "ala_coarse_residual_levels", default=3)
+        ala_two_level_preconditioner = prop.bool(
+            "ala_two_level_preconditioner", default=False)
+        ala_two_level_offset = prop.int("ala_two_level_offset", default=2)
+        ala_two_level_coarse_iterations = prop.int(
+            "ala_two_level_coarse_iterations", default=8)
+        ala_two_level_coarse_damping = prop.float(
+            "ala_two_level_coarse_damping", default=0.03)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",

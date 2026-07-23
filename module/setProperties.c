@@ -1047,6 +1047,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coarse_residual_interval, fp);
     getIntProperty(properties, "ala_coarse_residual_levels",
                    E->control.ala_coarse_residual_levels, fp);
+    getIntProperty(properties, "ala_two_level_preconditioner",
+                   E->control.ala_two_level_preconditioner, fp);
+    getIntProperty(properties, "ala_two_level_offset",
+                   E->control.ala_two_level_offset, fp);
+    getIntProperty(properties, "ala_two_level_coarse_iterations",
+                   E->control.ala_two_level_coarse_iterations, fp);
+    getDoubleProperty(properties, "ala_two_level_coarse_damping",
+                      E->control.ala_two_level_coarse_damping, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1073,6 +1081,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_coarse_residual_levels < 1 ||
        E->control.ala_coarse_residual_levels > 10)
         myerror(E, "ala_coarse_residual_levels must be between 1 and 10");
+    if(E->control.ala_two_level_offset < 1 ||
+       E->control.ala_two_level_offset > 10)
+        myerror(E, "ala_two_level_offset must be between 1 and 10");
+    if(E->control.ala_two_level_coarse_iterations < 1)
+        myerror(E, "ala_two_level_coarse_iterations must be at least one");
+    if(E->control.ala_two_level_coarse_damping <= 0.0 ||
+       E->control.ala_two_level_coarse_damping >= 2.0/27.0)
+        myerror(E, "ala_two_level_coarse_damping must be in (0,2/27)");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
@@ -1106,6 +1122,17 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E,
                 "ala_radial_line_preconditioner requires precond=on, "
                 "compressible_formulation=ala, and uzawa=ala_cg");
+    if(E->control.ala_two_level_preconditioner &&
+       (!E->control.precondition ||
+        !E->control.ala_pressure_buoyancy ||
+        strcmp(E->control.uzawa,"ala_cg") != 0))
+        myerror(E,
+                "ala_two_level_preconditioner requires precond=on, "
+                "compressible_formulation=ala, and uzawa=ala_cg");
+    if(E->control.ala_two_level_preconditioner &&
+       E->control.ala_radial_line_preconditioner)
+        myerror(E, "ALA two-level and radial-line preconditioners are "
+                "mutually exclusive");
 
     PUTS(("\n"));
 

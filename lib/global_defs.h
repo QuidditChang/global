@@ -484,6 +484,10 @@ struct CONTROL {
     int ala_coarse_residual_diagnostics;
     int ala_coarse_residual_interval;
     int ala_coarse_residual_levels;
+    int ala_two_level_preconditioner;
+    int ala_two_level_offset;
+    int ala_two_level_coarse_iterations;
+    double ala_two_level_coarse_damping;
     int ala_radial_line_preconditioner;
 
     /* surface temperature */
@@ -807,6 +811,7 @@ struct All_variables {
     int *Node_k_id[MAX_LEVELS][NCS];
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
+    double *ALA_velocity_BI[MAX_LEVELS][NCS];
     double *ALA_BPI_line_diag[MAX_LEVELS][NCS];
     double *ALA_BPI_line_lower[MAX_LEVELS][NCS];
     unsigned char *ALA_BPI_line_valid[MAX_LEVELS][NCS];

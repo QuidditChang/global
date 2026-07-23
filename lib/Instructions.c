@@ -539,6 +539,14 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coarse_residual_interval),"5",m);
   input_int("ala_coarse_residual_levels",
             &(E->control.ala_coarse_residual_levels),"3",m);
+  input_boolean("ala_two_level_preconditioner",
+                &(E->control.ala_two_level_preconditioner),"off",m);
+  input_int("ala_two_level_offset",
+            &(E->control.ala_two_level_offset),"2",m);
+  input_int("ala_two_level_coarse_iterations",
+            &(E->control.ala_two_level_coarse_iterations),"8",m);
+  input_double("ala_two_level_coarse_damping",
+               &(E->control.ala_two_level_coarse_damping),"0.03",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
 
@@ -566,6 +574,14 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_coarse_residual_levels < 1 ||
      E->control.ala_coarse_residual_levels > 10)
       myerror(E, "ala_coarse_residual_levels must be between 1 and 10");
+  if(E->control.ala_two_level_offset < 1 ||
+     E->control.ala_two_level_offset > 10)
+      myerror(E, "ala_two_level_offset must be between 1 and 10");
+  if(E->control.ala_two_level_coarse_iterations < 1)
+      myerror(E, "ala_two_level_coarse_iterations must be at least one");
+  if(E->control.ala_two_level_coarse_damping <= 0.0 ||
+     E->control.ala_two_level_coarse_damping >= 2.0/27.0)
+      myerror(E, "ala_two_level_coarse_damping must be in (0,2/27)");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -600,6 +616,17 @@ void read_initial_settings(struct All_variables *E)
       myerror(E,
               "ala_radial_line_preconditioner requires precond=on, "
               "compressible_formulation=ala, and uzawa=ala_cg");
+  if(E->control.ala_two_level_preconditioner &&
+     (!E->control.precondition ||
+      !E->control.ala_pressure_buoyancy ||
+      strcmp(E->control.uzawa,"ala_cg") != 0))
+      myerror(E,
+              "ala_two_level_preconditioner requires precond=on, "
+              "compressible_formulation=ala, and uzawa=ala_cg");
+  if(E->control.ala_two_level_preconditioner &&
+     E->control.ala_radial_line_preconditioner)
+      myerror(E, "ALA two-level and radial-line preconditioners are "
+              "mutually exclusive");
 
   /* Deprecated compatibility input.  Explicit Ttop/Tbottom are read below. */
   input_float("surfaceT",&(E->control.surface_temp),"-1.0",m);
@@ -1013,6 +1040,8 @@ void allocate_velocity_vars(E)
       E->lmesh.NEQ[l] = E->lmesh.NNOV[l] * E->mesh.nsd;
 
       E->BI[l][j] = (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
+      E->ALA_velocity_BI[l][j] =
+          (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
       k = (E->lmesh.NOX[l]*E->lmesh.NOZ[l]+E->lmesh.NOX[l]*E->lmesh.NOY[l]+
           E->lmesh.NOY[l]*E->lmesh.NOZ[l])*6;
       E->zero_resid[l][j] = (int *) malloc((k+2)*sizeof(int));
@@ -1020,6 +1049,7 @@ void allocate_velocity_vars(E)
 
       for(i=0;i<E->lmesh.NEQ[l];i++) {
          E->BI[l][j][i]=0.0;
+         E->ALA_velocity_BI[l][j][i]=0.0;
          }
 
       }   /* end for j & l */
@@ -1071,6 +1101,10 @@ void global_default_values(E)
     E->control.ala_coarse_residual_diagnostics = 0;
     E->control.ala_coarse_residual_interval = 5;
     E->control.ala_coarse_residual_levels = 3;
+    E->control.ala_two_level_preconditioner = 0;
+    E->control.ala_two_level_offset = 2;
+    E->control.ala_two_level_coarse_iterations = 8;
+    E->control.ala_two_level_coarse_damping = 0.03;
     E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;
