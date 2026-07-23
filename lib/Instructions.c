@@ -553,6 +553,8 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_two_level_coarse_eigenvalue_min),"0.01",m);
   input_double("ala_two_level_coarse_eigenvalue_max",
                &(E->control.ala_two_level_coarse_eigenvalue_max),"27.0",m);
+  input_double("ala_two_level_coarse_weight",
+               &(E->control.ala_two_level_coarse_weight),"0.1",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
 
@@ -595,6 +597,9 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_two_level_coarse_eigenvalue_max <=
        E->control.ala_two_level_coarse_eigenvalue_min)
       myerror(E, "ALA two-level Chebyshev eigenvalue interval is invalid");
+  if(E->control.ala_two_level_coarse_weight <= 0.0 ||
+     E->control.ala_two_level_coarse_weight > 1.0)
+      myerror(E, "ala_two_level_coarse_weight must be in (0,1]");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1121,6 +1126,7 @@ void global_default_values(E)
     strcpy(E->control.ala_two_level_coarse_solver,"chebyshev");
     E->control.ala_two_level_coarse_eigenvalue_min = 0.01;
     E->control.ala_two_level_coarse_eigenvalue_max = 27.0;
+    E->control.ala_two_level_coarse_weight = 0.1;
     E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;

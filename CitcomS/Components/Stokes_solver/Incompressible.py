@@ -149,6 +149,8 @@ class Incompressible(CitcomComponent):
             "ala_two_level_coarse_eigenvalue_min", default=0.01)
         ala_two_level_coarse_eigenvalue_max = prop.float(
             "ala_two_level_coarse_eigenvalue_max", default=27.0)
+        ala_two_level_coarse_weight = prop.float(
+            "ala_two_level_coarse_weight", default=0.1)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",

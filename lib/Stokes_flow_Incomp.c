@@ -252,7 +252,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
             for(e=1;e<=npno;e++)
                 local_energy[0] += r[m][e]*z[m][e];
             for(ce=1;ce<=cnpno;ce++) {
-                local_energy[1] += coarse_rhs[m][ce]*coarse_x[m][ce];
+                local_energy[1] += E->control.ala_two_level_coarse_weight
+                    *coarse_rhs[m][ce]*coarse_x[m][ce];
                 local_energy[2] += coarse_rhs[m][ce]*coarse_rhs[m][ce];
                 local_energy[3] += (coarse_rhs[m][ce]-coarse_Ax[m][ce])
                     *(coarse_rhs[m][ce]-coarse_Ax[m][ce]);
@@ -284,7 +285,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     cy=(ey-1)/factor+1;
                     cz=(ez-1)/factor+1;
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                    z[m][e] += coarse_x[m][ce];
+                    z[m][e] += E->control.ala_two_level_coarse_weight
+                        *coarse_x[m][ce];
                 }
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -1025,7 +1027,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fprintf(E->fp,
                     "ALA two-level pressure correction offset=%d level=%d "
                     "coarse_solver=%s coarse_iterations=%d damping=%e "
-                    "eigen_interval=(%e,%e) invalid_diagonals=%d "
+                    "eigen_interval=(%e,%e) coarse_weight=%e "
+                    "invalid_diagonals=%d "
                     "operator="
                     "(D+C)diag(K)^-1(D+C)^T transfer=Pt/P\n",
                     E->control.ala_two_level_offset,coarse_lev,
@@ -1034,11 +1037,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_coarse_damping,
                     E->control.ala_two_level_coarse_eigenvalue_min,
                     E->control.ala_two_level_coarse_eigenvalue_max,
+                    E->control.ala_two_level_coarse_weight,
                     global_invalid_coarse);
             fprintf(stderr,
                     "ALA two-level pressure correction offset=%d level=%d "
                     "coarse_solver=%s coarse_iterations=%d damping=%e "
-                    "eigen_interval=(%e,%e) invalid_diagonals=%d "
+                    "eigen_interval=(%e,%e) coarse_weight=%e "
+                    "invalid_diagonals=%d "
                     "operator="
                     "(D+C)diag(K)^-1(D+C)^T transfer=Pt/P\n",
                     E->control.ala_two_level_offset,coarse_lev,
@@ -1047,6 +1052,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_coarse_damping,
                     E->control.ala_two_level_coarse_eigenvalue_min,
                     E->control.ala_two_level_coarse_eigenvalue_max,
+                    E->control.ala_two_level_coarse_weight,
                     global_invalid_coarse);
         }
     }

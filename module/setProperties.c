@@ -1061,6 +1061,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_coarse_eigenvalue_min, fp);
     getDoubleProperty(properties, "ala_two_level_coarse_eigenvalue_max",
                       E->control.ala_two_level_coarse_eigenvalue_max, fp);
+    getDoubleProperty(properties, "ala_two_level_coarse_weight",
+                      E->control.ala_two_level_coarse_weight, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1102,6 +1104,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_two_level_coarse_eigenvalue_max <=
          E->control.ala_two_level_coarse_eigenvalue_min)
         myerror(E, "ALA two-level Chebyshev eigenvalue interval is invalid");
+    if(E->control.ala_two_level_coarse_weight <= 0.0 ||
+       E->control.ala_two_level_coarse_weight > 1.0)
+        myerror(E, "ala_two_level_coarse_weight must be in (0,1]");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
