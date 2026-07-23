@@ -492,6 +492,10 @@ struct CONTROL {
     double ala_two_level_coarse_eigenvalue_min;
     double ala_two_level_coarse_eigenvalue_max;
     double ala_two_level_coarse_weight;
+    char ala_two_level_velocity_solver[20];
+    int ala_two_level_velocity_iterations;
+    double ala_two_level_velocity_eigenvalue_min;
+    double ala_two_level_velocity_eigenvalue_max;
     int ala_radial_line_preconditioner;
 
     /* surface temperature */

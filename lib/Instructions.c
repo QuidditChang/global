@@ -544,7 +544,7 @@ void read_initial_settings(struct All_variables *E)
   input_int("ala_two_level_offset",
             &(E->control.ala_two_level_offset),"2",m);
   input_int("ala_two_level_coarse_iterations",
-            &(E->control.ala_two_level_coarse_iterations),"8",m);
+            &(E->control.ala_two_level_coarse_iterations),"12",m);
   input_double("ala_two_level_coarse_damping",
                &(E->control.ala_two_level_coarse_damping),"0.03",m);
   input_string("ala_two_level_coarse_solver",
@@ -554,7 +554,15 @@ void read_initial_settings(struct All_variables *E)
   input_double("ala_two_level_coarse_eigenvalue_max",
                &(E->control.ala_two_level_coarse_eigenvalue_max),"27.0",m);
   input_double("ala_two_level_coarse_weight",
-               &(E->control.ala_two_level_coarse_weight),"0.1",m);
+               &(E->control.ala_two_level_coarse_weight),"0.05",m);
+  input_string("ala_two_level_velocity_solver",
+               E->control.ala_two_level_velocity_solver,"chebyshev",m);
+  input_int("ala_two_level_velocity_iterations",
+            &(E->control.ala_two_level_velocity_iterations),"16",m);
+  input_double("ala_two_level_velocity_eigenvalue_min",
+               &(E->control.ala_two_level_velocity_eigenvalue_min),"0.01",m);
+  input_double("ala_two_level_velocity_eigenvalue_max",
+               &(E->control.ala_two_level_velocity_eigenvalue_max),"4.0",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
 
@@ -600,6 +608,15 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_two_level_coarse_weight <= 0.0 ||
      E->control.ala_two_level_coarse_weight > 1.0)
       myerror(E, "ala_two_level_coarse_weight must be in (0,1]");
+  if(strcmp(E->control.ala_two_level_velocity_solver,"diagonal") != 0 &&
+     strcmp(E->control.ala_two_level_velocity_solver,"chebyshev") != 0)
+      myerror(E, "ala_two_level_velocity_solver must be diagonal or chebyshev");
+  if(E->control.ala_two_level_velocity_iterations < 1)
+      myerror(E, "ala_two_level_velocity_iterations must be at least one");
+  if(E->control.ala_two_level_velocity_eigenvalue_min <= 0.0 ||
+     E->control.ala_two_level_velocity_eigenvalue_max <=
+       E->control.ala_two_level_velocity_eigenvalue_min)
+      myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1121,12 +1138,16 @@ void global_default_values(E)
     E->control.ala_coarse_residual_levels = 3;
     E->control.ala_two_level_preconditioner = 0;
     E->control.ala_two_level_offset = 2;
-    E->control.ala_two_level_coarse_iterations = 8;
+    E->control.ala_two_level_coarse_iterations = 12;
     E->control.ala_two_level_coarse_damping = 0.03;
     strcpy(E->control.ala_two_level_coarse_solver,"chebyshev");
     E->control.ala_two_level_coarse_eigenvalue_min = 0.01;
     E->control.ala_two_level_coarse_eigenvalue_max = 27.0;
-    E->control.ala_two_level_coarse_weight = 0.1;
+    E->control.ala_two_level_coarse_weight = 0.05;
+    strcpy(E->control.ala_two_level_velocity_solver,"chebyshev");
+    E->control.ala_two_level_velocity_iterations = 16;
+    E->control.ala_two_level_velocity_eigenvalue_min = 0.01;
+    E->control.ala_two_level_velocity_eigenvalue_max = 4.0;
     E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;

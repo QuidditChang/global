@@ -1063,6 +1063,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_coarse_eigenvalue_max, fp);
     getDoubleProperty(properties, "ala_two_level_coarse_weight",
                       E->control.ala_two_level_coarse_weight, fp);
+    getStringProperty(properties, "ala_two_level_velocity_solver",
+                      E->control.ala_two_level_velocity_solver, fp);
+    getIntProperty(properties, "ala_two_level_velocity_iterations",
+                   E->control.ala_two_level_velocity_iterations, fp);
+    getDoubleProperty(properties, "ala_two_level_velocity_eigenvalue_min",
+                      E->control.ala_two_level_velocity_eigenvalue_min, fp);
+    getDoubleProperty(properties, "ala_two_level_velocity_eigenvalue_max",
+                      E->control.ala_two_level_velocity_eigenvalue_max, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1107,6 +1115,15 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_two_level_coarse_weight <= 0.0 ||
        E->control.ala_two_level_coarse_weight > 1.0)
         myerror(E, "ala_two_level_coarse_weight must be in (0,1]");
+    if(strcmp(E->control.ala_two_level_velocity_solver,"diagonal") != 0 &&
+       strcmp(E->control.ala_two_level_velocity_solver,"chebyshev") != 0)
+        myerror(E, "ala_two_level_velocity_solver must be diagonal or chebyshev");
+    if(E->control.ala_two_level_velocity_iterations < 1)
+        myerror(E, "ala_two_level_velocity_iterations must be at least one");
+    if(E->control.ala_two_level_velocity_eigenvalue_min <= 0.0 ||
+       E->control.ala_two_level_velocity_eigenvalue_max <=
+         E->control.ala_two_level_velocity_eigenvalue_min)
+        myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
