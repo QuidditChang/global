@@ -136,6 +136,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     int m,ex,ey,ez,dx,dy,dz,b,i,j,k,n,block_count;
     int elx,ely,elz,shallow_min_ez,radial_groups,e;
     int local_blocks,global_blocks,local_fallback,global_fallback;
+    int local_elements,global_elements;
     double depth_km,sum,pivot,maxdiag;
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
     double *L;
@@ -153,15 +154,17 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             break;
         shallow_min_ez=ez;
     }
-    if(shallow_min_ez>elz)
-        myerror(E,"ALA shallow-patch depth selects no elements");
-    radial_groups=(elz-shallow_min_ez+2)/2;
+    radial_groups=(shallow_min_ez<=elz)
+        ? (elz-shallow_min_ez+2)/2 : 0;
     block_count=((elx+1)/2)*((ely+1)/2)*radial_groups;
     local_blocks=0;
     local_fallback=0;
+    local_elements=0;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         cache->blocks[m]=block_count;
+        if(block_count==0)
+            continue;
         cache->size[m]=(unsigned char *)calloc(block_count,
                                                 sizeof(unsigned char));
         cache->elements[m]=(int *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS,
@@ -230,6 +233,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     }
                     else
                         local_blocks++;
+                    local_elements += n;
                     b++;
                 }
     }
@@ -237,21 +241,25 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   E->parallel.world);
     MPI_Allreduce(&local_fallback,&global_fallback,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
+    MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    if(global_blocks+global_fallback==0)
+        myerror(E,"ALA shallow-patch depth selects no global elements");
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "valid_blocks=%d fallback_blocks=%d\n",
+                "selected_elements=%d valid_blocks=%d fallback_blocks=%d\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_blocks,global_fallback);
+                global_elements,global_blocks,global_fallback);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "valid_blocks=%d fallback_blocks=%d\n",
+                "selected_elements=%d valid_blocks=%d fallback_blocks=%d\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_blocks,global_fallback);
+                global_elements,global_blocks,global_fallback);
     }
 }
 
