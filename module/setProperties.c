@@ -1009,14 +1009,22 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.compressible_formulation, fp);
     if(strcmp(E->control.compressible_formulation, "tala") == 0) {
         E->control.ala_pressure_buoyancy = 0;
+        E->control.eba_formulation = 0;
+    }
+    else if(strcmp(E->control.compressible_formulation, "eba") == 0) {
+        E->control.ala_pressure_buoyancy = 0;
+        E->control.eba_formulation = 1;
+        if(E->control.inv_gruneisen != 0)
+            myerror(E, "compressible_formulation=eba requires gruneisen=0");
     }
     else if(strcmp(E->control.compressible_formulation, "ala") == 0) {
         E->control.ala_pressure_buoyancy = 1;
+        E->control.eba_formulation = 0;
         if(E->control.inv_gruneisen == 0)
             myerror(E, "compressible_formulation=ala requires gruneisen != 0");
     }
     else {
-        myerror(E, "compressible_formulation must be tala or ala");
+        myerror(E, "compressible_formulation must be tala, eba, or ala");
     }
 
     getIntProperty(properties, "ala_schur_symmetry_check",

@@ -105,6 +105,7 @@ class Incompressible(CitcomComponent):
         compressible_formulation = prop.str("compressible_formulation",
                                             default="tala",
                                             validator=prop.choice(["tala",
+                                                                   "eba",
                                                                    "ala"]))
         ala_schur_symmetry_check = prop.bool("ala_schur_symmetry_check",
                                              default=False)
