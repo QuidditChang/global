@@ -160,6 +160,14 @@ class Incompressible(CitcomComponent):
             "ala_two_level_velocity_eigenvalue_min", default=0.01)
         ala_two_level_velocity_eigenvalue_max = prop.float(
             "ala_two_level_velocity_eigenvalue_max", default=4.0)
+        ala_shallow_patch_preconditioner = prop.bool(
+            "ala_shallow_patch_preconditioner", default=False)
+        ala_shallow_patch_depth_km = prop.float(
+            "ala_shallow_patch_depth_km", default=410.0)
+        ala_shallow_patch_weight = prop.float(
+            "ala_shallow_patch_weight", default=0.25)
+        ala_shallow_patch_regularization = prop.float(
+            "ala_shallow_patch_regularization", default=1.0e-3)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",

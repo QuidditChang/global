@@ -496,6 +496,10 @@ struct CONTROL {
     int ala_two_level_velocity_iterations;
     double ala_two_level_velocity_eigenvalue_min;
     double ala_two_level_velocity_eigenvalue_max;
+    int ala_shallow_patch_preconditioner;
+    double ala_shallow_patch_depth_km;
+    double ala_shallow_patch_weight;
+    double ala_shallow_patch_regularization;
     int ala_radial_line_preconditioner;
 
     /* surface temperature */

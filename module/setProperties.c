@@ -1071,6 +1071,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_velocity_eigenvalue_min, fp);
     getDoubleProperty(properties, "ala_two_level_velocity_eigenvalue_max",
                       E->control.ala_two_level_velocity_eigenvalue_max, fp);
+    getIntProperty(properties, "ala_shallow_patch_preconditioner",
+                   E->control.ala_shallow_patch_preconditioner, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_depth_km",
+                      E->control.ala_shallow_patch_depth_km, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_weight",
+                      E->control.ala_shallow_patch_weight, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_regularization",
+                      E->control.ala_shallow_patch_regularization, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1124,6 +1132,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_two_level_velocity_eigenvalue_max <=
          E->control.ala_two_level_velocity_eigenvalue_min)
         myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
+    if(E->control.ala_shallow_patch_depth_km <= 0.0)
+        myerror(E, "ala_shallow_patch_depth_km must be positive");
+    if(E->control.ala_shallow_patch_weight <= 0.0 ||
+       E->control.ala_shallow_patch_weight > 1.0)
+        myerror(E, "ala_shallow_patch_weight must be in (0,1]");
+    if(E->control.ala_shallow_patch_regularization < 0.0 ||
+       E->control.ala_shallow_patch_regularization > 0.1)
+        myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
@@ -1168,6 +1184,18 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_radial_line_preconditioner)
         myerror(E, "ALA two-level and radial-line preconditioners are "
                 "mutually exclusive");
+    if(E->control.ala_shallow_patch_preconditioner &&
+       (!E->control.precondition ||
+        !E->control.ala_pressure_buoyancy ||
+        strcmp(E->control.uzawa,"ala_cg") != 0))
+        myerror(E,
+                "ala_shallow_patch_preconditioner requires precond=on, "
+                "compressible_formulation=ala, and uzawa=ala_cg");
+    if(E->control.ala_shallow_patch_preconditioner &&
+       (E->control.ala_two_level_preconditioner ||
+        E->control.ala_radial_line_preconditioner))
+        myerror(E, "ALA shallow-patch, two-level, and radial-line "
+                "preconditioners are mutually exclusive");
 
     PUTS(("\n"));
 
