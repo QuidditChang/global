@@ -83,6 +83,10 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_RADIAL_STRIDE 1
 #define ALA_COARSE_POWER_ITERATIONS 6
 #define ALA_VELOCITY_POWER_ITERATIONS 6
+#define ALA_GLOBAL_ANGULAR_BASIS 16
+#define ALA_GLOBAL_RADIAL_BASIS 6
+#define ALA_GLOBAL_BASIS_COUNT \
+    (ALA_GLOBAL_ANGULAR_BASIS*ALA_GLOBAL_RADIAL_BASIS)
 #define ALA_PATCH_MAX_ELEMENTS \
     (ALA_PATCH_HORIZONTAL_ELEMENTS*ALA_PATCH_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
@@ -93,6 +97,10 @@ struct ala_pressure_preconditioner_cache {
     int *elements[NCS];
     double *chol[NCS];
     double *coarse_bpi[NCS];
+    double *global_basis[NCS];
+    double *global_matrix;
+    double *global_chol;
+    int global_basis_count;
     double coarse_eigenvalue_min;
     double coarse_eigenvalue_max;
     double velocity_eigenvalue_min;
@@ -105,6 +113,8 @@ static void build_ala_two_level_cache(struct All_variables *E,
 static void calibrate_ala_two_level_spectrum(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void calibrate_ala_velocity_spectrum(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
+static void build_ala_global_coarse_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache);
@@ -470,7 +480,10 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->elements[m]);
         free((void *)cache->chol[m]);
         free((void *)cache->coarse_bpi[m]);
+        free((void *)cache->global_basis[m]);
     }
+    free((void *)cache->global_chol);
+    free((void *)cache->global_matrix);
     memset(cache,0,sizeof(*cache));
 }
 
@@ -607,6 +620,256 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                     coarse_Ap[m][ce] += fine_Ap[m][e];
                 }
     }
+}
+
+
+/* Build a replicated lowest-level Galerkin solve.  The basis is the tensor
+   product of real Cartesian spherical harmonics through degree three and six
+   radial linear hats.  The matrix is assembled with the same frozen
+   matrix-free Sc used by the level-one polynomial, then factored once. */
+static void build_ala_global_coarse_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int m,ce,i,j,k,col,row,clev,factor,cnpno,stride,n;
+    int npno,neq,radial,angular_index,interval;
+    double theta,phi,radius,depth,x,y,z,r2,radial_value;
+    double angular[ALA_GLOBAL_ANGULAR_BASIS];
+    double radial_hat[ALA_GLOBAL_RADIAL_BASIS];
+    double local_norm[ALA_GLOBAL_BASIS_COUNT];
+    double global_norm[ALA_GLOBAL_BASIS_COUNT];
+    double *local_column,*global_column,*matrix;
+    double *coarse_p[NCS],*coarse_Ap[NCS];
+    double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
+    double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
+    double *fine_velocity_direction[NCS];
+    double anti2,total2,symmetric,diagonal_min,diagonal_max,shift;
+    double sum,pivot,min_pivot,factor_error2,matrix_norm2;
+    static const double radial_knots[ALA_GLOBAL_RADIAL_BASIS] =
+        {0.0,200.0,410.0,660.0,1200.0,2891.0};
+
+    clev=lev-E->control.ala_two_level_offset;
+    factor=1 << E->control.ala_two_level_offset;
+    cnpno=E->lmesh.NPNO[clev];
+    stride=cnpno+1;
+    npno=E->lmesh.NPNO[lev];
+    neq=E->lmesh.NEQ[lev];
+    n=ALA_GLOBAL_BASIS_COUNT;
+    cache->global_basis_count=n;
+    cache->global_chol=(double *)calloc(n*n,sizeof(double));
+    cache->global_matrix=(double *)calloc(n*n,sizeof(double));
+    matrix=cache->global_matrix;
+    local_column=(double *)calloc(n,sizeof(double));
+    global_column=(double *)calloc(n,sizeof(double));
+    if(cache->global_chol==NULL || matrix==NULL || local_column==NULL ||
+       global_column==NULL)
+        myerror(E,"Unable to allocate ALA global coarse matrix");
+
+    for(i=0;i<n;i++)
+        local_norm[i]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        cache->global_basis[m]=(double *)calloc(n*stride,sizeof(double));
+        if(cache->global_basis[m]==NULL)
+            myerror(E,"Unable to allocate ALA global pressure basis");
+        for(ce=1;ce<=cnpno;ce++) {
+            theta=E->ECO[clev][m][ce].centre[1];
+            phi=E->ECO[clev][m][ce].centre[2];
+            radius=E->ECO[clev][m][ce].centre[3];
+            x=sin(theta)*cos(phi);
+            y=sin(theta)*sin(phi);
+            z=cos(theta);
+            r2=x*x+y*y+z*z;
+            angular[0]=1.0;
+            angular[1]=x;
+            angular[2]=y;
+            angular[3]=z;
+            angular[4]=x*y;
+            angular[5]=y*z;
+            angular[6]=z*x;
+            angular[7]=x*x-y*y;
+            angular[8]=3.0*z*z-r2;
+            angular[9]=x*(5.0*z*z-r2);
+            angular[10]=y*(5.0*z*z-r2);
+            angular[11]=z*(5.0*z*z-3.0*r2);
+            angular[12]=z*(x*x-y*y);
+            angular[13]=x*y*z;
+            angular[14]=x*(x*x-3.0*y*y);
+            angular[15]=y*(3.0*x*x-y*y);
+
+            for(radial=0;radial<ALA_GLOBAL_RADIAL_BASIS;radial++)
+                radial_hat[radial]=0.0;
+            depth=(1.0-radius)*E->data.radius_km;
+            if(depth<=radial_knots[0])
+                radial_hat[0]=1.0;
+            else if(depth>=radial_knots[ALA_GLOBAL_RADIAL_BASIS-1])
+                radial_hat[ALA_GLOBAL_RADIAL_BASIS-1]=1.0;
+            else {
+                interval=0;
+                while(interval<ALA_GLOBAL_RADIAL_BASIS-1 &&
+                      depth>radial_knots[interval+1])
+                    interval++;
+                radial_value=(depth-radial_knots[interval])
+                    /(radial_knots[interval+1]-radial_knots[interval]);
+                radial_hat[interval]=1.0-radial_value;
+                radial_hat[interval+1]=radial_value;
+            }
+            for(radial=0;radial<ALA_GLOBAL_RADIAL_BASIS;radial++)
+                for(angular_index=0;
+                    angular_index<ALA_GLOBAL_ANGULAR_BASIS;
+                    angular_index++) {
+                    i=radial*ALA_GLOBAL_ANGULAR_BASIS+angular_index;
+                    cache->global_basis[m][i*stride+ce]
+                        =radial_hat[radial]*angular[angular_index];
+                    local_norm[i] += cache->global_basis[m][i*stride+ce]
+                        *cache->global_basis[m][i*stride+ce];
+                }
+        }
+    }
+    MPI_Allreduce(local_norm,global_norm,n,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    for(i=0;i<n;i++) {
+        if(!isfinite(global_norm[i]) || global_norm[i]<=1.0e-20)
+            myerror(E,"ALA global pressure basis is rank deficient");
+        global_norm[i]=sqrt(global_norm[i]);
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<n;i++)
+            for(ce=1;ce<=cnpno;ce++)
+                cache->global_basis[m][i*stride+ce] /= global_norm[i];
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        coarse_p[m]=(double *)calloc(cnpno+1,sizeof(double));
+        coarse_Ap[m]=(double *)calloc(cnpno+1,sizeof(double));
+        fine_p[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_Ap[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_velocity[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_rhs[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_Ax[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_direction[m]=(double *)calloc(neq+1,sizeof(double));
+        if(coarse_p[m]==NULL || coarse_Ap[m]==NULL || fine_p[m]==NULL ||
+           fine_Ap[m]==NULL || fine_velocity[m]==NULL ||
+           fine_velocity_rhs[m]==NULL || fine_velocity_Ax[m]==NULL ||
+           fine_velocity_direction[m]==NULL)
+            myerror(E,"Unable to allocate ALA global coarse workspace");
+    }
+
+    for(col=0;col<n;col++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                coarse_p[m][ce]=cache->global_basis[m][col*stride+ce];
+        apply_ala_galerkin_fixed_schur(
+            E,coarse_p,coarse_Ap,fine_p,fine_Ap,fine_velocity,
+            fine_velocity_rhs,fine_velocity_Ax,fine_velocity_direction,
+            cache,clev,lev,factor,NULL);
+        for(row=0;row<n;row++) {
+            local_column[row]=0.0;
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(ce=1;ce<=cnpno;ce++)
+                    local_column[row] +=
+                        cache->global_basis[m][row*stride+ce]
+                        *coarse_Ap[m][ce];
+        }
+        MPI_Allreduce(local_column,global_column,n,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        for(row=0;row<n;row++)
+            matrix[row*n+col]=global_column[row];
+    }
+
+    anti2=0.0;
+    total2=0.0;
+    diagonal_min=1.0e300;
+    diagonal_max=0.0;
+    for(i=0;i<n;i++) {
+        diagonal_min=min(diagonal_min,matrix[i*n+i]);
+        diagonal_max=max(diagonal_max,matrix[i*n+i]);
+        for(j=0;j<n;j++) {
+            anti2 += (matrix[i*n+j]-matrix[j*n+i])
+                *(matrix[i*n+j]-matrix[j*n+i]);
+            total2 += matrix[i*n+j]*matrix[i*n+j];
+        }
+    }
+    symmetric=sqrt(anti2/max(total2,1.0e-300));
+    if(!isfinite(symmetric) || symmetric>1.0e-8)
+        myerror(E,"ALA global Galerkin matrix is not symmetric");
+    if(!isfinite(diagonal_min) || diagonal_min<=0.0 ||
+       !isfinite(diagonal_max) || diagonal_max<=0.0)
+        myerror(E,"ALA global Galerkin diagonal is not positive");
+    for(i=0;i<n;i++)
+        for(j=0;j<n;j++)
+            cache->global_chol[i*n+j]
+                =0.5*(matrix[i*n+j]+matrix[j*n+i]);
+    shift=E->control.ala_global_coarse_regularization*diagonal_max;
+    for(i=0;i<n;i++)
+        cache->global_chol[i*n+i] += shift;
+
+    min_pivot=1.0e300;
+    for(i=0;i<n;i++) {
+        for(j=0;j<=i;j++) {
+            sum=cache->global_chol[i*n+j];
+            for(k=0;k<j;k++)
+                sum -= cache->global_chol[i*n+k]
+                    *cache->global_chol[j*n+k];
+            if(i==j) {
+                pivot=sum;
+                if(!isfinite(pivot) ||
+                   pivot<=1.0e-14*max(diagonal_max,1.0e-300))
+                    myerror(E,"ALA global Galerkin Cholesky failed");
+                cache->global_chol[i*n+j]=sqrt(pivot);
+                min_pivot=min(min_pivot,pivot);
+            }
+            else
+                cache->global_chol[i*n+j]
+                    =sum/cache->global_chol[j*n+j];
+        }
+        for(j=i+1;j<n;j++)
+            cache->global_chol[i*n+j]=0.0;
+    }
+    factor_error2=0.0;
+    matrix_norm2=0.0;
+    for(i=0;i<n;i++)
+        for(j=0;j<n;j++) {
+            sum=0.0;
+            for(k=0;k<=min(i,j);k++)
+                sum += cache->global_chol[i*n+k]
+                    *cache->global_chol[j*n+k];
+            pivot=0.5*(matrix[i*n+j]+matrix[j*n+i]);
+            if(i==j)
+                pivot += shift;
+            factor_error2 += (sum-pivot)*(sum-pivot);
+            matrix_norm2 += pivot*pivot;
+        }
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA global coarse basis count=%d angular_degree=3 "
+                "radial_knots_km=(0,200,410,660,1200,2891) "
+                "symmetry_relative=%e diagonal_range=(%e,%e) "
+                "regularization=%e shift=%e min_pivot=%e "
+                "factorization_relative=%e factorization=complete\n",
+                n,symmetric,diagonal_min,diagonal_max,
+                E->control.ala_global_coarse_regularization,shift,min_pivot,
+                sqrt(factor_error2/max(matrix_norm2,1.0e-300)));
+        fprintf(stderr,"ALA global coarse basis count=%d angular_degree=3 "
+                "radial_knots_km=(0,200,410,660,1200,2891) "
+                "symmetry_relative=%e diagonal_range=(%e,%e) "
+                "regularization=%e shift=%e min_pivot=%e "
+                "factorization_relative=%e factorization=complete\n",
+                n,symmetric,diagonal_min,diagonal_max,
+                E->control.ala_global_coarse_regularization,shift,min_pivot,
+                sqrt(factor_error2/max(matrix_norm2,1.0e-300)));
+        fflush(E->fp);
+        fflush(stderr);
+    }
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)coarse_p[m]);
+        free((void *)coarse_Ap[m]);
+        free((void *)fine_p[m]);
+        free((void *)fine_Ap[m]);
+        free((void *)fine_velocity[m]);
+        free((void *)fine_velocity_rhs[m]);
+        free((void *)fine_velocity_Ax[m]);
+        free((void *)fine_velocity_direction[m]);
+    }
+    free((void *)local_column);
+    free((void *)global_column);
 }
 
 
@@ -843,6 +1106,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double sum,weight,*L;
     double local_patch_energy[2],global_patch_energy[2];
     double local_energy[4],global_energy[4];
+    double global_local_rhs[ALA_GLOBAL_BASIS_COUNT];
+    double global_rhs[ALA_GLOBAL_BASIS_COUNT];
+    double global_solution[ALA_GLOBAL_BASIS_COUNT];
+    double global_residual2,global_rhs2,global_scale;
     double *coarse_rhs[NCS],*coarse_x[NCS],*coarse_residual[NCS];
     double *coarse_Ax[NCS],*coarse_direction[NCS];
     double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
@@ -1048,6 +1315,66 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     coarse_x[m][ce] += coarse_direction[m][ce];
                 }
             rho_cheb=rho_new;
+        }
+    }
+
+    if(E->control.ala_global_coarse_preconditioner) {
+        n=cache->global_basis_count;
+        for(i=0;i<n;i++) {
+            global_local_rhs[i]=0.0;
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(ce=1;ce<=cnpno;ce++)
+                    global_local_rhs[i] +=
+                        cache->global_basis[m][i*(cnpno+1)+ce]
+                        *coarse_rhs[m][ce];
+        }
+        MPI_Allreduce(global_local_rhs,global_rhs,n,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        for(i=0;i<n;i++) {
+            sum=global_rhs[i];
+            for(j=0;j<i;j++)
+                sum -= cache->global_chol[i*n+j]*global_solution[j];
+            global_solution[i]=sum/cache->global_chol[i*n+i];
+        }
+        for(i=n-1;i>=0;i--) {
+            sum=global_solution[i];
+            for(j=i+1;j<n;j++)
+                sum -= cache->global_chol[j*n+i]*global_solution[j];
+            global_solution[i]=sum/cache->global_chol[i*n+i];
+        }
+        global_scale=E->control.ala_global_coarse_weight
+            /E->control.ala_two_level_coarse_weight;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                for(i=0;i<n;i++)
+                    coarse_x[m][ce] += global_scale
+                        *cache->global_basis[m][i*(cnpno+1)+ce]
+                        *global_solution[i];
+
+        if(iteration==0 ||
+           iteration%E->control.ala_coarse_residual_interval==0) {
+            global_residual2=0.0;
+            global_rhs2=0.0;
+            for(i=0;i<n;i++) {
+                sum=0.0;
+                for(j=0;j<n;j++)
+                    sum += 0.5*(cache->global_matrix[i*n+j]
+                                +cache->global_matrix[j*n+i])
+                        *global_solution[j];
+                global_residual2 += (global_rhs[i]-sum)
+                    *(global_rhs[i]-sum);
+                global_rhs2 += global_rhs[i]*global_rhs[i];
+            }
+            if(E->parallel.me==0) {
+                fprintf(E->fp,
+                        "ALA_GLOBAL_COARSE_SOLVE iteration=%d basis=%d "
+                        "projected_rhs_norm=%e "
+                        "projected_residual_reduction=%e weight=%e\n",
+                        iteration,n,sqrt(global_rhs2),
+                        sqrt(global_residual2/max(global_rhs2,1.0e-300)),
+                        E->control.ala_global_coarse_weight);
+                fflush(E->fp);
+            }
         }
     }
 
@@ -2016,6 +2343,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 fflush(stderr);
             }
         }
+        if(E->control.ala_global_coarse_preconditioner) {
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=global_coarse_build_begin\n");
+                fflush(stderr);
+            }
+            build_ala_global_coarse_cache(
+                E,&preconditioner_cache,lev);
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=global_coarse_build_complete\n");
+                fflush(stderr);
+            }
+        }
         if(strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0) {
             if(E->parallel.me==0) {
                 fprintf(stderr,"ALA preconditioner startup stage=galerkin_spectrum_begin\n");
@@ -2033,7 +2372,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         fprintf(E->fp,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
-                "beta_source=%s beta_causal_diagnostics=%s\n",
+                "beta_source=%s beta_causal_diagnostics=%s "
+                "global_coarse=%s global_basis=%d global_weight=%e\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -2052,11 +2392,15 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
-                E->control.ala_beta_causal_diagnostics ? "on" : "off");
+                E->control.ala_beta_causal_diagnostics ? "on" : "off",
+                E->control.ala_global_coarse_preconditioner ? "on" : "off",
+                preconditioner_cache.global_basis_count,
+                E->control.ala_global_coarse_weight);
         fprintf(stderr,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
-                "beta_source=%s beta_causal_diagnostics=%s\n",
+                "beta_source=%s beta_causal_diagnostics=%s "
+                "global_coarse=%s global_basis=%d global_weight=%e\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -2075,7 +2419,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
-                E->control.ala_beta_causal_diagnostics ? "on" : "off");
+                E->control.ala_beta_causal_diagnostics ? "on" : "off",
+                E->control.ala_global_coarse_preconditioner ? "on" : "off",
+                preconditioner_cache.global_basis_count,
+                E->control.ala_global_coarse_weight);
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
