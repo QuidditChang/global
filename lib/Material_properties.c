@@ -32,6 +32,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <string.h>
 
 #include "global_defs.h"
 #include "material_properties.h"
@@ -56,8 +57,14 @@ void mat_prop_allocate(struct All_variables *E)
     /* Strict ALA nodal input and its one authoritative element mapping. */
     E->refstate.ala_beta =
         (double *) malloc((E->lmesh.elz+1)*sizeof(double));
+    E->refstate.ala_beta_supplied =
+        (double *) malloc((E->lmesh.elz+1)*sizeof(double));
+    E->refstate.ala_beta_density =
+        (double *) malloc((E->lmesh.elz+1)*sizeof(double));
     E->refstate.beta_ala = (double *) calloc(noz+1, sizeof(double));
     if(E->refstate.rho == NULL || E->refstate.ala_beta == NULL ||
+       E->refstate.ala_beta_supplied == NULL ||
+       E->refstate.ala_beta_density == NULL ||
        E->refstate.beta_ala == NULL) {
         fprintf(stderr, "Unable to allocate reference density/ALA beta storage\n");
         parallel_process_termination();
@@ -95,6 +102,10 @@ void mat_prop_free(struct All_variables *E)
 {
     free(E->refstate.ala_beta);
     E->refstate.ala_beta = NULL;
+    free(E->refstate.ala_beta_supplied);
+    E->refstate.ala_beta_supplied = NULL;
+    free(E->refstate.ala_beta_density);
+    E->refstate.ala_beta_density = NULL;
     free(E->refstate.beta_ala);
     E->refstate.beta_ala = NULL;
 }
@@ -214,21 +225,35 @@ static void initialize_ala_beta(struct All_variables *E)
         }
 
         beta_rho = -(log(rho1) - log(rho0)) / (r1 - r0);
-        if(E->control.ala_pressure_buoyancy && E->refstate.choice == 0)
-            beta = 0.5 * (E->refstate.beta_ala[nz] +
-                          E->refstate.beta_ala[nz+1]);
+        E->refstate.ala_beta_supplied[nz] =
+            0.5 * (E->refstate.beta_ala[nz] +
+                   E->refstate.beta_ala[nz+1]);
+        E->refstate.ala_beta_density[nz] = beta_rho;
+        if(E->refstate.choice != 0)
+            E->refstate.ala_beta_supplied[nz] = beta_rho;
+        if(E->control.ala_pressure_buoyancy && E->refstate.choice == 0 &&
+           strcmp(E->control.ala_beta_element_source,
+                  "supplied_average") == 0)
+            beta = E->refstate.ala_beta_supplied[nz];
         else
-            beta = beta_rho;
-        if(!isfinite(beta) || beta <= 0.0) {
+            beta = E->refstate.ala_beta_density[nz];
+        if(!isfinite(E->refstate.ala_beta_supplied[nz]) ||
+           E->refstate.ala_beta_supplied[nz] <= 0.0 ||
+           !isfinite(E->refstate.ala_beta_density[nz]) ||
+           E->refstate.ala_beta_density[nz] <= 0.0 ||
+           !isfinite(beta) || beta <= 0.0) {
             fprintf(stderr,
-                    "Invalid ALA beta: rank=%d local_nz=%d beta=%e; "
+                    "Invalid ALA beta: rank=%d local_nz=%d "
+                    "supplied=%e density=%e selected=%e; "
                     "strict ALA requires positive beta*=-d(ln rho)/dr*\n",
-                    E->parallel.me, nz, beta);
+                    E->parallel.me, nz,
+                    E->refstate.ala_beta_supplied[nz],
+                    E->refstate.ala_beta_density[nz],beta);
             parallel_process_termination();
         }
         E->refstate.ala_beta[nz] = beta;
 
-        mismatch = beta - beta_rho;
+        mismatch = E->refstate.ala_beta_supplied[nz] - beta_rho;
         relative = fabs(mismatch) / max(fabs(beta_rho), beta_floor);
         beta_thermo = E->control.disptn_number
             * 0.5 * (E->refstate.thermal_expansivity[nz] +
@@ -238,7 +263,7 @@ static void initialize_ala_beta(struct All_variables *E)
                       E->refstate.heat_capacity[nz+1])
                * 0.5 * (E->refstate.gamma_eff[nz] +
                         E->refstate.gamma_eff[nz+1]));
-        thermo_mismatch = beta - beta_thermo;
+        thermo_mismatch = E->refstate.ala_beta_supplied[nz] - beta_thermo;
         thermo_relative = fabs(thermo_mismatch) /
                           max(fabs(beta_thermo), beta_floor);
         global_nz = nz + E->lmesh.nzs - 1;
@@ -282,7 +307,7 @@ static void initialize_ala_beta(struct All_variables *E)
         if(global_nz == global_max.index) {
             beta_rho = -(log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz])) /
                        (E->sx[1][3][nz+1] - E->sx[1][3][nz]);
-            local_signed_at_max = E->refstate.ala_beta[nz] - beta_rho;
+            local_signed_at_max = E->refstate.ala_beta_supplied[nz] - beta_rho;
             local_depth_at_max = 1.0 - 0.5 * (E->sx[1][3][nz] + E->sx[1][3][nz+1]);
         }
     }
@@ -294,11 +319,13 @@ static void initialize_ala_beta(struct All_variables *E)
 
     if(E->parallel.me == 0 && E->control.ala_pressure_buoyancy) {
         fprintf(stderr,
-                "Strict ALA beta validation (beta* uses radius normalized by R0)\n"
+                "Strict ALA beta validation source=%s "
+                "(beta* uses radius normalized by R0)\n"
                 "  density closure: mean_signed=%e RMS=%e relative_RMS=%e max_relative=%e "
                 "signed_at_max=%e radial_element=%d depth_over_R0=%e\n"
                 "  thermodynamic closure: mean_signed=%e RMS=%e "
                 "relative_RMS=%e max_relative=%e radial_element=%d\n",
+                E->control.ala_beta_element_source,
                 global_sum/global_count, rms, relative_rms, global_max.value,
                 global_signed_at_max, global_max.index, global_depth_at_max,
                 global_thermo_sum/global_count, thermo_rms, thermo_relative_rms,

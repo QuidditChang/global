@@ -110,6 +110,9 @@ class Incompressible(CitcomComponent):
                                              default=False)
         ala_schur_symmetry_tolerance = prop.float(
             "ala_schur_symmetry_tolerance", default=1.0e-3)
+        ala_beta_element_source = prop.str(
+            "ala_beta_element_source", default="supplied_average",
+            validator=prop.choice(["supplied_average", "density_log_secant"]))
         ala_inner_accuracy_max = prop.float("ala_inner_accuracy_max",
                                             default=1.0e-4)
         ala_inner_accuracy_factor = prop.float("ala_inner_accuracy_factor",
@@ -135,6 +138,8 @@ class Incompressible(CitcomComponent):
             "ala_depth_diagnostic_interval", default=5)
         ala_depth_diagnostic_bins = prop.int("ala_depth_diagnostic_bins",
                                               default=8)
+        ala_beta_causal_diagnostics = prop.bool(
+            "ala_beta_causal_diagnostics", default=False)
         ala_coarse_residual_diagnostics = prop.bool(
             "ala_coarse_residual_diagnostics", default=False)
         ala_coarse_residual_interval = prop.int(

@@ -66,6 +66,9 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
 static void strict_ala_depth_diagnostics(struct All_variables *E,
                                          double **r, double **div_u,
                                          int lev, int iteration);
+static void strict_ala_beta_causal_diagnostics(
+    struct All_variables *E, double **V, double **active_r,
+    double **alternate_r, double **div_u, int lev, int iteration);
 static void strict_ala_coarse_residual_diagnostics(
     struct All_variables *E, double **r, int lev, int iteration);
 static double strict_ala_inner_relative_accuracy(struct All_variables *E,
@@ -1100,6 +1103,146 @@ static void strict_ala_depth_diagnostics(struct All_variables *E,
 }
 
 
+static void strict_ala_beta_causal_diagnostics(
+    struct All_variables *E, double **V, double **active_r,
+    double **alternate_r, double **div_u, int lev, int iteration)
+{
+    int m,e,b,bins,fields,nel,local_ez,global_ez,global_elz;
+    double volume,depth_km,supplied,density,delta,div_e;
+    double supplied_c,density_c,supplied_scale,density_scale;
+    double supplied_cancellation,density_cancellation,correlation;
+    double top410_correlation;
+    double *local,*global;
+    double local_summary[12],global_summary[12];
+    double **supplied_r,**density_r;
+    void assemble_div_rho_u_with_beta();
+
+    if(!E->control.ala_beta_causal_diagnostics)
+        return;
+    if(iteration!=0 &&
+       iteration%E->control.ala_depth_diagnostic_interval!=0)
+        return;
+
+    if(strcmp(E->control.ala_beta_element_source,
+              "supplied_average")==0) {
+        assemble_div_rho_u_with_beta(E,V,alternate_r,lev,
+                                     E->refstate.ala_beta_density);
+        supplied_r=active_r;
+        density_r=alternate_r;
+    }
+    else {
+        assemble_div_rho_u_with_beta(E,V,alternate_r,lev,
+                                     E->refstate.ala_beta_supplied);
+        supplied_r=alternate_r;
+        density_r=active_r;
+    }
+
+    global_elz=E->mesh.ELZ[lev];
+    bins=min(E->control.ala_depth_diagnostic_bins,global_elz);
+    fields=3;
+    local=(double *)calloc(bins*fields,sizeof(double));
+    global=(double *)calloc(bins*fields,sizeof(double));
+    if(local==NULL || global==NULL)
+        myerror(E,"Unable to allocate ALA beta causal diagnostics");
+    for(b=0;b<12;b++)
+        local_summary[b]=0.0;
+
+    nel=E->lmesh.NEL[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=nel;e++) {
+            volume=E->eco[m][e].area;
+            if(volume<=0.0)
+                continue;
+            local_ez=(e-1)%E->lmesh.ELZ[lev]+1;
+            global_ez=E->lmesh.EZS[lev]+local_ez;
+            b=((global_ez-1)*bins)/global_elz;
+            b=min(max(b,0),bins-1);
+            depth_km=(1.0-0.5*(E->sx[m][3][local_ez]
+                              +E->sx[m][3][local_ez+1]))
+                *E->data.radius_km;
+            supplied=supplied_r[m][e];
+            density=density_r[m][e];
+            delta=supplied-density;
+            div_e=div_u[m][e];
+            supplied_c=supplied-div_e;
+            density_c=density-div_e;
+            supplied_scale=fabs(div_e)+fabs(supplied_c);
+            density_scale=fabs(div_e)+fabs(density_c);
+
+            local[b*fields] += supplied*supplied/volume;
+            local[b*fields+1] += density*density/volume;
+            local[b*fields+2] += delta*delta/volume;
+            local_summary[0] += supplied*supplied/volume;
+            local_summary[1] += density*density/volume;
+            local_summary[2] += delta*delta/volume;
+            local_summary[3] += supplied*density/volume;
+            local_summary[4] += supplied_scale*supplied_scale/volume;
+            local_summary[5] += density_scale*density_scale/volume;
+            if(depth_km<=200.0)
+                local_summary[6] += delta*delta/volume;
+            if(depth_km<=410.0)
+                local_summary[7] += delta*delta/volume;
+            if(depth_km<=660.0)
+                local_summary[8] += delta*delta/volume;
+            if(depth_km<=410.0) {
+                local_summary[9] += supplied*supplied/volume;
+                local_summary[10] += density*density/volume;
+                local_summary[11] += supplied*density/volume;
+            }
+        }
+
+    MPI_Allreduce(local,global,bins*fields,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(local_summary,global_summary,12,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    supplied_cancellation=sqrt(global_summary[0]
+        /max(global_summary[4],1.0e-300));
+    density_cancellation=sqrt(global_summary[1]
+        /max(global_summary[5],1.0e-300));
+    correlation=global_summary[3]
+        /sqrt(max(global_summary[0]*global_summary[1],1.0e-300));
+    correlation=min(max(correlation,-1.0),1.0);
+    top410_correlation=global_summary[11]
+        /sqrt(max(global_summary[9]*global_summary[10],1.0e-300));
+    top410_correlation=min(max(top410_correlation,-1.0),1.0);
+
+    if(E->parallel.me==0) {
+        fprintf(E->fp,
+                "ALA_BETA_CAUSAL iteration=%d active=%s "
+                "supplied_cancellation=%e density_cancellation=%e "
+                "delta_over_supplied=%e delta_over_density=%e "
+                "residual_correlation=%e top200_delta_fraction=%e "
+                "top410_delta_fraction=%e top660_delta_fraction=%e "
+                "top410_supplied_to_density=%e "
+                "top410_residual_correlation=%e\n",
+                iteration,E->control.ala_beta_element_source,
+                supplied_cancellation,density_cancellation,
+                sqrt(global_summary[2]/max(global_summary[0],1.0e-300)),
+                sqrt(global_summary[2]/max(global_summary[1],1.0e-300)),
+                correlation,
+                global_summary[6]/max(global_summary[2],1.0e-300),
+                global_summary[7]/max(global_summary[2],1.0e-300),
+                global_summary[8]/max(global_summary[2],1.0e-300),
+                sqrt(global_summary[9]/max(global_summary[10],1.0e-300)),
+                top410_correlation);
+        fprintf(E->fp,
+                "ALA_BETA_DEPTH_BIN bin supplied_fraction density_fraction "
+                "delta_fraction delta_over_supplied\n");
+        for(b=bins-1;b>=0;b--)
+            fprintf(E->fp,"ALA_BETA_DEPTH_BIN %d %e %e %e %e\n",
+                    b,
+                    global[b*fields]/max(global_summary[0],1.0e-300),
+                    global[b*fields+1]/max(global_summary[1],1.0e-300),
+                    global[b*fields+2]/max(global_summary[2],1.0e-300),
+                    sqrt(global[b*fields+2]
+                         /max(global[b*fields],1.0e-300)));
+        fflush(E->fp);
+    }
+    free((void *)local);
+    free((void *)global);
+}
+
+
 static void strict_ala_coarse_residual_diagnostics(
     struct All_variables *E, double **r, int lev, int iteration)
 {
@@ -1649,7 +1792,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(E->parallel.me == 0) {
         fprintf(E->fp,
                 "ALA PCG pressure preconditioner = %s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
+                "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
+                "beta_source=%s beta_causal_diagnostics=%s\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -1660,10 +1804,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
-                E->control.ala_pcg_restart_interval);
+                E->control.ala_pcg_restart_interval,
+                E->control.ala_beta_element_source,
+                E->control.ala_beta_causal_diagnostics ? "on" : "off");
         fprintf(stderr,
                 "ALA PCG pressure preconditioner = %s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
+                "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
+                "beta_source=%s beta_causal_diagnostics=%s\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -1674,7 +1821,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
-                E->control.ala_pcg_restart_interval);
+                E->control.ala_pcg_restart_interval,
+                E->control.ala_beta_element_source,
+                E->control.ala_beta_causal_diagnostics ? "on" : "off");
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
@@ -1775,6 +1924,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 relative_residual);
     }
     strict_ala_depth_diagnostics(E, r, div_u, lev, count);
+    strict_ala_beta_causal_diagnostics(
+        E,V,r,preconditioner_work,div_u,lev,count);
     strict_ala_coarse_residual_diagnostics(E, r, lev, count);
 
     /* A fixed inner target keeps the approximate Schur operator as
@@ -1987,6 +2138,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                         E->control.ala_update_tolerance);
         }
         strict_ala_depth_diagnostics(E, explicit_r, div_u, lev, count);
+        strict_ala_beta_causal_diagnostics(
+            E,V,explicit_r,preconditioner_work,div_u,lev,count);
         strict_ala_coarse_residual_diagnostics(E, explicit_r, lev, count);
 
         rho_old = rho;

@@ -471,6 +471,7 @@ struct CONTROL {
     /* strict-ALA Krylov diagnostics and inexact velocity solves */
     int ala_schur_symmetry_check;
     double ala_schur_symmetry_tolerance;
+    char ala_beta_element_source[32];
     double ala_inner_accuracy_max;
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
@@ -484,6 +485,7 @@ struct CONTROL {
     int ala_depth_diagnostics;
     int ala_depth_diagnostic_interval;
     int ala_depth_diagnostic_bins;
+    int ala_beta_causal_diagnostics;
     int ala_coarse_residual_diagnostics;
     int ala_coarse_residual_interval;
     int ala_coarse_residual_levels;
@@ -606,6 +608,8 @@ struct REF_STATE {
     char filename[200];
     double *rho;
     double *ala_beta;              /* authoritative strict-ALA element beta */
+    double *ala_beta_supplied;     /* endpoint-average supplied beta */
+    double *ala_beta_density;      /* logarithmic density-secant beta */
     double *beta_ala;              /* strict-ALA nodal beta, refstate column 6 */
     double *thermal_expansivity;
     double *heat_capacity;

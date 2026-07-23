@@ -34,6 +34,8 @@
 #include "global_defs.h"
 #include "material_properties.h"
 
+void myerror(struct All_variables *,char *);
+
 
 
 void add_force(struct All_variables *E, int e, double elt_f[24], int m)
@@ -791,6 +793,57 @@ void assemble_div_rho_u(struct All_variables *E,
     assemble_c_u(E, U, result, level);
 
     return;
+}
+
+
+/* Assemble the strict-ALA continuity operator with an explicitly selected
+   finest-grid element beta field. This is diagnostic-only unless the selected
+   field is also E->refstate.ala_beta, in which case it is algebraically
+   identical to assemble_div_rho_u(). */
+void assemble_div_rho_u_with_beta(struct All_variables *E,
+                                  double **U, double **result, int level,
+                                  double *fine_beta)
+{
+    int m,e,a,b,p,j1,j2,j3,nz,fine_first,fine_last,fine_nz;
+    double beta,active_beta,dr,dr_total,scale;
+    const int nel=E->lmesh.NEL[level];
+    const int ends=enodes[E->mesh.nsd];
+    const int dims=E->mesh.nsd;
+    void assemble_div_u();
+
+    assemble_div_u(E,U,result,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=nel;e++) {
+            nz=((e-1)%E->lmesh.ELZ[level])+1;
+            fine_first=((nz-1)*E->lmesh.elz)/E->lmesh.ELZ[level]+1;
+            fine_last=(nz*E->lmesh.elz)/E->lmesh.ELZ[level];
+            beta=0.0;
+            active_beta=0.0;
+            dr_total=0.0;
+            for(fine_nz=fine_first;fine_nz<=fine_last;fine_nz++) {
+                dr=E->sx[1][3][fine_nz+1]-E->sx[1][3][fine_nz];
+                beta += fine_beta[fine_nz]*dr;
+                active_beta += E->refstate.ala_beta[fine_nz]*dr;
+                dr_total += dr;
+            }
+            beta /= dr_total;
+            active_beta /= dr_total;
+            if(!isfinite(beta) || beta<=0.0 ||
+               !isfinite(active_beta) || active_beta<=0.0)
+                myerror(E,"Invalid beta in ALA causal residual assembly");
+            scale=beta/active_beta;
+            for(a=1;a<=ends;a++) {
+                p=(a-1)*dims;
+                b=E->IEN[level][m][e].node[a];
+                j1=E->ID[level][m][b].doff[1];
+                j2=E->ID[level][m][b].doff[2];
+                j3=E->ID[level][m][b].doff[3];
+                result[m][e] += scale*(
+                    E->elt_c[level][m][e].c[p][0]*U[m][j1]
+                   +E->elt_c[level][m][e].c[p+1][0]*U[m][j2]
+                   +E->elt_c[level][m][e].c[p+2][0]*U[m][j3]);
+            }
+        }
 }
 
 
