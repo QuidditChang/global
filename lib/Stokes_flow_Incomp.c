@@ -79,6 +79,9 @@ struct ala_shallow_patch_cache {
     unsigned char *size[NCS];
     int *elements[NCS];
     double *chol[NCS];
+    double *velocity_node_inverse[NCS];
+    int shallow_node_min_z;
+    int shallow_node_layers;
 };
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_shallow_patch_cache *cache, int lev);
@@ -99,11 +102,30 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double *residual_reduction);
 
 
-static double ala_shallow_patch_offdiag(struct All_variables *E,
-                                        int e1, int e2, int lev, int m)
+static int ala_shallow_node_index(struct All_variables *E,
+    struct ala_shallow_patch_cache *cache, int node, int lev)
 {
-    int a,b,d,p1,p2,node1,node2,eqn;
-    double g1,g2,value;
+    int nz,nx,ny,z,x,y;
+    nz=E->lmesh.NOZ[lev];
+    nx=E->lmesh.NOX[lev];
+    ny=E->lmesh.NOY[lev];
+    z=(node-1)%nz+1;
+    x=((node-1)/nz)%nx;
+    y=(node-1)/(nz*nx);
+    if(z<cache->shallow_node_min_z || x<0 || x>=nx || y<0 || y>=ny)
+        return -1;
+    return (z-cache->shallow_node_min_z)
+        +x*cache->shallow_node_layers
+        +y*cache->shallow_node_layers*nx;
+}
+
+
+static double ala_shallow_patch_entry(struct All_variables *E,
+    struct ala_shallow_patch_cache *cache,
+    int e1, int e2, int lev, int m)
+{
+    int a,b,d1,d2,p1,p2,node1,node2,index;
+    double g1,g2,value,*inverse;
     const int ends=enodes[E->mesh.nsd];
     const int dims=E->mesh.nsd;
 
@@ -114,15 +136,20 @@ static double ala_shallow_patch_offdiag(struct All_variables *E,
             node2=E->IEN[lev][m][e2].node[b];
             if(node1!=node2)
                 continue;
-            for(d=1;d<=dims;d++) {
-                p1=(a-1)*dims+d-1;
-                p2=(b-1)*dims+d-1;
+            index=ala_shallow_node_index(E,cache,node1,lev);
+            if(index<0)
+                continue;
+            inverse=cache->velocity_node_inverse[m]+9*index;
+            for(d1=0;d1<dims;d1++) {
+                p1=(a-1)*dims+d1;
                 g1=E->elt_del[lev][m][e1].g[p1][0]
                     +E->elt_c[lev][m][e1].c[p1][0];
-                g2=E->elt_del[lev][m][e2].g[p2][0]
-                    +E->elt_c[lev][m][e2].c[p2][0];
-                eqn=E->ID[lev][m][node1].doff[d];
-                value += g1*E->BI[lev][m][eqn]*g2;
+                for(d2=0;d2<dims;d2++) {
+                    p2=(b-1)*dims+d2;
+                    g2=E->elt_del[lev][m][e2].g[p2][0]
+                        +E->elt_c[lev][m][e2].c[p2][0];
+                    value += g1*inverse[3*d1+d2]*g2;
+                }
             }
         }
     }
@@ -135,9 +162,13 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
 {
     int m,ex,ey,ez,dx,dy,dz,b,i,j,k,n,block_count;
     int elx,ely,elz,shallow_min_ez,radial_groups,e;
+    int node,a,row,col,p,node_index,node_count,nz,nx,ny,x,y,z;
     int local_blocks,global_blocks,local_fallback,global_fallback;
     int local_elements,global_elements;
-    double depth_km,sum,pivot,maxdiag;
+    int local_node_fallback,global_node_fallback;
+    double depth_km,sum,pivot,maxdiag,det,shift;
+    double local_node_energy[2],global_node_energy[2];
+    double *inverse,*element_k;
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
     double *L;
     const double pivot_tolerance=1.0e-12;
@@ -156,12 +187,87 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     radial_groups=(shallow_min_ez<=elz)
         ? (elz-shallow_min_ez+2)/2 : 0;
+    cache->shallow_node_min_z=shallow_min_ez;
+    cache->shallow_node_layers=(shallow_min_ez<=elz)
+        ? elz-shallow_min_ez+2 : 0;
     block_count=((elx+1)/2)*((ely+1)/2)*radial_groups;
     local_blocks=0;
     local_fallback=0;
     local_elements=0;
+    local_node_fallback=0;
+    local_node_energy[0]=0.0;
+    local_node_energy[1]=0.0;
+    nz=E->lmesh.NOZ[lev];
+    nx=E->lmesh.NOX[lev];
+    ny=E->lmesh.NOY[lev];
+    node_count=nx*ny*cache->shallow_node_layers;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        if(node_count>0) {
+            cache->velocity_node_inverse[m]=(double *)calloc(9*node_count,
+                                                             sizeof(double));
+            if(cache->velocity_node_inverse[m]==NULL)
+                myerror(E,"Unable to allocate ALA velocity node blocks");
+            for(e=1;e<=E->lmesh.NEL[lev];e++)
+                for(a=1;a<=enodes[E->mesh.nsd];a++) {
+                    node=E->IEN[lev][m][e].node[a];
+                    node_index=ala_shallow_node_index(E,cache,node,lev);
+                    if(node_index<0)
+                        continue;
+                    inverse=cache->velocity_node_inverse[m]+9*node_index;
+                    element_k=E->elt_k[lev][m][e].k;
+                    for(row=0;row<3;row++)
+                        for(col=0;col<3;col++) {
+                            p=((a-1)*3+row)*24+(a-1)*3+col;
+                            inverse[3*row+col] += element_k[p];
+                        }
+                }
+            for(node_index=0;node_index<node_count;node_index++) {
+                inverse=cache->velocity_node_inverse[m]+9*node_index;
+                inverse[1]=inverse[3]=0.5*(inverse[1]+inverse[3]);
+                inverse[2]=inverse[6]=0.5*(inverse[2]+inverse[6]);
+                inverse[5]=inverse[7]=0.5*(inverse[5]+inverse[7]);
+                local_node_energy[0] += inverse[0]*inverse[0]
+                    +inverse[4]*inverse[4]+inverse[8]*inverse[8];
+                local_node_energy[1] += 2.0*(inverse[1]*inverse[1]
+                    +inverse[2]*inverse[2]+inverse[5]*inverse[5]);
+                maxdiag=max(inverse[0],max(inverse[4],inverse[8]));
+                shift=E->control.ala_shallow_patch_regularization
+                    *max(maxdiag,1.0e-300);
+                inverse[0] += shift;
+                inverse[4] += shift;
+                inverse[8] += shift;
+                det=inverse[0]*(inverse[4]*inverse[8]-inverse[5]*inverse[7])
+                    -inverse[1]*(inverse[3]*inverse[8]-inverse[5]*inverse[6])
+                    +inverse[2]*(inverse[3]*inverse[7]-inverse[4]*inverse[6]);
+                if(!isfinite(det) || det<=1.0e-18*maxdiag*maxdiag*maxdiag) {
+                    z=(node_index%cache->shallow_node_layers)
+                        +cache->shallow_node_min_z;
+                    x=(node_index/cache->shallow_node_layers)%nx;
+                    y=node_index/(cache->shallow_node_layers*nx);
+                    node=z+x*nz+y*nz*nx;
+                    memset(inverse,0,9*sizeof(double));
+                    for(row=0;row<3;row++)
+                        inverse[3*row+row]=E->BI[lev][m]
+                            [E->ID[lev][m][node].doff[row+1]];
+                    local_node_fallback++;
+                }
+                else {
+                    matrix[0][0]=(inverse[4]*inverse[8]-inverse[5]*inverse[7])/det;
+                    matrix[0][1]=(inverse[2]*inverse[7]-inverse[1]*inverse[8])/det;
+                    matrix[0][2]=(inverse[1]*inverse[5]-inverse[2]*inverse[4])/det;
+                    matrix[1][0]=(inverse[5]*inverse[6]-inverse[3]*inverse[8])/det;
+                    matrix[1][1]=(inverse[0]*inverse[8]-inverse[2]*inverse[6])/det;
+                    matrix[1][2]=(inverse[2]*inverse[3]-inverse[0]*inverse[5])/det;
+                    matrix[2][0]=(inverse[3]*inverse[7]-inverse[4]*inverse[6])/det;
+                    matrix[2][1]=(inverse[1]*inverse[6]-inverse[0]*inverse[7])/det;
+                    matrix[2][2]=(inverse[0]*inverse[4]-inverse[1]*inverse[3])/det;
+                    for(row=0;row<3;row++)
+                        for(col=0;col<3;col++)
+                            inverse[3*row+col]=matrix[row][col];
+                }
+            }
+        }
         cache->blocks[m]=block_count;
         if(block_count==0)
             continue;
@@ -196,11 +302,12 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     for(i=0;i<n;i++) {
                         e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
                         matrix[i][i]=(1.0+E->control.ala_shallow_patch_regularization)
-                            /E->BPI[lev][m][e];
+                            *ala_shallow_patch_entry(E,cache,e,e,lev,m);
                         maxdiag=max(maxdiag,matrix[i][i]);
                         for(j=0;j<i;j++) {
-                            matrix[i][j]=ala_shallow_patch_offdiag(
-                                E,e,cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+j],
+                            matrix[i][j]=ala_shallow_patch_entry(
+                                E,cache,e,
+                                cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+j],
                                 lev,m);
                             matrix[j][i]=matrix[i][j];
                         }
@@ -243,23 +350,35 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   E->parallel.world);
     MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
+    MPI_Allreduce(&local_node_fallback,&global_node_fallback,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(local_node_energy,global_node_energy,2,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
     if(global_blocks+global_fallback==0)
         myerror(E,"ALA shallow-patch depth selects no global elements");
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "selected_elements=%d valid_blocks=%d fallback_blocks=%d\n",
+                "operator=(D+C)Knode^-1(D+C)^T selected_elements=%d "
+                "valid_blocks=%d fallback_blocks=%d node_fallbacks=%d "
+                "Knode_offdiag_ratio=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_elements,global_blocks,global_fallback);
+                global_elements,global_blocks,global_fallback,
+                global_node_fallback,sqrt(global_node_energy[1]
+                    /max(global_node_energy[0],1.0e-300)));
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "selected_elements=%d valid_blocks=%d fallback_blocks=%d\n",
+                "operator=(D+C)Knode^-1(D+C)^T selected_elements=%d "
+                "valid_blocks=%d fallback_blocks=%d node_fallbacks=%d "
+                "Knode_offdiag_ratio=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_elements,global_blocks,global_fallback);
+                global_elements,global_blocks,global_fallback,
+                global_node_fallback,sqrt(global_node_energy[1]
+                    /max(global_node_energy[0],1.0e-300)));
     }
 }
 
@@ -272,6 +391,7 @@ static void free_ala_shallow_patch_cache(struct All_variables *E,
         free((void *)cache->size[m]);
         free((void *)cache->elements[m]);
         free((void *)cache->chol[m]);
+        free((void *)cache->velocity_node_inverse[m]);
     }
     memset(cache,0,sizeof(*cache));
 }
