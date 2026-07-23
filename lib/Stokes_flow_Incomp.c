@@ -209,18 +209,22 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         cache->blocks[m]=block_count;
+        /* Deep radial ranks legitimately own no cells above the configured
+           shallow depth.  The apply path still scans their pressure cells, so
+           multiplicity must exist even when this rank has zero patch blocks. */
+        cache->multiplicity[m]=(unsigned char *)calloc(npno+1,
+                                                       sizeof(unsigned char));
+        if(cache->multiplicity[m]==NULL)
+            myerror(E,"Unable to allocate ALA shallow-patch multiplicity");
         if(block_count==0)
             continue;
         cache->size[m]=(unsigned char *)calloc(block_count,
                                                 sizeof(unsigned char));
-        cache->multiplicity[m]=(unsigned char *)calloc(npno+1,
-                                                       sizeof(unsigned char));
         cache->elements[m]=(int *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS,
                                          sizeof(int));
         cache->chol[m]=(double *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS
                                        *ALA_PATCH_MAX_ELEMENTS,sizeof(double));
-        if(cache->size[m]==NULL || cache->multiplicity[m]==NULL ||
-           cache->elements[m]==NULL ||
+        if(cache->size[m]==NULL || cache->elements[m]==NULL ||
            cache->chol[m]==NULL)
             myerror(E,"Unable to allocate ALA shallow-patch cache");
         b=0;
