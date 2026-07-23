@@ -168,10 +168,12 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     int local_node_fallback,global_node_fallback;
     double depth_km,sum,pivot,maxdiag,det,shift;
     double local_node_energy[2],global_node_energy[2];
-    double *inverse,*element_k;
+    double *inverse,element_k[24*24];
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
     double *L;
     const double pivot_tolerance=1.0e-12;
+    void get_elt_k();
+    void get_aug_k();
 
     memset(cache,0,sizeof(*cache));
     elx=E->lmesh.ELX[lev];
@@ -208,20 +210,26 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                                              sizeof(double));
             if(cache->velocity_node_inverse[m]==NULL)
                 myerror(E,"Unable to allocate ALA velocity node blocks");
-            for(e=1;e<=E->lmesh.NEL[lev];e++)
+            for(e=1;e<=E->lmesh.NEL[lev];e++) {
+                ez=(e-1)%elz+1;
+                if(ez+1<cache->shallow_node_min_z)
+                    continue;
+                get_elt_k(E,e,element_k,lev,m,0);
+                if(E->control.augmented_Lagr)
+                    get_aug_k(E,e,element_k,lev,m);
                 for(a=1;a<=enodes[E->mesh.nsd];a++) {
                     node=E->IEN[lev][m][e].node[a];
                     node_index=ala_shallow_node_index(E,cache,node,lev);
                     if(node_index<0)
                         continue;
                     inverse=cache->velocity_node_inverse[m]+9*node_index;
-                    element_k=E->elt_k[lev][m][e].k;
                     for(row=0;row<3;row++)
                         for(col=0;col<3;col++) {
                             p=((a-1)*3+row)*24+(a-1)*3+col;
                             inverse[3*row+col] += element_k[p];
                         }
                 }
+            }
             for(node_index=0;node_index<node_count;node_index++) {
                 inverse=cache->velocity_node_inverse[m]+9*node_index;
                 inverse[1]=inverse[3]=0.5*(inverse[1]+inverse[3]);
