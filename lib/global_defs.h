@@ -464,8 +464,9 @@ struct CONTROL {
     /* inverse of Gruneisen parameter */
     float inv_gruneisen;
 
-    /* compressible Stokes force form: 0=TALA, 1=ALA pressure buoyancy */
+    /* Explicit approximation selectors. */
     int ala_pressure_buoyancy;
+    int eba_formulation;
     char compressible_formulation[20];
 
     /* strict-ALA Krylov diagnostics and inexact velocity solves */

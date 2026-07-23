@@ -1206,7 +1206,7 @@ static void process_visc_heating(struct All_variables *E, int m,
 
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        if(E->control.ala_pressure_buoyancy)
+        if(E->control.ala_pressure_buoyancy || E->control.eba_formulation)
             matprop = 1.0;
         else
             matprop = 0.5 * (E->refstate.dis[ez] +
@@ -1234,7 +1234,7 @@ static void process_adi_heating(struct All_variables *E, int m,
     temp2 = E->control.disptn_number / ends;
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        if(E->control.ala_pressure_buoyancy) {
+        if(E->control.ala_pressure_buoyancy || E->control.eba_formulation) {
             matprop = 0.125
                 * (E->refstate.thermal_expansivity[ez] +
                    E->refstate.thermal_expansivity[ez + 1])
@@ -1279,7 +1279,7 @@ static void latent_heating(struct All_variables *E, int m,
 
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        if(E->control.ala_pressure_buoyancy) {
+        if(E->control.ala_pressure_buoyancy || E->control.eba_formulation) {
             matprop = 0.125
                 * (E->refstate.thermal_expansivity[ez] +
                    E->refstate.thermal_expansivity[ez + 1])

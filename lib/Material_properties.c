@@ -126,7 +126,8 @@ void reference_state(struct All_variables *E)
         parallel_process_termination();
     }
 
-    initialize_ala_beta(E);
+    if(E->control.ala_pressure_buoyancy)
+        initialize_ala_beta(E);
 
     if(E->control.ala_pressure_buoyancy) {
         if(E->parallel.me == 0) {
@@ -140,6 +141,16 @@ void reference_state(struct All_variables *E)
                         E->refstate.beta_ala[i], E->refstate.gamma_eff[i],
                         layers_r(E,E->sx[1][3][i]));
             }
+    }
+    else if(E->control.eba_formulation) {
+        if(E->parallel.me == 0)
+            fprintf(stderr, "nz  radius   depth    rho     layer\n");
+        if(E->parallel.me < E->parallel.nprocz)
+            for(i=1; i<=E->lmesh.noz; i++)
+                fprintf(stderr, "%d %f %f %e %5i\n",
+                        i+E->lmesh.nzs-1, E->sx[1][3][i],
+                        1-E->sx[1][3][i], E->refstate.rho[i],
+                        layers_r(E,E->sx[1][3][i]));
     }
     else {
         if(E->parallel.me == 0) {
@@ -476,6 +487,11 @@ static void read_refstate(struct All_variables *E)
                              &cmb_values[0], &cmb_values[1], &cmb_values[2],
                              &cmb_values[3], &cmb_values[4], &cmb_values[5],
                              &cmb_values[6], &trailing);
+    else if(E->control.eba_formulation)
+        cmb_columns = sscanf(cmb_buffer,
+                             "%lf %lf %lf %lf %lf %c",
+                             &cmb_values[0], &cmb_values[1], &cmb_values[2],
+                             &cmb_values[3], &cmb_values[4], &trailing);
     else
         cmb_columns = sscanf(cmb_buffer,
                              "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
@@ -490,7 +506,16 @@ static void read_refstate(struct All_variables *E)
                 E->refstate.filename, cmb_columns);
         parallel_process_termination();
     }
+    if(E->control.eba_formulation && cmb_columns != 5) {
+        fprintf(stderr,
+                "Reference state file '%s', global radial row 1: "
+                "EBA requires exactly 5 numeric columns "
+                "(rho g Tref alpha Cp), found %d\n",
+                E->refstate.filename, cmb_columns);
+        parallel_process_termination();
+    }
     if(!E->control.ala_pressure_buoyancy &&
+       !E->control.eba_formulation &&
        cmb_columns != 7 && cmb_columns != 8 && cmb_columns != 9) {
         fprintf(stderr,
                 "Legacy reference state file '%s', global radial row 1: "
@@ -498,8 +523,8 @@ static void read_refstate(struct All_variables *E)
                 E->refstate.filename, cmb_columns);
         parallel_process_termination();
     }
-    if(E->control.ala_pressure_buoyancy) {
-        /* Strict-ALA generation closes the endpoint rows to the Dirichlet
+    if(E->control.ala_pressure_buoyancy || E->control.eba_formulation) {
+        /* Current ALA/EBA generation closes endpoint rows to the Dirichlet
          * values T*=1 and T*=0.  Those closures are not the Katsura
          * background endpoints needed by initial anomaly superposition.
          * Recover both smooth background endpoints by quadratic continuation
@@ -511,14 +536,22 @@ static void read_refstate(struct All_variables *E)
             last_temperature[j] = 0.0;
         }
         while(read_refstate_data_line(fp, buffer, 255)) {
-            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
-                             &values[0], &values[1], &values[2], &values[3],
-                             &values[4], &values[5], &values[6], &trailing);
-            if(columns != 7) {
+            if(E->control.ala_pressure_buoyancy)
+                columns = sscanf(buffer,
+                                 "%lf %lf %lf %lf %lf %lf %lf %c",
+                                 &values[0], &values[1], &values[2],
+                                 &values[3], &values[4], &values[5],
+                                 &values[6], &trailing);
+            else
+                columns = sscanf(buffer, "%lf %lf %lf %lf %lf %c",
+                                 &values[0], &values[1], &values[2],
+                                 &values[3], &values[4], &trailing);
+            if(columns != (E->control.ala_pressure_buoyancy ? 7 : 5)) {
                 fprintf(stderr,
                         "Reference state file '%s', global radial row %d: "
-                        "strict ALA requires exactly 7 numeric columns\n",
-                        E->refstate.filename, background_rows+1);
+                        "%s requires its exact reference-state schema\n",
+                        E->refstate.filename, background_rows+1,
+                        E->control.ala_pressure_buoyancy ? "strict ALA" : "EBA");
                 parallel_process_termination();
             }
             if(background_rows < 4)
@@ -566,6 +599,10 @@ static void read_refstate(struct All_variables *E)
             columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
                              &values[0], &values[1], &values[2], &values[3],
                              &values[4], &values[5], &values[6], &trailing);
+        else if(E->control.eba_formulation)
+            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %c",
+                             &values[0], &values[1], &values[2], &values[3],
+                             &values[4], &trailing);
         else
             columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
                              &values[0], &values[1], &values[2], &values[3],
@@ -579,7 +616,16 @@ static void read_refstate(struct All_variables *E)
                     E->refstate.filename, i+E->lmesh.nzs-1, columns);
             parallel_process_termination();
         }
+        if(E->control.eba_formulation && columns != 5) {
+            fprintf(stderr,
+                    "Reference state file '%s', global radial row %d: "
+                    "EBA requires exactly 5 numeric columns "
+                    "(rho g Tref alpha Cp), found %d\n",
+                    E->refstate.filename, i+E->lmesh.nzs-1, columns);
+            parallel_process_termination();
+        }
         if(!E->control.ala_pressure_buoyancy &&
+           !E->control.eba_formulation &&
            columns != 7 && columns != 8 && columns != 9) {
             fprintf(stderr,
                     "Legacy reference state file '%s', global radial row %d: "
@@ -627,6 +673,33 @@ static void read_refstate(struct All_variables *E)
                 parallel_process_termination();
             }
         }
+        else if(E->control.eba_formulation) {
+            /* EBA schema: rho g Tref alpha Cp. It deliberately contains no
+             * dis, beta, or Gamma_eff. */
+            E->refstate.rho[i] = values[0];
+            E->refstate.gravity[i] = values[1];
+            E->refstate.temperature[i] = values[2];
+            E->refstate.thermal_expansivity[i] = values[3];
+            E->refstate.heat_capacity[i] = values[4];
+            E->refstate.dis[i] = 0.0;
+            E->refstate.gamma_eff[i] = 0.0;
+            E->refstate.beta_ala[i] = 0.0;
+            if(E->refstate.rho[i] <= 0.0 ||
+               E->refstate.gravity[i] <= 0.0 ||
+               E->refstate.thermal_expansivity[i] <= 0.0 ||
+               E->refstate.heat_capacity[i] <= 0.0 ||
+               !isfinite(E->refstate.rho[i]) ||
+               !isfinite(E->refstate.gravity[i]) ||
+               !isfinite(E->refstate.temperature[i]) ||
+               !isfinite(E->refstate.thermal_expansivity[i]) ||
+               !isfinite(E->refstate.heat_capacity[i])) {
+                fprintf(stderr,
+                        "Invalid EBA row %d: all fields must be finite and "
+                        "rho/g/alpha/Cp positive\n",
+                        i+E->lmesh.nzs-1);
+                parallel_process_termination();
+            }
+        }
         else {
             /* Historical named formulations retain their dis-containing
              * rho g alpha Cp dis k [Tref Gamma_eff [beta]] interpretation. */
@@ -651,6 +724,7 @@ static void read_refstate(struct All_variables *E)
     }
 
     E->refstate.has_temperature = E->control.ala_pressure_buoyancy ||
+                                  E->control.eba_formulation ||
                                   expected_columns >= 8;
     E->refstate.has_beta_ala = E->control.ala_pressure_buoyancy ||
                                expected_columns == 9;
@@ -667,6 +741,14 @@ static void read_refstate(struct All_variables *E)
         fprintf(stderr,
                 "Read strict ALA reference state '%s': "
                 "rho g Tref alpha Cp beta Gamma_eff; "
+                "unclosed T_K endpoints CMB=%e surface=%e\n",
+                E->refstate.filename, E->refstate.temperature_cmb,
+                E->refstate.temperature_surface);
+    }
+    else if(E->parallel.me == 0 && E->control.eba_formulation) {
+        fprintf(stderr,
+                "Read EBA reference state '%s': "
+                "rho g Tref alpha Cp; "
                 "unclosed T_K endpoints CMB=%e surface=%e\n",
                 E->refstate.filename, E->refstate.temperature_cmb,
                 E->refstate.temperature_surface);
