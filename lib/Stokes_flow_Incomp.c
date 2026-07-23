@@ -74,14 +74,13 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
 #define ALA_PATCH_MAX_ELEMENTS 8
+#define ALA_PATCH_MAX_NODES 27
+#define ALA_PATCH_MAX_VDOF (3*ALA_PATCH_MAX_NODES)
 struct ala_shallow_patch_cache {
     int blocks[NCS];
     unsigned char *size[NCS];
     int *elements[NCS];
     double *chol[NCS];
-    double *velocity_node_inverse[NCS];
-    int shallow_node_min_z;
-    int shallow_node_layers;
 };
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_shallow_patch_cache *cache, int lev);
@@ -102,58 +101,182 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double *residual_reduction);
 
 
-static int ala_shallow_node_index(struct All_variables *E,
-    struct ala_shallow_patch_cache *cache, int node, int lev)
+static int ala_patch_find_node(const int *nodes, int count, int node)
 {
-    int nz,nx,ny,z,x,y;
-    nz=E->lmesh.NOZ[lev];
-    nx=E->lmesh.NOX[lev];
-    ny=E->lmesh.NOY[lev];
-    z=(node-1)%nz+1;
-    x=((node-1)/nz)%nx;
-    y=(node-1)/(nz*nx);
-    if(z<cache->shallow_node_min_z || x<0 || x>=nx || y<0 || y>=ny)
-        return -1;
-    return (z-cache->shallow_node_min_z)
-        +x*cache->shallow_node_layers
-        +y*cache->shallow_node_layers*nx;
+    int i;
+    for(i=0;i<count;i++)
+        if(nodes[i]==node)
+            return i;
+    return -1;
 }
 
 
-static double ala_shallow_patch_entry(struct All_variables *E,
-    struct ala_shallow_patch_cache *cache,
-    int e1, int e2, int lev, int m)
+static int ala_build_spatial_patch_schur(struct All_variables *E,
+    const int *elements, int n, int lev, int m, double *schur,
+    double *diagonal_energy, double *spatial_energy)
 {
-    int a,b,d1,d2,p1,p2,node1,node2,index;
-    double g1,g2,value,*inverse;
+    int nodes[ALA_PATCH_MAX_NODES];
+    int node_count,ndof,i,j,k,a,b,d1,d2,e,q,node,index1,index2;
+    int row,col,p,doff;
+    double K[ALA_PATCH_MAX_VDOF*ALA_PATCH_MAX_VDOF];
+    double G[ALA_PATCH_MAX_ELEMENTS*ALA_PATCH_MAX_VDOF];
+    double solution[ALA_PATCH_MAX_VDOF];
+    double element_k[24*24];
+    double sum,pivot,maxdiag,bi,target,shift;
     const int ends=enodes[E->mesh.nsd];
     const int dims=E->mesh.nsd;
+    const double pivot_tolerance=1.0e-12;
+    const unsigned int velocity_flags[3]={VBX,VBY,VBZ};
+    void get_elt_k();
+    void get_aug_k();
 
-    value=0.0;
-    for(a=1;a<=ends;a++) {
-        node1=E->IEN[lev][m][e1].node[a];
-        for(b=1;b<=ends;b++) {
-            node2=E->IEN[lev][m][e2].node[b];
-            if(node1!=node2)
-                continue;
-            index=ala_shallow_node_index(E,cache,node1,lev);
-            if(index<0)
-                continue;
-            inverse=cache->velocity_node_inverse[m]+9*index;
-            for(d1=0;d1<dims;d1++) {
-                p1=(a-1)*dims+d1;
-                g1=E->elt_del[lev][m][e1].g[p1][0]
-                    +E->elt_c[lev][m][e1].c[p1][0];
-                for(d2=0;d2<dims;d2++) {
-                    p2=(b-1)*dims+d2;
-                    g2=E->elt_del[lev][m][e2].g[p2][0]
-                        +E->elt_c[lev][m][e2].c[p2][0];
-                    value += g1*inverse[3*d1+d2]*g2;
-                }
+    node_count=0;
+    for(i=0;i<n;i++) {
+        e=elements[i];
+        for(a=1;a<=ends;a++) {
+            node=E->IEN[lev][m][e].node[a];
+            if(ala_patch_find_node(nodes,node_count,node)<0) {
+                if(node_count>=ALA_PATCH_MAX_NODES)
+                    return 0;
+                nodes[node_count++]=node;
             }
         }
     }
-    return value;
+    ndof=dims*node_count;
+    memset(K,0,sizeof(K));
+    memset(G,0,sizeof(G));
+    for(i=0;i<n;i++) {
+        e=elements[i];
+        for(a=1;a<=ends;a++) {
+            index1=ala_patch_find_node(
+                nodes,node_count,E->IEN[lev][m][e].node[a]);
+            for(d1=0;d1<dims;d1++) {
+                node=E->IEN[lev][m][e].node[a];
+                if(!(E->NODE[lev][m][node]&velocity_flags[d1]))
+                    G[i*ALA_PATCH_MAX_VDOF+dims*index1+d1]
+                        =E->elt_del[lev][m][e].g[(a-1)*dims+d1][0]
+                         +E->elt_c[lev][m][e].c[(a-1)*dims+d1][0];
+            }
+        }
+    }
+
+    /* Assemble all spatial velocity couplings contributed by the pressure
+       block's elements. The global diagonal completion below supplies the
+       stiffness contributed by elements outside this nonoverlapping block. */
+    for(k=0;k<n;k++) {
+        q=elements[k];
+        get_elt_k(E,q,element_k,lev,m,0);
+        if(E->control.augmented_Lagr)
+            get_aug_k(E,q,element_k,lev,m);
+        for(a=1;a<=ends;a++) {
+            index1=ala_patch_find_node(
+                nodes,node_count,E->IEN[lev][m][q].node[a]);
+            if(index1<0)
+                continue;
+            for(b=1;b<=ends;b++) {
+                index2=ala_patch_find_node(
+                    nodes,node_count,E->IEN[lev][m][q].node[b]);
+                if(index2<0)
+                    continue;
+                for(d1=0;d1<dims;d1++)
+                    for(d2=0;d2<dims;d2++) {
+                        if((E->NODE[lev][m]
+                              [E->IEN[lev][m][q].node[a]]
+                              &velocity_flags[d1]) ||
+                           (E->NODE[lev][m]
+                              [E->IEN[lev][m][q].node[b]]
+                              &velocity_flags[d2]))
+                            continue;
+                        row=dims*index1+d1;
+                        col=dims*index2+d2;
+                        p=((a-1)*dims+d1)*24+(b-1)*dims+d2;
+                        K[row*ALA_PATCH_MAX_VDOF+col] += element_k[p];
+                    }
+            }
+        }
+    }
+
+    /* Complete diagonals with the assembled global K diagonal. This restores
+       contributions owned across MPI/cap boundaries without inventing
+       off-process couplings in the local fixed block. */
+    maxdiag=0.0;
+    for(row=0;row<ndof;row++) {
+        node=nodes[row/dims];
+        d1=row%dims;
+        doff=E->ID[lev][m][node].doff[d1+1];
+        bi=(doff>=0 && doff<E->lmesh.NEQ[lev])
+           ? E->BI[lev][m][doff] : 0.0;
+        if(isfinite(bi) && bi>0.0) {
+            target=1.0/bi;
+            if(K[row*ALA_PATCH_MAX_VDOF+row]<target)
+                K[row*ALA_PATCH_MAX_VDOF+row]=target;
+        }
+        maxdiag=max(maxdiag,K[row*ALA_PATCH_MAX_VDOF+row]);
+    }
+    for(row=0;row<ndof;row++) {
+        for(col=0;col<row;col++) {
+            sum=0.5*(K[row*ALA_PATCH_MAX_VDOF+col]
+                    +K[col*ALA_PATCH_MAX_VDOF+row]);
+            K[row*ALA_PATCH_MAX_VDOF+col]=sum;
+            K[col*ALA_PATCH_MAX_VDOF+row]=sum;
+            if(row/dims!=col/dims)
+                *spatial_energy += 2.0*sum*sum;
+        }
+        *diagonal_energy += K[row*ALA_PATCH_MAX_VDOF+row]
+                           *K[row*ALA_PATCH_MAX_VDOF+row];
+        shift=E->control.ala_shallow_patch_regularization
+              *max(K[row*ALA_PATCH_MAX_VDOF+row],1.0e-300);
+        K[row*ALA_PATCH_MAX_VDOF+row] += shift;
+    }
+
+    /* In-place Cholesky of the fixed spatial velocity block. */
+    for(i=0;i<ndof;i++) {
+        for(j=0;j<=i;j++) {
+            sum=K[i*ALA_PATCH_MAX_VDOF+j];
+            for(k=0;k<j;k++)
+                sum -= K[i*ALA_PATCH_MAX_VDOF+k]
+                       *K[j*ALA_PATCH_MAX_VDOF+k];
+            if(i==j) {
+                pivot=sum;
+                if(!isfinite(pivot) ||
+                   pivot<=pivot_tolerance*max(maxdiag,1.0e-300))
+                    return 0;
+                K[i*ALA_PATCH_MAX_VDOF+j]=sqrt(pivot);
+            }
+            else
+                K[i*ALA_PATCH_MAX_VDOF+j]
+                    =sum/K[j*ALA_PATCH_MAX_VDOF+j];
+        }
+    }
+
+    for(j=0;j<n;j++) {
+        for(row=0;row<ndof;row++) {
+            sum=G[j*ALA_PATCH_MAX_VDOF+row];
+            for(k=0;k<row;k++)
+                sum -= K[row*ALA_PATCH_MAX_VDOF+k]*solution[k];
+            solution[row]=sum/K[row*ALA_PATCH_MAX_VDOF+row];
+        }
+        for(row=ndof-1;row>=0;row--) {
+            sum=solution[row];
+            for(k=row+1;k<ndof;k++)
+                sum -= K[k*ALA_PATCH_MAX_VDOF+row]*solution[k];
+            solution[row]=sum/K[row*ALA_PATCH_MAX_VDOF+row];
+        }
+        for(i=0;i<n;i++) {
+            sum=0.0;
+            for(row=0;row<ndof;row++)
+                sum += G[i*ALA_PATCH_MAX_VDOF+row]*solution[row];
+            schur[i*ALA_PATCH_MAX_ELEMENTS+j]=sum;
+        }
+    }
+    for(i=0;i<n;i++)
+        for(j=0;j<i;j++) {
+            sum=0.5*(schur[i*ALA_PATCH_MAX_ELEMENTS+j]
+                    +schur[j*ALA_PATCH_MAX_ELEMENTS+i]);
+            schur[i*ALA_PATCH_MAX_ELEMENTS+j]=sum;
+            schur[j*ALA_PATCH_MAX_ELEMENTS+i]=sum;
+        }
+    return 1;
 }
 
 
@@ -162,20 +285,18 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
 {
     int m,ex,ey,ez,dx,dy,dz,b,i,j,k,n,block_count;
     int elx,ely,elz,shallow_min_ez,radial_groups,e;
-    int node,a,row,col,p,node_index,node_count,nz,nx,ny,x,y,z;
     int local_blocks,global_blocks,local_fallback,global_fallback;
     int local_elements,global_elements;
-    int local_node_fallback,global_node_fallback;
-    double depth_km,sum,pivot,maxdiag,det,shift;
-    double local_node_energy[2],global_node_energy[2];
-    double *inverse,element_k[24*24];
+    double depth_km,sum,pivot,maxdiag;
+    double local_k_energy[2],global_k_energy[2];
+    double build_start,build_seconds,global_build_seconds;
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
     double *L;
     const double pivot_tolerance=1.0e-12;
-    void get_elt_k();
-    void get_aug_k();
+    double CPU_time0();
 
     memset(cache,0,sizeof(*cache));
+    build_start=CPU_time0();
     elx=E->lmesh.ELX[lev];
     ely=E->lmesh.ELY[lev];
     elz=E->lmesh.ELZ[lev];
@@ -189,93 +310,14 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     radial_groups=(shallow_min_ez<=elz)
         ? (elz-shallow_min_ez+2)/2 : 0;
-    cache->shallow_node_min_z=shallow_min_ez;
-    cache->shallow_node_layers=(shallow_min_ez<=elz)
-        ? elz-shallow_min_ez+2 : 0;
     block_count=((elx+1)/2)*((ely+1)/2)*radial_groups;
     local_blocks=0;
     local_fallback=0;
     local_elements=0;
-    local_node_fallback=0;
-    local_node_energy[0]=0.0;
-    local_node_energy[1]=0.0;
-    nz=E->lmesh.NOZ[lev];
-    nx=E->lmesh.NOX[lev];
-    ny=E->lmesh.NOY[lev];
-    node_count=nx*ny*cache->shallow_node_layers;
+    local_k_energy[0]=0.0;
+    local_k_energy[1]=0.0;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
-        if(node_count>0) {
-            cache->velocity_node_inverse[m]=(double *)calloc(9*node_count,
-                                                             sizeof(double));
-            if(cache->velocity_node_inverse[m]==NULL)
-                myerror(E,"Unable to allocate ALA velocity node blocks");
-            for(e=1;e<=E->lmesh.NEL[lev];e++) {
-                ez=(e-1)%elz+1;
-                if(ez+1<cache->shallow_node_min_z)
-                    continue;
-                get_elt_k(E,e,element_k,lev,m,0);
-                if(E->control.augmented_Lagr)
-                    get_aug_k(E,e,element_k,lev,m);
-                for(a=1;a<=enodes[E->mesh.nsd];a++) {
-                    node=E->IEN[lev][m][e].node[a];
-                    node_index=ala_shallow_node_index(E,cache,node,lev);
-                    if(node_index<0)
-                        continue;
-                    inverse=cache->velocity_node_inverse[m]+9*node_index;
-                    for(row=0;row<3;row++)
-                        for(col=0;col<3;col++) {
-                            p=((a-1)*3+row)*24+(a-1)*3+col;
-                            inverse[3*row+col] += element_k[p];
-                        }
-                }
-            }
-            for(node_index=0;node_index<node_count;node_index++) {
-                inverse=cache->velocity_node_inverse[m]+9*node_index;
-                inverse[1]=inverse[3]=0.5*(inverse[1]+inverse[3]);
-                inverse[2]=inverse[6]=0.5*(inverse[2]+inverse[6]);
-                inverse[5]=inverse[7]=0.5*(inverse[5]+inverse[7]);
-                local_node_energy[0] += inverse[0]*inverse[0]
-                    +inverse[4]*inverse[4]+inverse[8]*inverse[8];
-                local_node_energy[1] += 2.0*(inverse[1]*inverse[1]
-                    +inverse[2]*inverse[2]+inverse[5]*inverse[5]);
-                maxdiag=max(inverse[0],max(inverse[4],inverse[8]));
-                shift=E->control.ala_shallow_patch_regularization
-                    *max(maxdiag,1.0e-300);
-                inverse[0] += shift;
-                inverse[4] += shift;
-                inverse[8] += shift;
-                det=inverse[0]*(inverse[4]*inverse[8]-inverse[5]*inverse[7])
-                    -inverse[1]*(inverse[3]*inverse[8]-inverse[5]*inverse[6])
-                    +inverse[2]*(inverse[3]*inverse[7]-inverse[4]*inverse[6]);
-                if(!isfinite(det) || det<=1.0e-18*maxdiag*maxdiag*maxdiag) {
-                    z=(node_index%cache->shallow_node_layers)
-                        +cache->shallow_node_min_z;
-                    x=(node_index/cache->shallow_node_layers)%nx;
-                    y=node_index/(cache->shallow_node_layers*nx);
-                    node=z+x*nz+y*nz*nx;
-                    memset(inverse,0,9*sizeof(double));
-                    for(row=0;row<3;row++)
-                        inverse[3*row+row]=E->BI[lev][m]
-                            [E->ID[lev][m][node].doff[row+1]];
-                    local_node_fallback++;
-                }
-                else {
-                    matrix[0][0]=(inverse[4]*inverse[8]-inverse[5]*inverse[7])/det;
-                    matrix[0][1]=(inverse[2]*inverse[7]-inverse[1]*inverse[8])/det;
-                    matrix[0][2]=(inverse[1]*inverse[5]-inverse[2]*inverse[4])/det;
-                    matrix[1][0]=(inverse[5]*inverse[6]-inverse[3]*inverse[8])/det;
-                    matrix[1][1]=(inverse[0]*inverse[8]-inverse[2]*inverse[6])/det;
-                    matrix[1][2]=(inverse[2]*inverse[3]-inverse[0]*inverse[5])/det;
-                    matrix[2][0]=(inverse[3]*inverse[7]-inverse[4]*inverse[6])/det;
-                    matrix[2][1]=(inverse[1]*inverse[6]-inverse[0]*inverse[7])/det;
-                    matrix[2][2]=(inverse[0]*inverse[4]-inverse[1]*inverse[3])/det;
-                    for(row=0;row<3;row++)
-                        for(col=0;col<3;col++)
-                            inverse[3*row+col]=matrix[row][col];
-                }
-            }
-        }
         cache->blocks[m]=block_count;
         if(block_count==0)
             continue;
@@ -303,22 +345,25 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 n++;
                             }
                     cache->size[m][b]=(unsigned char)n;
-                    maxdiag=0.0;
                     for(i=0;i<n;i++)
                         for(j=0;j<n;j++)
                             matrix[i][j]=0.0;
+                    if(!ala_build_spatial_patch_schur(
+                           E,cache->elements[m]
+                             +b*ALA_PATCH_MAX_ELEMENTS,
+                           n,lev,m,&matrix[0][0],
+                           &local_k_energy[0],&local_k_energy[1])) {
+                        cache->size[m][b]=0;
+                        local_fallback++;
+                        local_elements += n;
+                        b++;
+                        continue;
+                    }
+                    maxdiag=0.0;
                     for(i=0;i<n;i++) {
-                        e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
-                        matrix[i][i]=(1.0+E->control.ala_shallow_patch_regularization)
-                            *ala_shallow_patch_entry(E,cache,e,e,lev,m);
+                        matrix[i][i] *=
+                            1.0+E->control.ala_shallow_patch_regularization;
                         maxdiag=max(maxdiag,matrix[i][i]);
-                        for(j=0;j<i;j++) {
-                            matrix[i][j]=ala_shallow_patch_entry(
-                                E,cache,e,
-                                cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+j],
-                                lev,m);
-                            matrix[j][i]=matrix[i][j];
-                        }
                     }
                     L=cache->chol[m]+b*ALA_PATCH_MAX_ELEMENTS
                         *ALA_PATCH_MAX_ELEMENTS;
@@ -358,35 +403,38 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   E->parallel.world);
     MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
-    MPI_Allreduce(&local_node_fallback,&global_node_fallback,1,MPI_INT,MPI_SUM,
+    MPI_Allreduce(local_k_energy,global_k_energy,2,MPI_DOUBLE,MPI_SUM,
                   E->parallel.world);
-    MPI_Allreduce(local_node_energy,global_node_energy,2,MPI_DOUBLE,MPI_SUM,
+    build_seconds=CPU_time0()-build_start;
+    MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
     if(global_blocks+global_fallback==0)
         myerror(E,"ALA shallow-patch depth selects no global elements");
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "operator=(D+C)Knode^-1(D+C)^T selected_elements=%d "
-                "valid_blocks=%d fallback_blocks=%d node_fallbacks=%d "
-                "Knode_offdiag_ratio=%e\n",
+                "operator=(D+C)Kpatch^-1(D+C)^T selected_elements=%d "
+                "valid_blocks=%d fallback_blocks=%d "
+                "Kpatch_spatial_offdiag_ratio=%e build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_blocks,global_fallback,
-                global_node_fallback,sqrt(global_node_energy[1]
-                    /max(global_node_energy[0],1.0e-300)));
+                sqrt(global_k_energy[1]
+                    /max(global_k_energy[0],1.0e-300)),
+                global_build_seconds);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
                 "block=2x2x2 weight=%e regularization=%e "
-                "operator=(D+C)Knode^-1(D+C)^T selected_elements=%d "
-                "valid_blocks=%d fallback_blocks=%d node_fallbacks=%d "
-                "Knode_offdiag_ratio=%e\n",
+                "operator=(D+C)Kpatch^-1(D+C)^T selected_elements=%d "
+                "valid_blocks=%d fallback_blocks=%d "
+                "Kpatch_spatial_offdiag_ratio=%e build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_blocks,global_fallback,
-                global_node_fallback,sqrt(global_node_energy[1]
-                    /max(global_node_energy[0],1.0e-300)));
+                sqrt(global_k_energy[1]
+                    /max(global_k_energy[0],1.0e-300)),
+                global_build_seconds);
     }
 }
 
@@ -399,7 +447,6 @@ static void free_ala_shallow_patch_cache(struct All_variables *E,
         free((void *)cache->size[m]);
         free((void *)cache->elements[m]);
         free((void *)cache->chol[m]);
-        free((void *)cache->velocity_node_inverse[m]);
     }
     memset(cache,0,sizeof(*cache));
 }
