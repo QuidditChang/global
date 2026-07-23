@@ -1027,6 +1027,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_inner_accuracy_factor, fp);
     getIntProperty(properties, "ala_pcg_restart_interval",
                    E->control.ala_pcg_restart_interval, fp);
+    getIntProperty(properties, "ala_feasibility_audit",
+                   E->control.ala_feasibility_audit, fp);
+    getIntProperty(properties, "ala_feasibility_window",
+                   E->control.ala_feasibility_window, fp);
+    getDoubleProperty(properties, "ala_feasibility_min_reduction",
+                      E->control.ala_feasibility_min_reduction, fp);
     getIntProperty(properties, "ala_hybrid_convergence",
                    E->control.ala_hybrid_convergence, fp);
     getDoubleProperty(properties, "ala_div_v_tolerance",
@@ -1089,6 +1095,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_inner_accuracy_factor must be positive");
     if(E->control.ala_pcg_restart_interval < 1)
         myerror(E, "ala_pcg_restart_interval must be at least one");
+    if(E->control.ala_feasibility_window < 1)
+        myerror(E, "ala_feasibility_window must be at least one");
+    if(E->control.ala_feasibility_min_reduction < 0.0 ||
+       E->control.ala_feasibility_min_reduction >= 1.0)
+        myerror(E, "ala_feasibility_min_reduction must be in [0,1)");
     if(E->control.ala_div_v_tolerance <= 0.0)
         myerror(E, "ala_div_v_tolerance must be positive");
     if(E->control.ala_update_tolerance <= 0.0)
@@ -1196,6 +1207,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         E->control.ala_radial_line_preconditioner))
         myerror(E, "ALA shallow-patch, two-level, and radial-line "
                 "preconditioners are mutually exclusive");
+    if(E->control.ala_feasibility_audit &&
+       (!E->control.ala_pressure_buoyancy ||
+        strcmp(E->control.uzawa,"ala_cg") != 0))
+        myerror(E, "ala_feasibility_audit requires "
+                "compressible_formulation=ala and uzawa=ala_cg");
 
     PUTS(("\n"));
 

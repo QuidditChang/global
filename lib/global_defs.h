@@ -474,6 +474,9 @@ struct CONTROL {
     double ala_inner_accuracy_max;
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
+    int ala_feasibility_audit;
+    int ala_feasibility_window;
+    double ala_feasibility_min_reduction;
     int ala_hybrid_convergence;
     double ala_div_v_tolerance;
     double ala_update_tolerance;

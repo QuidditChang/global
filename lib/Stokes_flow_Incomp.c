@@ -1417,6 +1417,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int restart_search;
     int hybrid_consecutive_count, hybrid_converged;
     int nonpositive_curvature_count;
+    int audit_best_iteration, audit_window_iteration;
+    int audit_milestone, audit_stagnated;
     int local_invalid_bpi, global_invalid_bpi;
     int local_invalid_coarse, global_invalid_coarse;
 
@@ -1430,6 +1432,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double inner_accuracy, inner_relative_accuracy;
     double local_bpi_min, local_bpi_max;
     double global_bpi_min, global_bpi_max;
+    double audit_best_cancellation, audit_window_cancellation;
+    double audit_window_reduction;
+    double audit_milestones[6];
     double time0;
 
     double *F[NCS];
@@ -1530,6 +1535,29 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval);
+        if(E->control.ala_feasibility_audit) {
+            fprintf(E->fp,
+                    "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
+                    "pressure_iterations=%d restart_interval=%d "
+                    "window=%d minimum_window_reduction=%e "
+                    "preconditioner=%s\n",
+                    E->control.ala_inner_accuracy_max,
+                    *steps_max,E->control.ala_pcg_restart_interval,
+                    E->control.ala_feasibility_window,
+                    E->control.ala_feasibility_min_reduction,
+                    E->control.ala_shallow_patch_preconditioner
+                        ? "shallow_patch"
+                        : (E->control.ala_two_level_preconditioner
+                           ? "diagonal_plus_coarse" : "diagonal"));
+            fprintf(stderr,
+                    "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
+                    "pressure_iterations=%d restart_interval=%d "
+                    "window=%d minimum_window_reduction=%e\n",
+                    E->control.ala_inner_accuracy_max,
+                    *steps_max,E->control.ala_pcg_restart_interval,
+                    E->control.ala_feasibility_window,
+                    E->control.ala_feasibility_min_reduction);
+        }
         if(E->control.ala_two_level_preconditioner) {
             fprintf(E->fp,
                     "ALA two-level pressure correction offset=%d level=%d "
@@ -1616,6 +1644,19 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     hybrid_converged = 0;
     nonpositive_curvature_count = 0;
     min_curvature = 1.0e300;
+    audit_milestones[0] = 0.5;
+    audit_milestones[1] = 0.2;
+    audit_milestones[2] = 0.1;
+    audit_milestones[3] = 0.05;
+    audit_milestones[4] = 0.02;
+    audit_milestones[5] = 0.01;
+    audit_milestone = 0;
+    audit_best_cancellation = cancellation_l2;
+    audit_best_iteration = 0;
+    audit_window_cancellation = cancellation_l2;
+    audit_window_iteration = 0;
+    audit_window_reduction = 0.0;
+    audit_stagnated = 0;
 
     while(count < *steps_max &&
           (cancellation_l2 >= E->control.tole_comp ||
@@ -1728,6 +1769,48 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             (1.0e-32 + E->monitor.vdotv));
 
         count++;
+        if(cancellation_l2 < audit_best_cancellation) {
+            audit_best_cancellation = cancellation_l2;
+            audit_best_iteration = count;
+        }
+        if(E->control.ala_feasibility_audit) {
+            while(audit_milestone < 6 &&
+                  cancellation_l2 <= audit_milestones[audit_milestone]) {
+                if(E->parallel.me == 0)
+                    fprintf(E->fp,
+                            "ALA_FEASIBILITY_MILESTONE cancellation=%e "
+                            "iteration=%d elapsed_seconds=%e "
+                            "mass_relative=%e algebraic_relative=%e\n",
+                            audit_milestones[audit_milestone],count,
+                            CPU_time0()-time0,mass_relative_residual,
+                            relative_residual);
+                audit_milestone++;
+            }
+            if(count-audit_window_iteration >=
+               E->control.ala_feasibility_window) {
+                audit_window_reduction = 1.0
+                    - cancellation_l2
+                    / max(audit_window_cancellation,1.0e-300);
+                audit_stagnated =
+                    audit_window_reduction <
+                    E->control.ala_feasibility_min_reduction;
+                if(E->parallel.me == 0) {
+                    fprintf(E->fp,
+                            "ALA_FEASIBILITY_WINDOW from=%d to=%d "
+                            "cancellation_start=%e cancellation_end=%e "
+                            "relative_reduction=%e best=%e "
+                            "best_iteration=%d status=%s\n",
+                            audit_window_iteration,count,
+                            audit_window_cancellation,cancellation_l2,
+                            audit_window_reduction,
+                            audit_best_cancellation,audit_best_iteration,
+                            audit_stagnated ? "stagnated" : "progressing");
+                    fflush(E->fp);
+                }
+                audit_window_cancellation = cancellation_l2;
+                audit_window_iteration = count;
+            }
+        }
         if(E->control.ala_hybrid_convergence) {
             if(E->monitor.incompressibility <
                    E->control.ala_div_v_tolerance &&
@@ -1794,6 +1877,30 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "Schur_applications=%d pressure_velocity_solves=%d\n",
                 min_curvature, nonpositive_curvature_count, count, count,
                 count);
+        if(E->control.ala_feasibility_audit) {
+            fprintf(E->fp,
+                    "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
+                    "best_iteration=%d target=%e iterations=%d "
+                    "last_complete_window_reduction=%e\n",
+                    cancellation_l2 < E->control.tole_comp
+                        ? "discrete_target_reached"
+                        : (audit_stagnated
+                           ? "preconditioned_iteration_stagnated"
+                           : "iteration_budget_exhausted_while_progressing"),
+                    cancellation_l2,audit_best_cancellation,
+                    audit_best_iteration,E->control.tole_comp,count,
+                    audit_window_reduction);
+            fprintf(stderr,
+                    "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
+                    "best_iteration=%d target=%e iterations=%d\n",
+                    cancellation_l2 < E->control.tole_comp
+                        ? "discrete_target_reached"
+                        : (audit_stagnated
+                           ? "preconditioned_iteration_stagnated"
+                           : "iteration_budget_exhausted_while_progressing"),
+                    cancellation_l2,audit_best_cancellation,
+                    audit_best_iteration,E->control.tole_comp,count);
+        }
     }
 
     if(E->parallel.me == 0 &&
