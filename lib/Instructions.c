@@ -697,10 +697,9 @@ void read_initial_settings(struct All_variables *E)
               "ala_shallow_patch_preconditioner requires precond=on, "
               "compressible_formulation=ala, and uzawa=ala_cg");
   if(E->control.ala_shallow_patch_preconditioner &&
-     (E->control.ala_two_level_preconditioner ||
-      E->control.ala_radial_line_preconditioner))
-      myerror(E, "ALA shallow-patch, two-level, and radial-line "
-              "preconditioners are mutually exclusive");
+     E->control.ala_radial_line_preconditioner)
+      myerror(E, "ALA shallow-patch and radial-line preconditioners are "
+              "mutually exclusive");
   if(E->control.ala_feasibility_audit &&
      (!E->control.ala_pressure_buoyancy ||
       strcmp(E->control.uzawa,"ala_cg") != 0))

@@ -79,6 +79,7 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 struct ala_shallow_patch_cache {
     int blocks[NCS];
     unsigned char *size[NCS];
+    unsigned char *multiplicity[NCS];
     int *elements[NCS];
     double *chol[NCS];
 };
@@ -99,6 +100,17 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double **velocity_direction,
                                          int lev,
                                          double *residual_reduction);
+static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
+                                           double **coarse_p,
+                                           double **coarse_Ap,
+                                           double **fine_p,
+                                           double **fine_Ap,
+                                           double **fine_velocity,
+                                           double **fine_velocity_rhs,
+                                           double **fine_velocity_Ax,
+                                           double **fine_velocity_direction,
+                                           int clev, int lev, int factor,
+                                           double *residual_reduction);
 
 
 static int ala_patch_find_node(const int *nodes, int count, int node)
@@ -162,7 +174,7 @@ static int ala_build_spatial_patch_schur(struct All_variables *E,
 
     /* Assemble all spatial velocity couplings contributed by the pressure
        block's elements. The global diagonal completion below supplies the
-       stiffness contributed by elements outside this nonoverlapping block. */
+       stiffness contributed by elements outside this local block. */
     for(k=0;k<n;k++) {
         q=elements[k];
         get_elt_k(E,q,element_k,lev,m,0);
@@ -284,9 +296,11 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_shallow_patch_cache *cache, int lev)
 {
     int m,ex,ey,ez,dx,dy,dz,b,i,j,k,n,block_count;
-    int elx,ely,elz,shallow_min_ez,radial_groups,e;
+    int elx,ely,elz,shallow_min_ez,shallow_layers,e,npno;
     int local_blocks,global_blocks,local_fallback,global_fallback;
-    int local_elements,global_elements;
+    int local_elements,global_elements,local_unique,global_unique;
+    int local_overlap_min,global_overlap_min;
+    int local_overlap_max,global_overlap_max;
     double depth_km,sum,pivot,maxdiag;
     double local_k_energy[2],global_k_energy[2];
     double build_start,build_seconds,global_build_seconds;
@@ -300,6 +314,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     elx=E->lmesh.ELX[lev];
     ely=E->lmesh.ELY[lev];
     elz=E->lmesh.ELZ[lev];
+    npno=E->lmesh.NPNO[lev];
     shallow_min_ez=elz+1;
     for(ez=elz;ez>=1;ez--) {
         depth_km=(1.0-0.5*(E->sx[1][3][ez]+E->sx[1][3][ez+1]))
@@ -308,12 +323,15 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             break;
         shallow_min_ez=ez;
     }
-    radial_groups=(shallow_min_ez<=elz)
-        ? (elz-shallow_min_ez+2)/2 : 0;
-    block_count=((elx+1)/2)*((ely+1)/2)*radial_groups;
+    shallow_layers=(shallow_min_ez<=elz)
+        ? elz-shallow_min_ez+1 : 0;
+    block_count=elx*ely*shallow_layers;
     local_blocks=0;
     local_fallback=0;
     local_elements=0;
+    local_unique=0;
+    local_overlap_min=255;
+    local_overlap_max=0;
     local_k_energy[0]=0.0;
     local_k_energy[1]=0.0;
 
@@ -323,17 +341,20 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             continue;
         cache->size[m]=(unsigned char *)calloc(block_count,
                                                 sizeof(unsigned char));
+        cache->multiplicity[m]=(unsigned char *)calloc(npno+1,
+                                                       sizeof(unsigned char));
         cache->elements[m]=(int *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS,
                                          sizeof(int));
         cache->chol[m]=(double *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS
                                        *ALA_PATCH_MAX_ELEMENTS,sizeof(double));
-        if(cache->size[m]==NULL || cache->elements[m]==NULL ||
+        if(cache->size[m]==NULL || cache->multiplicity[m]==NULL ||
+           cache->elements[m]==NULL ||
            cache->chol[m]==NULL)
             myerror(E,"Unable to allocate ALA shallow-patch cache");
         b=0;
-        for(ey=1;ey<=ely;ey+=2)
-            for(ex=1;ex<=elx;ex+=2)
-                for(ez=elz;ez>=shallow_min_ez;ez-=2) {
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=elz;ez>=shallow_min_ez;ez--) {
                     n=0;
                     for(dy=0;dy<2 && ey+dy<=ely;dy++)
                         for(dx=0;dx<2 && ex+dx<=elx;dx++)
@@ -396,12 +417,35 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     local_elements += n;
                     b++;
                 }
+        for(b=0;b<block_count;b++) {
+            n=cache->size[m][b];
+            for(i=0;i<n;i++) {
+                e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
+                if(cache->multiplicity[m][e]==255)
+                    myerror(E,"ALA shallow-patch overlap count overflow");
+                cache->multiplicity[m][e]++;
+            }
+        }
+        for(e=1;e<=npno;e++)
+            if(cache->multiplicity[m][e]>0) {
+                local_unique++;
+                local_overlap_min=min(local_overlap_min,
+                                      (int)cache->multiplicity[m][e]);
+                local_overlap_max=max(local_overlap_max,
+                                      (int)cache->multiplicity[m][e]);
+            }
     }
     MPI_Allreduce(&local_blocks,&global_blocks,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
     MPI_Allreduce(&local_fallback,&global_fallback,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
     MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_unique,&global_unique,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_overlap_min,&global_overlap_min,1,MPI_INT,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_overlap_max,&global_overlap_max,1,MPI_INT,MPI_MAX,
                   E->parallel.world);
     MPI_Allreduce(local_k_energy,global_k_energy,2,MPI_DOUBLE,MPI_SUM,
                   E->parallel.world);
@@ -410,28 +454,38 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   E->parallel.world);
     if(global_blocks+global_fallback==0)
         myerror(E,"ALA shallow-patch depth selects no global elements");
+    if(global_unique==0) {
+        global_overlap_min=0;
+        global_overlap_max=0;
+    }
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=2x2x2 weight=%e regularization=%e "
-                "operator=(D+C)Kpatch^-1(D+C)^T selected_elements=%d "
+                "block=2x2x2 stride=1 symmetric_overlap_weighting=on "
+                "weight=%e regularization=%e "
+                "operator=(D+C)Kpatch^-1(D+C)^T patch_entries=%d "
+                "unique_elements=%d overlap_range=(%d,%d) "
                 "valid_blocks=%d fallback_blocks=%d "
                 "Kpatch_spatial_offdiag_ratio=%e build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_elements,global_blocks,global_fallback,
+                global_elements,global_unique,global_overlap_min,
+                global_overlap_max,global_blocks,global_fallback,
                 sqrt(global_k_energy[1]
                     /max(global_k_energy[0],1.0e-300)),
                 global_build_seconds);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=2x2x2 weight=%e regularization=%e "
-                "operator=(D+C)Kpatch^-1(D+C)^T selected_elements=%d "
+                "block=2x2x2 stride=1 symmetric_overlap_weighting=on "
+                "weight=%e regularization=%e "
+                "operator=(D+C)Kpatch^-1(D+C)^T patch_entries=%d "
+                "unique_elements=%d overlap_range=(%d,%d) "
                 "valid_blocks=%d fallback_blocks=%d "
                 "Kpatch_spatial_offdiag_ratio=%e build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
-                global_elements,global_blocks,global_fallback,
+                global_elements,global_unique,global_overlap_min,
+                global_overlap_max,global_blocks,global_fallback,
                 sqrt(global_k_energy[1]
                     /max(global_k_energy[0],1.0e-300)),
                 global_build_seconds);
@@ -445,6 +499,7 @@ static void free_ala_shallow_patch_cache(struct All_variables *E,
     int m;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         free((void *)cache->size[m]);
+        free((void *)cache->multiplicity[m]);
         free((void *)cache->elements[m]);
         free((void *)cache->chol[m]);
     }
@@ -523,6 +578,68 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
 }
 
 
+static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
+                                           double **coarse_p,
+                                           double **coarse_Ap,
+                                           double **fine_p,
+                                           double **fine_Ap,
+                                           double **fine_velocity,
+                                           double **fine_velocity_rhs,
+                                           double **fine_velocity_Ax,
+                                           double **fine_velocity_direction,
+                                           int clev, int lev, int factor,
+                                           double *residual_reduction)
+{
+    int m,ex,ey,ez,e,cx,cy,cz,ce;
+    int elx,ely,elz,celx,celz,cnpno;
+
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    celx=E->lmesh.ELX[clev];
+    celz=E->lmesh.ELZ[clev];
+    cnpno=E->lmesh.NPNO[clev];
+
+    /* Constant pressure prolongation P. Every fine pressure cell has one
+       geometrically coincident coarse parent. */
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/factor+1;
+                    cy=(ey-1)/factor+1;
+                    cz=(ez-1)/factor+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    fine_p[m][e]=coarse_p[m][ce];
+                }
+
+    /* Apply the complete fine-grid strict-ALA operator. Its velocity assembly
+       carries the pressure correction across MPI and cap boundaries. */
+    apply_ala_coarse_fixed_schur(E,fine_p,fine_Ap,fine_velocity,
+                                 fine_velocity_rhs,fine_velocity_Ax,
+                                 fine_velocity_direction,lev,
+                                 residual_reduction);
+
+    /* Exact transpose restriction P^T. Together these operations define the
+       matrix-free Galerkin coarse operator S_c=P^T S_f P. */
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(ce=1;ce<=cnpno;ce++)
+            coarse_Ap[m][ce]=0.0;
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/factor+1;
+                    cy=(ey-1)/factor+1;
+                    cz=(ez-1)/factor+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    coarse_Ap[m][ce] += fine_Ap[m][e];
+                }
+    }
+}
+
+
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
                                               double **work, int lev,
@@ -530,7 +647,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     struct ala_shallow_patch_cache *patch_cache)
 {
     int m,j,col,k,e,ex,ey,ez,elz,ncolumns,npno,b,n,i;
-    int clev,factor,celx,celz,cnpno,cneq,ce,cx,cy,cz;
+    int clev,factor,celx,celz,cnpno,ce,cx,cy,cz,neq;
     double damping,theta,delta,sigma,rho_cheb,rho_new;
     double velocity_residual_reduction;
     double rhs[ALA_PATCH_MAX_ELEMENTS],solution[ALA_PATCH_MAX_ELEMENTS];
@@ -538,9 +655,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double local_patch_energy[2],global_patch_energy[2];
     double local_energy[4],global_energy[4];
     double *coarse_rhs[NCS],*coarse_x[NCS],*coarse_residual[NCS];
-    double *coarse_Ax[NCS],*coarse_velocity[NCS],*coarse_direction[NCS];
-    double *coarse_velocity_rhs[NCS],*coarse_velocity_Ax[NCS];
-    double *coarse_velocity_direction[NCS];
+    double *coarse_Ax[NCS],*coarse_direction[NCS];
+    double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
+    double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
+    double *fine_velocity_direction[NCS];
 
     npno=E->lmesh.NPNO[lev];
     if(E->control.ala_radial_line_preconditioner) {
@@ -584,6 +702,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         local_patch_energy[0]=0.0;
         local_patch_energy[1]=0.0;
         for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++) {
+                work[m][e]=0.0;
+                if(patch_cache->multiplicity[m][e]>0)
+                    local_patch_energy[0] += r[m][e]*E->BPI[lev][m][e]
+                        *r[m][e];
+            }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(b=0;b<patch_cache->blocks[m];b++) {
                 n=patch_cache->size[m][b];
                 if(n==0)
@@ -592,9 +717,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     *ALA_PATCH_MAX_ELEMENTS;
                 for(i=0;i<n;i++) {
                     e=patch_cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
-                    rhs[i]=r[m][e];
-                    local_patch_energy[0] += r[m][e]*E->BPI[lev][m][e]
-                        *r[m][e];
+                    rhs[i]=r[m][e]
+                        /sqrt((double)patch_cache->multiplicity[m][e]);
                     sum=rhs[i];
                     for(j=0;j<i;j++)
                         sum -= L[i*ALA_PATCH_MAX_ELEMENTS+j]*solution[j];
@@ -608,10 +732,16 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 }
                 for(i=0;i<n;i++) {
                     e=patch_cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
-                    local_patch_energy[1] += r[m][e]*solution[i];
-                    z[m][e]=(1.0-weight)*z[m][e]+weight*solution[i];
+                    work[m][e] += solution[i]
+                        /sqrt((double)patch_cache->multiplicity[m][e]);
                 }
             }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++)
+                if(patch_cache->multiplicity[m][e]>0) {
+                    local_patch_energy[1] += r[m][e]*work[m][e];
+                    z[m][e]=(1.0-weight)*z[m][e]+weight*work[m][e];
+                }
         if(iteration==0 ||
            iteration%E->control.ala_coarse_residual_interval==0) {
             MPI_Allreduce(local_patch_energy,global_patch_energy,2,MPI_DOUBLE,
@@ -636,7 +766,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     celx=E->lmesh.ELX[clev];
     celz=E->lmesh.ELZ[clev];
     cnpno=E->lmesh.NPNO[clev];
-    cneq=E->lmesh.NEQ[clev];
+    neq=E->lmesh.NEQ[lev];
     damping=E->control.ala_two_level_coarse_damping;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -644,16 +774,19 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         coarse_x[m]=(double *)calloc(cnpno+1,sizeof(double));
         coarse_residual[m]=(double *)calloc(cnpno+1,sizeof(double));
         coarse_Ax[m]=(double *)calloc(cnpno+1,sizeof(double));
-        coarse_velocity[m]=(double *)calloc(cneq+1,sizeof(double));
         coarse_direction[m]=(double *)calloc(cnpno+1,sizeof(double));
-        coarse_velocity_rhs[m]=(double *)calloc(cneq+1,sizeof(double));
-        coarse_velocity_Ax[m]=(double *)calloc(cneq+1,sizeof(double));
-        coarse_velocity_direction[m]=(double *)calloc(cneq+1,sizeof(double));
+        fine_p[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_Ap[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_velocity[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_rhs[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_Ax[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_direction[m]=(double *)calloc(neq+1,sizeof(double));
         if(coarse_rhs[m]==NULL || coarse_x[m]==NULL ||
            coarse_residual[m]==NULL || coarse_Ax[m]==NULL ||
-           coarse_velocity[m]==NULL || coarse_direction[m]==NULL ||
-           coarse_velocity_rhs[m]==NULL || coarse_velocity_Ax[m]==NULL ||
-           coarse_velocity_direction[m]==NULL)
+           coarse_direction[m]==NULL || fine_p[m]==NULL ||
+           fine_Ap[m]==NULL || fine_velocity[m]==NULL ||
+           fine_velocity_rhs[m]==NULL || fine_velocity_Ax[m]==NULL ||
+           fine_velocity_direction[m]==NULL)
             myerror(E,"Unable to allocate ALA two-level preconditioner");
     }
 
@@ -672,9 +805,9 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     coarse_rhs[m][ce] += r[m][e];
                 }
 
-    /* Both coarse solvers are fixed polynomials of the complete coarse ALA
-       operator.  With zero initial state and the BPI similarity transform,
-       they define linear symmetric maps for the outer standard PCG. */
+    /* Both coarse solvers are fixed polynomials of the Galerkin ALA operator.
+       With zero initial state and the BPI similarity transform, they define
+       linear symmetric maps for the outer standard PCG. */
     if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi")==0) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(ce=1;ce<=cnpno;ce++)
@@ -685,10 +818,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     coarse_x[m][ce] += damping*E->BPI[clev][m][ce]
                         *coarse_residual[m][ce];
             if(k+1<E->control.ala_two_level_coarse_iterations) {
-                apply_ala_coarse_fixed_schur(
-                    E,coarse_x,coarse_Ax,coarse_velocity,
-                    coarse_velocity_rhs,coarse_velocity_Ax,
-                    coarse_velocity_direction,clev,NULL);
+                apply_ala_galerkin_fixed_schur(
+                    E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
+                    fine_velocity_rhs,fine_velocity_Ax,
+                    fine_velocity_direction,clev,lev,factor,NULL);
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(ce=1;ce<=cnpno;ce++)
                         coarse_residual[m][ce]=coarse_rhs[m][ce]
@@ -710,10 +843,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 coarse_x[m][ce]=coarse_direction[m][ce];
             }
         for(k=1;k<E->control.ala_two_level_coarse_iterations;k++) {
-            apply_ala_coarse_fixed_schur(
-                E,coarse_x,coarse_Ax,coarse_velocity,
-                coarse_velocity_rhs,coarse_velocity_Ax,
-                coarse_velocity_direction,clev,NULL);
+            apply_ala_galerkin_fixed_schur(
+                E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
+                fine_velocity_rhs,fine_velocity_Ax,
+                fine_velocity_direction,clev,lev,factor,NULL);
             rho_new=1.0/(2.0*sigma-rho_cheb);
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(ce=1;ce<=cnpno;ce++) {
@@ -731,10 +864,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
 
     if(iteration==0 ||
        iteration%E->control.ala_coarse_residual_interval==0) {
-        apply_ala_coarse_fixed_schur(
-            E,coarse_x,coarse_Ax,coarse_velocity,
-            coarse_velocity_rhs,coarse_velocity_Ax,
-            coarse_velocity_direction,clev,
+        apply_ala_galerkin_fixed_schur(
+            E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
+            fine_velocity_rhs,fine_velocity_Ax,
+            fine_velocity_direction,clev,lev,factor,
             &velocity_residual_reduction);
         local_energy[0]=0.0;
         local_energy[1]=0.0;
@@ -788,11 +921,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         free((void *)coarse_x[m]);
         free((void *)coarse_residual[m]);
         free((void *)coarse_Ax[m]);
-        free((void *)coarse_velocity[m]);
         free((void *)coarse_direction[m]);
-        free((void *)coarse_velocity_rhs[m]);
-        free((void *)coarse_velocity_Ax[m]);
-        free((void *)coarse_velocity_direction[m]);
+        free((void *)fine_p[m]);
+        free((void *)fine_Ap[m]);
+        free((void *)fine_velocity[m]);
+        free((void *)fine_velocity_rhs[m]);
+        free((void *)fine_velocity_Ax[m]);
+        free((void *)fine_velocity_direction[m]);
     }
 }
 
@@ -1421,6 +1556,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int audit_milestone, audit_stagnated;
     int local_invalid_bpi, global_invalid_bpi;
     int local_invalid_coarse, global_invalid_coarse;
+    int galerkin_diagnostic_applications, galerkin_applications;
 
     double alpha, beta, rho, rho_old, curvature;
     double min_curvature, sq_vdotv;
@@ -1499,9 +1635,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 if(!isfinite(E->BPI[coarse_lev][m][j]) ||
                    E->BPI[coarse_lev][m][j]<=0.0)
                     local_invalid_coarse++;
-            for(j=0;j<E->lmesh.NEQ[coarse_lev];j++)
-                if(!isfinite(E->ALA_velocity_BI[coarse_lev][m][j]) ||
-                   E->ALA_velocity_BI[coarse_lev][m][j]<=0.0)
+            for(j=0;j<E->lmesh.NEQ[lev];j++)
+                if(!isfinite(E->ALA_velocity_BI[lev][m][j]) ||
+                   E->ALA_velocity_BI[lev][m][j]<=0.0)
                     local_invalid_coarse++;
         }
     MPI_Allreduce(&local_invalid_coarse,&global_invalid_coarse,1,MPI_INT,
@@ -1516,9 +1652,11 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
-                    ? "diagonal_plus_coarse"
+                    ? (E->control.ala_shallow_patch_preconditioner
+                       ? "overlap_schwarz_plus_galerkin"
+                       : "diagonal_plus_galerkin")
                     : (E->control.ala_shallow_patch_preconditioner
-                       ? "shallow_patch"
+                       ? "overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
@@ -1528,9 +1666,11 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
-                    ? "diagonal_plus_coarse"
+                    ? (E->control.ala_shallow_patch_preconditioner
+                       ? "overlap_schwarz_plus_galerkin"
+                       : "diagonal_plus_galerkin")
                     : (E->control.ala_shallow_patch_preconditioner
-                       ? "shallow_patch"
+                       ? "overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
@@ -1545,10 +1685,12 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     *steps_max,E->control.ala_pcg_restart_interval,
                     E->control.ala_feasibility_window,
                     E->control.ala_feasibility_min_reduction,
-                    E->control.ala_shallow_patch_preconditioner
-                        ? "shallow_patch"
-                        : (E->control.ala_two_level_preconditioner
-                           ? "diagonal_plus_coarse" : "diagonal"));
+                    E->control.ala_two_level_preconditioner
+                        ? (E->control.ala_shallow_patch_preconditioner
+                           ? "overlap_schwarz_plus_galerkin"
+                           : "diagonal_plus_galerkin")
+                        : (E->control.ala_shallow_patch_preconditioner
+                           ? "overlap_schwarz" : "diagonal"));
             fprintf(stderr,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
                     "pressure_iterations=%d restart_interval=%d "
@@ -1566,8 +1708,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     "velocity_solver=%s velocity_iterations=%d "
                     "velocity_eigen_interval=(%e,%e) "
                     "invalid_diagonals=%d "
-                    "operator="
-                    "(D+C)Kfixed^-1(D+C)^T transfer=Pt/P\n",
+                    "operator=Sc=Pt*((D+C)Kfixed^-1(D+C)^T)_fine*P "
+                    "transfer=Pt/P matrix_free_galerkin=on\n",
                     E->control.ala_two_level_offset,coarse_lev,
                     E->control.ala_two_level_coarse_solver,
                     E->control.ala_two_level_coarse_iterations,
@@ -1587,8 +1729,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     "velocity_solver=%s velocity_iterations=%d "
                     "velocity_eigen_interval=(%e,%e) "
                     "invalid_diagonals=%d "
-                    "operator="
-                    "(D+C)Kfixed^-1(D+C)^T transfer=Pt/P\n",
+                    "operator=Sc=Pt*((D+C)Kfixed^-1(D+C)^T)_fine*P "
+                    "transfer=Pt/P matrix_free_galerkin=on\n",
                     E->control.ala_two_level_offset,coarse_lev,
                     E->control.ala_two_level_coarse_solver,
                     E->control.ala_two_level_coarse_iterations,
@@ -1877,6 +2019,31 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "Schur_applications=%d pressure_velocity_solves=%d\n",
                 min_curvature, nonpositive_curvature_count, count, count,
                 count);
+        if(E->control.ala_two_level_preconditioner) {
+            galerkin_diagnostic_applications=(count>0)
+                ? 1+(count-1)/E->control.ala_coarse_residual_interval : 0;
+            galerkin_applications=count
+                *(E->control.ala_two_level_coarse_iterations-1)
+                +galerkin_diagnostic_applications;
+            fprintf(E->fp,
+                    "ALA_TWO_LEVEL_COST pressure_iterations=%d "
+                    "galerkin_applications=%d diagnostic_applications=%d "
+                    "coarse_polynomial_steps=%d "
+                    "velocity_polynomial_steps=%d\n",
+                    count,galerkin_applications,
+                    galerkin_diagnostic_applications,
+                    E->control.ala_two_level_coarse_iterations,
+                    E->control.ala_two_level_velocity_iterations);
+            fprintf(stderr,
+                    "ALA_TWO_LEVEL_COST pressure_iterations=%d "
+                    "galerkin_applications=%d diagnostic_applications=%d "
+                    "coarse_polynomial_steps=%d "
+                    "velocity_polynomial_steps=%d\n",
+                    count,galerkin_applications,
+                    galerkin_diagnostic_applications,
+                    E->control.ala_two_level_coarse_iterations,
+                    E->control.ala_two_level_velocity_iterations);
+        }
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
