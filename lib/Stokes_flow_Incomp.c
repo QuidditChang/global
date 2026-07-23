@@ -81,7 +81,6 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_RADIAL_ELEMENTS 2
 #define ALA_PATCH_HORIZONTAL_STRIDE 2
 #define ALA_PATCH_RADIAL_STRIDE 1
-#define ALA_COARSE_POWER_ITERATIONS 8
 #define ALA_PATCH_MAX_ELEMENTS \
     (ALA_PATCH_HORIZONTAL_ELEMENTS*ALA_PATCH_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
@@ -98,8 +97,6 @@ struct ala_pressure_preconditioner_cache {
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void build_ala_two_level_cache(struct All_variables *E,
-    struct ala_pressure_preconditioner_cache *cache, int lev);
-static void calibrate_ala_two_level_spectrum(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache);
@@ -589,127 +586,6 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
                     coarse_Ap[m][ce] += fine_Ap[m][e];
                 }
-    }
-}
-
-
-static void calibrate_ala_two_level_spectrum(struct All_variables *E,
-    struct ala_pressure_preconditioner_cache *cache, int lev)
-{
-    int m,ce,k,clev,factor,cnpno,npno,neq;
-    int cx,cy,cz,gx,gy,gz,gid,celx,celz,global_celx,global_celz;
-    const int power_iterations=ALA_COARSE_POWER_ITERATIONS;
-    double norm,rayleigh,upper,local[2],global[2];
-    double *q[NCS],*coarse_p[NCS],*coarse_Ap[NCS];
-    double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
-    double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
-    double *fine_velocity_direction[NCS];
-
-    clev=lev-E->control.ala_two_level_offset;
-    factor=1 << E->control.ala_two_level_offset;
-    cnpno=E->lmesh.NPNO[clev];
-    npno=E->lmesh.NPNO[lev];
-    neq=E->lmesh.NEQ[lev];
-    celx=E->lmesh.ELX[clev];
-    celz=E->lmesh.ELZ[clev];
-    global_celx=E->mesh.ELX[clev];
-    global_celz=E->mesh.ELZ[clev];
-    for(m=1;m<=E->sphere.caps_per_proc;m++) {
-        q[m]=(double *)calloc(cnpno+1,sizeof(double));
-        coarse_p[m]=(double *)calloc(cnpno+1,sizeof(double));
-        coarse_Ap[m]=(double *)calloc(cnpno+1,sizeof(double));
-        fine_p[m]=(double *)calloc(npno+1,sizeof(double));
-        fine_Ap[m]=(double *)calloc(npno+1,sizeof(double));
-        fine_velocity[m]=(double *)calloc(neq+1,sizeof(double));
-        fine_velocity_rhs[m]=(double *)calloc(neq+1,sizeof(double));
-        fine_velocity_Ax[m]=(double *)calloc(neq+1,sizeof(double));
-        fine_velocity_direction[m]=(double *)calloc(neq+1,sizeof(double));
-        if(q[m]==NULL || coarse_p[m]==NULL || coarse_Ap[m]==NULL ||
-           fine_p[m]==NULL || fine_Ap[m]==NULL || fine_velocity[m]==NULL ||
-           fine_velocity_rhs[m]==NULL || fine_velocity_Ax[m]==NULL ||
-           fine_velocity_direction[m]==NULL)
-            myerror(E,"Unable to allocate ALA coarse spectral calibration");
-        for(ce=1;ce<=cnpno;ce++) {
-            cz=(ce-1)%celz+1;
-            cx=((ce-1)/celz)%celx+1;
-            cy=(ce-1)/(celz*celx)+1;
-            gx=E->lmesh.EXS[clev]+cx;
-            gy=E->lmesh.EYS[clev]+cy;
-            gz=E->lmesh.EZS[clev]+cz;
-            gid=gz+(gx-1)*global_celz
-                +(gy-1)*global_celz*global_celx;
-            q[m][ce]=sin(0.7548776662466927
-                *(double)(gid+37*E->sphere.capid[m]));
-        }
-    }
-    local[0]=0.0;
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(ce=1;ce<=cnpno;ce++)
-            local[0] += q[m][ce]*q[m][ce];
-    MPI_Allreduce(local,global,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-    norm=sqrt(max(global[0],1.0e-300));
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(ce=1;ce<=cnpno;ce++)
-            q[m][ce] /= norm;
-
-    rayleigh=0.0;
-    for(k=0;k<power_iterations;k++) {
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(ce=1;ce<=cnpno;ce++)
-                coarse_p[m][ce]=sqrt(cache->coarse_bpi[m][ce])*q[m][ce];
-        apply_ala_galerkin_fixed_schur(
-            E,coarse_p,coarse_Ap,fine_p,fine_Ap,fine_velocity,
-            fine_velocity_rhs,fine_velocity_Ax,fine_velocity_direction,
-            clev,lev,factor,NULL);
-        local[0]=0.0;
-        local[1]=0.0;
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(ce=1;ce<=cnpno;ce++) {
-                coarse_Ap[m][ce] *= sqrt(cache->coarse_bpi[m][ce]);
-                local[0] += q[m][ce]*coarse_Ap[m][ce];
-                local[1] += coarse_Ap[m][ce]*coarse_Ap[m][ce];
-            }
-        MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM,
-                      E->parallel.world);
-        rayleigh=global[0];
-        norm=sqrt(max(global[1],1.0e-300));
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(ce=1;ce<=cnpno;ce++)
-                q[m][ce]=coarse_Ap[m][ce]/norm;
-    }
-    if(!isfinite(rayleigh) || rayleigh<=0.0)
-        myerror(E,"ALA Galerkin spectral calibration failed");
-    upper=max(2.0*rayleigh,
-              2.0*E->control.ala_two_level_coarse_eigenvalue_min);
-    cache->coarse_eigenvalue_max=min(
-        upper,E->control.ala_two_level_coarse_eigenvalue_max);
-    cache->coarse_eigenvalue_min=min(
-        E->control.ala_two_level_coarse_eigenvalue_min,
-        0.5*cache->coarse_eigenvalue_max);
-    if(E->parallel.me==0) {
-        fprintf(E->fp,"ALA Galerkin spectrum power_iterations=%d "
-                "lambda_estimate=%e safety_factor=2.0 "
-                "chebyshev_interval=(%e,%e) configured_upper=%e\n",
-                power_iterations,rayleigh,cache->coarse_eigenvalue_min,
-                cache->coarse_eigenvalue_max,
-                E->control.ala_two_level_coarse_eigenvalue_max);
-        fprintf(stderr,"ALA Galerkin spectrum power_iterations=%d "
-                "lambda_estimate=%e safety_factor=2.0 "
-                "chebyshev_interval=(%e,%e) configured_upper=%e\n",
-                power_iterations,rayleigh,cache->coarse_eigenvalue_min,
-                cache->coarse_eigenvalue_max,
-                E->control.ala_two_level_coarse_eigenvalue_max);
-    }
-    for(m=1;m<=E->sphere.caps_per_proc;m++) {
-        free((void *)q[m]);
-        free((void *)coarse_p[m]);
-        free((void *)coarse_Ap[m]);
-        free((void *)fine_p[m]);
-        free((void *)fine_Ap[m]);
-        free((void *)fine_velocity[m]);
-        free((void *)fine_velocity_rhs[m]);
-        free((void *)fine_velocity_Ax[m]);
-        free((void *)fine_velocity_direction[m]);
     }
 }
 
@@ -1771,7 +1647,6 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int local_invalid_bpi, global_invalid_bpi;
     int local_invalid_coarse, global_invalid_coarse;
     int galerkin_diagnostic_applications, galerkin_applications;
-    int galerkin_calibration_applications;
 
     double alpha, beta, rho, rho_old, curvature;
     double min_curvature, sq_vdotv;
@@ -1798,7 +1673,6 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     neq = E->lmesh.neq;
     lev = E->mesh.levmax;
     memset(&preconditioner_cache,0,sizeof(preconditioner_cache));
-    galerkin_calibration_applications=0;
 
     if(E->control.ala_two_level_preconditioner) {
         coarse_lev=lev-E->control.ala_two_level_offset;
@@ -1862,14 +1736,34 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                   MPI_SUM,E->parallel.world);
     if(global_invalid_bpi || global_invalid_coarse)
         parallel_process_termination();
-    if(E->control.ala_shallow_patch_preconditioner)
+    if(E->parallel.me==0) {
+        fprintf(stderr,"ALA preconditioner startup stage=begin\n");
+        fflush(stderr);
+    }
+    if(E->control.ala_shallow_patch_preconditioner) {
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=shallow_patch_build_begin\n");
+            fflush(stderr);
+        }
         build_ala_shallow_patch_cache(E,&preconditioner_cache,lev);
-    if(E->control.ala_two_level_preconditioner)
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=shallow_patch_build_complete\n");
+            fflush(stderr);
+        }
+    }
+    if(E->control.ala_two_level_preconditioner) {
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=galerkin_diagonal_build_begin\n");
+            fflush(stderr);
+        }
         build_ala_two_level_cache(E,&preconditioner_cache,lev);
-    if(E->control.ala_two_level_preconditioner &&
-       strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0) {
-        calibrate_ala_two_level_spectrum(E,&preconditioner_cache,lev);
-        galerkin_calibration_applications=ALA_COARSE_POWER_ITERATIONS;
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=galerkin_diagonal_build_complete "
+                    "chebyshev_interval=(%e,%e) source=configured\n",
+                    preconditioner_cache.coarse_eigenvalue_min,
+                    preconditioner_cache.coarse_eigenvalue_max);
+            fflush(stderr);
+        }
     }
     if(E->parallel.me == 0) {
         fprintf(E->fp,
@@ -2259,28 +2153,23 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 ? 1+(count-1)/E->control.ala_coarse_residual_interval : 0;
             galerkin_applications=count
                 *(E->control.ala_two_level_coarse_iterations-1)
-                +galerkin_diagnostic_applications
-                +galerkin_calibration_applications;
+                +galerkin_diagnostic_applications;
             fprintf(E->fp,
                     "ALA_TWO_LEVEL_COST pressure_iterations=%d "
                     "galerkin_applications=%d diagnostic_applications=%d "
-                    "spectral_calibration_applications=%d "
                     "coarse_polynomial_steps=%d "
                     "velocity_polynomial_steps=%d\n",
                     count,galerkin_applications,
                     galerkin_diagnostic_applications,
-                    galerkin_calibration_applications,
                     E->control.ala_two_level_coarse_iterations,
                     E->control.ala_two_level_velocity_iterations);
             fprintf(stderr,
                     "ALA_TWO_LEVEL_COST pressure_iterations=%d "
                     "galerkin_applications=%d diagnostic_applications=%d "
-                    "spectral_calibration_applications=%d "
                     "coarse_polynomial_steps=%d "
                     "velocity_polynomial_steps=%d\n",
                     count,galerkin_applications,
                     galerkin_diagnostic_applications,
-                    galerkin_calibration_applications,
                     E->control.ala_two_level_coarse_iterations,
                     E->control.ala_two_level_velocity_iterations);
         }
