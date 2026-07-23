@@ -132,10 +132,42 @@ void composition_setup(struct All_variables *E)
 void write_composition_instructions(struct All_variables *E)
 {
     int k;
+    double kC_min, kC_max;
 
     if (E->composition.ichemical_buoyancy ||
         E->composition.icompositional_rheology)
         E->composition.on = 1;
+
+    if(E->control.kC_ratio != 1.0) {
+        if(!E->control.tracer || !E->composition.on ||
+           E->composition.ibuoy_type != 1) {
+            fprintf(stderr,
+                    "Active kC requires tracers, composition, and "
+                    "the ratio composition method\n");
+            parallel_process_termination();
+        }
+        if(E->control.kC_primordial_flavor < 1 ||
+           E->control.kC_primordial_flavor >= E->trace.nflavors ||
+           E->control.kC_primordial_flavor - 1 >= E->composition.ncomp) {
+            fprintf(stderr,
+                    "kC_primordial_flavor=%d is invalid for %d tracer "
+                    "flavors and %d ratio components\n",
+                    E->control.kC_primordial_flavor, E->trace.nflavors,
+                    E->composition.ncomp);
+            parallel_process_termination();
+        }
+    }
+    kC_min = min(1.0, E->control.kC_ratio);
+    kC_max = max(1.0, E->control.kC_ratio);
+    if(E->parallel.me == 0)
+        fprintf(stderr,
+                "Conductivity composition model: "
+                "kC=1+(RC-1)*Cprim, RC=%g, primordial flavor=%d, "
+                "ratio component=%d, expected kC range=[%g,%g]\n",
+                E->control.kC_ratio,
+                E->control.kC_primordial_flavor,
+                E->control.kC_primordial_flavor - 1,
+                kC_min, kC_max);
 
     if (E->composition.on) {
 

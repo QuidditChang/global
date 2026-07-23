@@ -106,7 +106,8 @@ class Advection_diffusion(CitcomComponent):
         kd_lower_linear = prop.float("kd_lower_linear", default=4.98)
         kd_lower_quadratic = prop.float("kd_lower_quadratic", default=-0.81)
         kT_exponent = prop.float("kT_exponent", default=0.0)
-        kC_ratio = prop.float("kC_ratio", default=0.8)
+        kC_ratio = prop.float("kC_ratio", default=1.0)
+        kC_primordial_flavor = prop.int("kC_primordial_flavor", default=1)
 
 
 

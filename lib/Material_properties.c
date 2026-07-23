@@ -388,12 +388,15 @@ static double conductivity_composition_factor(struct All_variables *E,
 double conductivity_element_composition_factor(struct All_variables *E,
                                                int cap, int element)
 {
-    /* The ratio composition scheme maps component i to tracer flavor i+1.
-       The highest-numbered flavor is primordial in both supported setups. */
+    int component;
+
+    /* The ratio composition scheme maps tracer flavor f to component f-1;
+       flavor zero is the implicit background material. */
     if(!E->composition.on || E->composition.ncomp < 1)
         return 1.0;
+    component = E->control.kC_primordial_flavor - 1;
     return conductivity_composition_factor(
-        E, E->composition.comp_el[cap][E->composition.ncomp-1][element]);
+        E, E->composition.comp_el[cap][component][element]);
 }
 
 
@@ -425,7 +428,8 @@ double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
     kT = conductivity_temperature_factor(E, E->T[cap][node]);
     if(E->composition.on && E->composition.ncomp > 0)
         kC = conductivity_composition_factor(
-            E, E->composition.comp_node[cap][E->composition.ncomp-1][node]);
+            E, E->composition.comp_node[cap]
+                  [E->control.kC_primordial_flavor-1][node]);
     else
         kC = 1.0;
     k_total = kd * kT * kC;
