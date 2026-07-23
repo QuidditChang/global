@@ -635,7 +635,7 @@ void build_diagonal_of_Ahat(E)
 }
 
 
-static double assemble_Ahatp_jacobi_offdiag(E,e1,e2,level,m)
+double assemble_Ahatp_jacobi_entry(E,e1,e2,level,m)
      struct All_variables *E;
      int e1,e2,level,m;
 {
@@ -661,7 +661,7 @@ static double assemble_Ahatp_jacobi_offdiag(E,e1,e2,level,m)
             g2 += E->elt_c[level][m][e2].c[p2][0];
           }
           eqn=E->ID[level][m][node1].doff[d];
-          value += g1*E->BI[level][m][eqn]*g2;
+          value += g1*E->ALA_velocity_BI[level][m][eqn]*g2;
         }
       }
     }
@@ -706,7 +706,7 @@ void build_radial_line_Ahat_preconditioner(E)
             pivot=diagonal;
           else {
             previous=e-1;
-            offdiag=assemble_Ahatp_jacobi_offdiag(
+            offdiag=assemble_Ahatp_jacobi_entry(
                 E,previous,e,level,m);
             E->ALA_BPI_line_lower[level][m][e]=
                 offdiag/previous_pivot;
@@ -1010,19 +1010,19 @@ double assemble_dAhatp_entry(E,e,level,m)
       pressure_op = E->elt_del[level][m][e].g[p][0];
       if(E->control.ala_pressure_buoyancy)
         pressure_op += E->elt_c[level][m][e].c[p][0];
-      gradP[p] += E->BI[level][m][j] * pressure_op;
+      gradP[p] += E->ALA_velocity_BI[level][m][j] * pressure_op;
 
       j=E->ID[level][m][node].doff[2];
       pressure_op = E->elt_del[level][m][e].g[p+1][0];
       if(E->control.ala_pressure_buoyancy)
         pressure_op += E->elt_c[level][m][e].c[p+1][0];
-      gradP[p+1] += E->BI[level][m][j] * pressure_op;
+      gradP[p+1] += E->ALA_velocity_BI[level][m][j] * pressure_op;
 
       j=E->ID[level][m][node].doff[3];
       pressure_op = E->elt_del[level][m][e].g[p+2][0];
       if(E->control.ala_pressure_buoyancy)
         pressure_op += E->elt_c[level][m][e].c[p+2][0];
-      gradP[p+2] += E->BI[level][m][j] * pressure_op;
+      gradP[p+2] += E->ALA_velocity_BI[level][m][j] * pressure_op;
       }
 
 
