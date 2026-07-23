@@ -488,6 +488,9 @@ struct CONTROL {
     int ala_two_level_offset;
     int ala_two_level_coarse_iterations;
     double ala_two_level_coarse_damping;
+    char ala_two_level_coarse_solver[20];
+    double ala_two_level_coarse_eigenvalue_min;
+    double ala_two_level_coarse_eigenvalue_max;
     int ala_radial_line_preconditioner;
 
     /* surface temperature */

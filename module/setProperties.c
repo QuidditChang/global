@@ -1055,6 +1055,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_two_level_coarse_iterations, fp);
     getDoubleProperty(properties, "ala_two_level_coarse_damping",
                       E->control.ala_two_level_coarse_damping, fp);
+    getStringProperty(properties, "ala_two_level_coarse_solver",
+                      E->control.ala_two_level_coarse_solver, fp);
+    getDoubleProperty(properties, "ala_two_level_coarse_eigenvalue_min",
+                      E->control.ala_two_level_coarse_eigenvalue_min, fp);
+    getDoubleProperty(properties, "ala_two_level_coarse_eigenvalue_max",
+                      E->control.ala_two_level_coarse_eigenvalue_max, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
@@ -1089,6 +1095,13 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_two_level_coarse_damping <= 0.0 ||
        E->control.ala_two_level_coarse_damping >= 2.0/27.0)
         myerror(E, "ala_two_level_coarse_damping must be in (0,2/27)");
+    if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi") != 0 &&
+       strcmp(E->control.ala_two_level_coarse_solver,"chebyshev") != 0)
+        myerror(E, "ala_two_level_coarse_solver must be jacobi or chebyshev");
+    if(E->control.ala_two_level_coarse_eigenvalue_min <= 0.0 ||
+       E->control.ala_two_level_coarse_eigenvalue_max <=
+         E->control.ala_two_level_coarse_eigenvalue_min)
+        myerror(E, "ALA two-level Chebyshev eigenvalue interval is invalid");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */

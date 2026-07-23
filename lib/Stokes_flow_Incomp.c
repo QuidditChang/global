@@ -75,7 +75,8 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double relative_accuracy);
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
-                                              double **work, int lev);
+                                              double **work, int lev,
+                                              int iteration);
 static void apply_ala_coarse_approximate_schur(struct All_variables *E,
                                                double **p, double **Ap,
                                                double **velocity, int lev);
@@ -100,13 +101,15 @@ static void apply_ala_coarse_approximate_schur(struct All_variables *E,
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
-                                              double **work, int lev)
+                                              double **work, int lev,
+                                              int iteration)
 {
     int m,j,col,k,e,ex,ey,ez,elz,ncolumns,npno;
     int clev,factor,celx,celz,cnpno,cneq,ce,cx,cy,cz;
-    double damping;
+    double damping,theta,delta,sigma,rho_cheb,rho_new;
+    double local_energy[4],global_energy[4];
     double *coarse_rhs[NCS],*coarse_x[NCS],*coarse_residual[NCS];
-    double *coarse_Ax[NCS],*coarse_velocity[NCS];
+    double *coarse_Ax[NCS],*coarse_velocity[NCS],*coarse_direction[NCS];
 
     npno=E->lmesh.NPNO[lev];
     if(E->control.ala_radial_line_preconditioner) {
@@ -162,9 +165,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         coarse_residual[m]=(double *)calloc(cnpno+1,sizeof(double));
         coarse_Ax[m]=(double *)calloc(cnpno+1,sizeof(double));
         coarse_velocity[m]=(double *)calloc(cneq+1,sizeof(double));
+        coarse_direction[m]=(double *)calloc(cnpno+1,sizeof(double));
         if(coarse_rhs[m]==NULL || coarse_x[m]==NULL ||
            coarse_residual[m]==NULL || coarse_Ax[m]==NULL ||
-           coarse_velocity[m]==NULL)
+           coarse_velocity[m]==NULL || coarse_direction[m]==NULL)
             myerror(E,"Unable to allocate ALA two-level preconditioner");
     }
 
@@ -183,25 +187,89 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     coarse_rhs[m][ce] += r[m][e];
                 }
 
-    /* A fixed damped-Jacobi polynomial approximates the inverse of the
-       complete coarse ALA operator (D+C) diag(K)^-1 (D+C)^T.  Fixed count,
-       damping, zero initial state, and P^T/P transfers keep this map linear
-       and symmetric for the outer standard PCG. */
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(ce=1;ce<=cnpno;ce++)
-            coarse_residual[m][ce]=coarse_rhs[m][ce];
-    for(k=0;k<E->control.ala_two_level_coarse_iterations;k++) {
+    /* Both coarse solvers are fixed polynomials of the complete coarse ALA
+       operator.  With zero initial state and the BPI similarity transform,
+       they define linear symmetric maps for the outer standard PCG. */
+    if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi")==0) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(ce=1;ce<=cnpno;ce++)
-                coarse_x[m][ce] += damping*E->BPI[clev][m][ce]
-                    *coarse_residual[m][ce];
-        if(k+1<E->control.ala_two_level_coarse_iterations) {
-            apply_ala_coarse_approximate_schur(
-                E,coarse_x,coarse_Ax,coarse_velocity,clev);
+                coarse_residual[m][ce]=coarse_rhs[m][ce];
+        for(k=0;k<E->control.ala_two_level_coarse_iterations;k++) {
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(ce=1;ce<=cnpno;ce++)
+                    coarse_x[m][ce] += damping*E->BPI[clev][m][ce]
+                        *coarse_residual[m][ce];
+            if(k+1<E->control.ala_two_level_coarse_iterations) {
+                apply_ala_coarse_approximate_schur(
+                    E,coarse_x,coarse_Ax,coarse_velocity,clev);
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(ce=1;ce<=cnpno;ce++)
+                        coarse_residual[m][ce]=coarse_rhs[m][ce]
+                            -coarse_Ax[m][ce];
+            }
+        }
+    }
+    else {
+        theta=0.5*(E->control.ala_two_level_coarse_eigenvalue_max+
+                   E->control.ala_two_level_coarse_eigenvalue_min);
+        delta=0.5*(E->control.ala_two_level_coarse_eigenvalue_max-
+                   E->control.ala_two_level_coarse_eigenvalue_min);
+        sigma=theta/delta;
+        rho_cheb=1.0/sigma;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++) {
+                coarse_direction[m][ce]=E->BPI[clev][m][ce]
+                    *coarse_rhs[m][ce]/theta;
+                coarse_x[m][ce]=coarse_direction[m][ce];
+            }
+        for(k=1;k<E->control.ala_two_level_coarse_iterations;k++) {
+            apply_ala_coarse_approximate_schur(
+                E,coarse_x,coarse_Ax,coarse_velocity,clev);
+            rho_new=1.0/(2.0*sigma-rho_cheb);
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(ce=1;ce<=cnpno;ce++) {
                     coarse_residual[m][ce]=coarse_rhs[m][ce]
                         -coarse_Ax[m][ce];
+                    coarse_direction[m][ce]=rho_new*rho_cheb
+                        *coarse_direction[m][ce]
+                        +(2.0*rho_new/delta)*E->BPI[clev][m][ce]
+                        *coarse_residual[m][ce];
+                    coarse_x[m][ce] += coarse_direction[m][ce];
+                }
+            rho_cheb=rho_new;
+        }
+    }
+
+    if(iteration==0 ||
+       iteration%E->control.ala_coarse_residual_interval==0) {
+        apply_ala_coarse_approximate_schur(
+            E,coarse_x,coarse_Ax,coarse_velocity,clev);
+        local_energy[0]=0.0;
+        local_energy[1]=0.0;
+        local_energy[2]=0.0;
+        local_energy[3]=0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(e=1;e<=npno;e++)
+                local_energy[0] += r[m][e]*z[m][e];
+            for(ce=1;ce<=cnpno;ce++) {
+                local_energy[1] += coarse_rhs[m][ce]*coarse_x[m][ce];
+                local_energy[2] += coarse_rhs[m][ce]*coarse_rhs[m][ce];
+                local_energy[3] += (coarse_rhs[m][ce]-coarse_Ax[m][ce])
+                    *(coarse_rhs[m][ce]-coarse_Ax[m][ce]);
+            }
+        }
+        MPI_Allreduce(local_energy,global_energy,4,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,
+                    "ALA_TWO_LEVEL_ENERGY iteration=%d fine=%e coarse=%e "
+                    "coarse_to_fine=%e coarse_residual_reduction=%e\n",
+                    iteration,global_energy[0],
+                    global_energy[1],global_energy[1]
+                    /max(global_energy[0],1.0e-300),
+                    sqrt(global_energy[3]
+                         /max(global_energy[2],1.0e-300)));
+            fflush(E->fp);
         }
     }
 
@@ -225,6 +293,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         free((void *)coarse_residual[m]);
         free((void *)coarse_Ax[m]);
         free((void *)coarse_velocity[m]);
+        free((void *)coarse_direction[m]);
     }
 }
 
@@ -955,21 +1024,29 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         if(E->control.ala_two_level_preconditioner) {
             fprintf(E->fp,
                     "ALA two-level pressure correction offset=%d level=%d "
-                    "coarse_iterations=%d damping=%e invalid_diagonals=%d "
+                    "coarse_solver=%s coarse_iterations=%d damping=%e "
+                    "eigen_interval=(%e,%e) invalid_diagonals=%d "
                     "operator="
                     "(D+C)diag(K)^-1(D+C)^T transfer=Pt/P\n",
                     E->control.ala_two_level_offset,coarse_lev,
+                    E->control.ala_two_level_coarse_solver,
                     E->control.ala_two_level_coarse_iterations,
                     E->control.ala_two_level_coarse_damping,
+                    E->control.ala_two_level_coarse_eigenvalue_min,
+                    E->control.ala_two_level_coarse_eigenvalue_max,
                     global_invalid_coarse);
             fprintf(stderr,
                     "ALA two-level pressure correction offset=%d level=%d "
-                    "coarse_iterations=%d damping=%e invalid_diagonals=%d "
+                    "coarse_solver=%s coarse_iterations=%d damping=%e "
+                    "eigen_interval=(%e,%e) invalid_diagonals=%d "
                     "operator="
                     "(D+C)diag(K)^-1(D+C)^T transfer=Pt/P\n",
                     E->control.ala_two_level_offset,coarse_lev,
+                    E->control.ala_two_level_coarse_solver,
                     E->control.ala_two_level_coarse_iterations,
                     E->control.ala_two_level_coarse_damping,
+                    E->control.ala_two_level_coarse_eigenvalue_min,
+                    E->control.ala_two_level_coarse_eigenvalue_max,
                     global_invalid_coarse);
         }
     }
@@ -1023,7 +1100,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
            (E->control.ala_hybrid_convergence && !hybrid_converged))) {
 
         apply_ala_pressure_preconditioner(
-            E,r,z,preconditioner_work,lev);
+            E,r,z,preconditioner_work,lev,count);
 
         rho = global_pdot(E, r, z, lev);
         if(!isfinite(rho) || rho <= 1.0e-300) {

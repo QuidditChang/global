@@ -142,6 +142,13 @@ class Incompressible(CitcomComponent):
             "ala_two_level_coarse_iterations", default=8)
         ala_two_level_coarse_damping = prop.float(
             "ala_two_level_coarse_damping", default=0.03)
+        ala_two_level_coarse_solver = prop.str(
+            "ala_two_level_coarse_solver", default="chebyshev",
+            validator=prop.choice(["jacobi", "chebyshev"]))
+        ala_two_level_coarse_eigenvalue_min = prop.float(
+            "ala_two_level_coarse_eigenvalue_min", default=0.01)
+        ala_two_level_coarse_eigenvalue_max = prop.float(
+            "ala_two_level_coarse_eigenvalue_max", default=27.0)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         uzawa = prop.str("uzawa", default="cg",

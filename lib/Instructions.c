@@ -547,6 +547,12 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_two_level_coarse_iterations),"8",m);
   input_double("ala_two_level_coarse_damping",
                &(E->control.ala_two_level_coarse_damping),"0.03",m);
+  input_string("ala_two_level_coarse_solver",
+               E->control.ala_two_level_coarse_solver,"chebyshev",m);
+  input_double("ala_two_level_coarse_eigenvalue_min",
+               &(E->control.ala_two_level_coarse_eigenvalue_min),"0.01",m);
+  input_double("ala_two_level_coarse_eigenvalue_max",
+               &(E->control.ala_two_level_coarse_eigenvalue_max),"27.0",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
 
@@ -582,6 +588,13 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_two_level_coarse_damping <= 0.0 ||
      E->control.ala_two_level_coarse_damping >= 2.0/27.0)
       myerror(E, "ala_two_level_coarse_damping must be in (0,2/27)");
+  if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi") != 0 &&
+     strcmp(E->control.ala_two_level_coarse_solver,"chebyshev") != 0)
+      myerror(E, "ala_two_level_coarse_solver must be jacobi or chebyshev");
+  if(E->control.ala_two_level_coarse_eigenvalue_min <= 0.0 ||
+     E->control.ala_two_level_coarse_eigenvalue_max <=
+       E->control.ala_two_level_coarse_eigenvalue_min)
+      myerror(E, "ALA two-level Chebyshev eigenvalue interval is invalid");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1105,6 +1118,9 @@ void global_default_values(E)
     E->control.ala_two_level_offset = 2;
     E->control.ala_two_level_coarse_iterations = 8;
     E->control.ala_two_level_coarse_damping = 0.03;
+    strcpy(E->control.ala_two_level_coarse_solver,"chebyshev");
+    E->control.ala_two_level_coarse_eigenvalue_min = 0.01;
+    E->control.ala_two_level_coarse_eigenvalue_max = 27.0;
     E->control.ala_radial_line_preconditioner = 0;
 
     E->control.GRID_TYPE=1;
