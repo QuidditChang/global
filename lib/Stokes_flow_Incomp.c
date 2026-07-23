@@ -1645,7 +1645,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int audit_best_iteration, audit_window_iteration;
     int audit_milestone, audit_stagnated;
     int local_invalid_bpi, global_invalid_bpi;
-    int local_invalid_coarse, global_invalid_coarse;
+    int local_invalid_velocity_bi, global_invalid_velocity_bi;
     int galerkin_diagnostic_applications, galerkin_applications;
 
     double alpha, beta, rho, rho_old, curvature;
@@ -1720,22 +1720,26 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                   E->parallel.world);
     MPI_Allreduce(&local_invalid_bpi, &global_invalid_bpi, 1, MPI_INT, MPI_SUM,
                   E->parallel.world);
-    local_invalid_coarse=0;
+    local_invalid_velocity_bi=0;
     if(E->control.ala_two_level_preconditioner)
-        for(m=1;m<=E->sphere.caps_per_proc;m++) {
-            for(j=1;j<=E->lmesh.NPNO[coarse_lev];j++)
-                if(!isfinite(E->BPI[coarse_lev][m][j]) ||
-                   E->BPI[coarse_lev][m][j]<=0.0)
-                    local_invalid_coarse++;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=0;j<E->lmesh.NEQ[lev];j++)
                 if(!isfinite(E->ALA_velocity_BI[lev][m][j]) ||
                    E->ALA_velocity_BI[lev][m][j]<=0.0)
-                    local_invalid_coarse++;
-        }
-    MPI_Allreduce(&local_invalid_coarse,&global_invalid_coarse,1,MPI_INT,
-                  MPI_SUM,E->parallel.world);
-    if(global_invalid_bpi || global_invalid_coarse)
-        parallel_process_termination();
+                    local_invalid_velocity_bi++;
+    MPI_Allreduce(&local_invalid_velocity_bi,&global_invalid_velocity_bi,
+                  1,MPI_INT,MPI_SUM,E->parallel.world);
+    if(E->parallel.me==0 &&
+       (global_invalid_bpi || global_invalid_velocity_bi)) {
+        fprintf(stderr,"ALA preconditioner diagonal validation failed "
+                "fine_pressure_invalid=%d fixed_velocity_invalid=%d\n",
+                global_invalid_bpi,global_invalid_velocity_bi);
+        fflush(stderr);
+    }
+    if(global_invalid_bpi)
+        myerror(E,"ALA fine pressure preconditioner diagonal is not positive");
+    if(global_invalid_velocity_bi)
+        myerror(E,"ALA fixed velocity inverse diagonal is not positive");
     if(E->parallel.me==0) {
         fprintf(stderr,"ALA preconditioner startup stage=begin\n");
         fflush(stderr);
@@ -1846,7 +1850,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_velocity_iterations,
                     E->control.ala_two_level_velocity_eigenvalue_min,
                     E->control.ala_two_level_velocity_eigenvalue_max,
-                    global_invalid_coarse);
+                    global_invalid_velocity_bi);
             fprintf(stderr,
                     "ALA two-level pressure correction offset=%d level=%d "
                     "coarse_solver=%s coarse_iterations=%d damping=%e "
@@ -1867,7 +1871,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_velocity_iterations,
                     E->control.ala_two_level_velocity_eigenvalue_min,
                     E->control.ala_two_level_velocity_eigenvalue_max,
-                    global_invalid_coarse);
+                    global_invalid_velocity_bi);
         }
     }
     for(m=1; m<=E->sphere.caps_per_proc; m++)
