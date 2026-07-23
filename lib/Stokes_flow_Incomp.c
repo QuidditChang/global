@@ -82,6 +82,7 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_HORIZONTAL_STRIDE 2
 #define ALA_PATCH_RADIAL_STRIDE 1
 #define ALA_COARSE_POWER_ITERATIONS 6
+#define ALA_VELOCITY_POWER_ITERATIONS 6
 #define ALA_PATCH_MAX_ELEMENTS \
     (ALA_PATCH_HORIZONTAL_ELEMENTS*ALA_PATCH_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
@@ -94,12 +95,16 @@ struct ala_pressure_preconditioner_cache {
     double *coarse_bpi[NCS];
     double coarse_eigenvalue_min;
     double coarse_eigenvalue_max;
+    double velocity_eigenvalue_min;
+    double velocity_eigenvalue_max;
 };
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void build_ala_two_level_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void calibrate_ala_two_level_spectrum(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
+static void calibrate_ala_velocity_spectrum(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache);
@@ -114,6 +119,7 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double **velocity_rhs,
                                          double **velocity_Ax,
                                          double **velocity_direction,
+    struct ala_pressure_preconditioner_cache *cache,
                                          int lev,
                                          double *residual_reduction);
 static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
@@ -125,6 +131,7 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                                            double **fine_velocity_rhs,
                                            double **fine_velocity_Ax,
                                            double **fine_velocity_direction,
+    struct ala_pressure_preconditioner_cache *cache,
                                            int clev, int lev, int factor,
                                            double *residual_reduction);
 
@@ -383,6 +390,10 @@ static void build_ala_two_level_cache(struct All_variables *E,
         E->control.ala_two_level_coarse_eigenvalue_min;
     cache->coarse_eigenvalue_max=
         E->control.ala_two_level_coarse_eigenvalue_max;
+    cache->velocity_eigenvalue_min=
+        E->control.ala_two_level_velocity_eigenvalue_min;
+    cache->velocity_eigenvalue_max=
+        E->control.ala_two_level_velocity_eigenvalue_max;
     local_invalid=0;
     local_min=1.0e300;
     local_max=0.0;
@@ -470,6 +481,7 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double **velocity_rhs,
                                          double **velocity_Ax,
                                          double **velocity_direction,
+                                         struct ala_pressure_preconditioner_cache *cache,
                                          int lev,
                                          double *residual_reduction)
 {
@@ -489,10 +501,10 @@ static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                     *velocity_rhs[m][j];
     }
     else {
-        theta=0.5*(E->control.ala_two_level_velocity_eigenvalue_max+
-                   E->control.ala_two_level_velocity_eigenvalue_min);
-        delta=0.5*(E->control.ala_two_level_velocity_eigenvalue_max-
-                   E->control.ala_two_level_velocity_eigenvalue_min);
+        theta=0.5*(cache->velocity_eigenvalue_max+
+                   cache->velocity_eigenvalue_min);
+        delta=0.5*(cache->velocity_eigenvalue_max-
+                   cache->velocity_eigenvalue_min);
         sigma=theta/delta;
         rho_cheb=1.0/sigma;
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -544,6 +556,7 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                                            double **fine_velocity_rhs,
                                            double **fine_velocity_Ax,
                                            double **fine_velocity_direction,
+                                           struct ala_pressure_preconditioner_cache *cache,
                                            int clev, int lev, int factor,
                                            double *residual_reduction)
 {
@@ -575,7 +588,7 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
        carries the pressure correction across MPI and cap boundaries. */
     apply_ala_coarse_fixed_schur(E,fine_p,fine_Ap,fine_velocity,
                                  fine_velocity_rhs,fine_velocity_Ax,
-                                 fine_velocity_direction,lev,
+                                 fine_velocity_direction,cache,lev,
                                  residual_reduction);
 
     /* Exact transpose restriction P^T. Together these operations define the
@@ -593,6 +606,106 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
                     coarse_Ap[m][ce] += fine_Ap[m][e];
                 }
+    }
+}
+
+
+/* Calibrate the Jacobi-scaled velocity operator used by the fixed polynomial
+   inverse.  The similarity transform sqrt(B) K sqrt(B) is symmetric; a fixed
+   Chebyshev polynomial of it therefore yields an SPD approximation to K^-1. */
+static void calibrate_ala_velocity_spectrum(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int m,j,k,node,d,eqn,neq,nno;
+    double theta,phi,radius,norm,rayleigh,upper,scale;
+    double *q[NCS],*scaled_q[NCS],*Kq[NCS],*transformed_q[NCS];
+    double global_vdot();
+    void assemble_del2_u();
+    void strip_bcs_from_residual();
+
+    neq=E->lmesh.NEQ[lev];
+    nno=E->lmesh.NNO[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        q[m]=(double *)calloc(neq+1,sizeof(double));
+        scaled_q[m]=(double *)calloc(neq+1,sizeof(double));
+        Kq[m]=(double *)calloc(neq+1,sizeof(double));
+        transformed_q[m]=(double *)calloc(neq+1,sizeof(double));
+        if(q[m]==NULL || scaled_q[m]==NULL || Kq[m]==NULL ||
+           transformed_q[m]==NULL)
+            myerror(E,"Unable to allocate ALA velocity spectrum workspace");
+        for(node=1;node<=nno;node++) {
+            theta=E->SX[lev][m][1][node];
+            phi=E->SX[lev][m][2][node];
+            radius=E->SX[lev][m][3][node];
+            for(d=1;d<=E->mesh.nsd;d++) {
+                eqn=E->ID[lev][m][node].doff[d];
+                q[m][eqn]=sin(11.324718*theta+7.193147*phi
+                              +5.731921*radius+0.417*d
+                              +0.113*E->sphere.capid[m]);
+            }
+        }
+    }
+    strip_bcs_from_residual(E,q,lev);
+    norm=sqrt(max(global_vdot(E,q,q,lev),1.0e-300));
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(j=0;j<neq;j++)
+            q[m][j] /= norm;
+
+    rayleigh=0.0;
+    for(k=0;k<ALA_VELOCITY_POWER_ITERATIONS;k++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=0;j<neq;j++) {
+                scale=sqrt(E->ALA_velocity_BI[lev][m][j]);
+                scaled_q[m][j]=scale*q[m][j];
+            }
+        assemble_del2_u(E,scaled_q,Kq,lev,1);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=0;j<neq;j++)
+                transformed_q[m][j]
+                    =sqrt(E->ALA_velocity_BI[lev][m][j])*Kq[m][j];
+        rayleigh=global_vdot(E,q,transformed_q,lev);
+        norm=sqrt(max(global_vdot(E,transformed_q,transformed_q,lev),
+                      1.0e-300));
+        if(!isfinite(rayleigh) || rayleigh<=0.0 || !isfinite(norm) ||
+           norm<=1.0e-150)
+            myerror(E,"ALA velocity spectral calibration failed");
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=0;j<neq;j++)
+                q[m][j]=transformed_q[m][j]/norm;
+    }
+
+    upper=max(2.0*rayleigh,
+              2.0*E->control.ala_two_level_velocity_eigenvalue_min);
+    if(upper>E->control.ala_two_level_velocity_eigenvalue_max)
+        myerror(E,"ALA velocity spectral safety bound exceeds configured maximum");
+    cache->velocity_eigenvalue_max=upper;
+    cache->velocity_eigenvalue_min=
+        E->control.ala_two_level_velocity_eigenvalue_min;
+    if(cache->velocity_eigenvalue_max<=cache->velocity_eigenvalue_min)
+        myerror(E,"ALA calibrated velocity interval is empty");
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA velocity spectrum power_iterations=%d "
+                "lambda_estimate=%e safety_factor=2.0 "
+                "chebyshev_interval=(%e,%e) configured_upper=%e\n",
+                ALA_VELOCITY_POWER_ITERATIONS,rayleigh,
+                cache->velocity_eigenvalue_min,
+                cache->velocity_eigenvalue_max,
+                E->control.ala_two_level_velocity_eigenvalue_max);
+        fprintf(stderr,"ALA velocity spectrum power_iterations=%d "
+                "lambda_estimate=%e safety_factor=2.0 "
+                "chebyshev_interval=(%e,%e) configured_upper=%e\n",
+                ALA_VELOCITY_POWER_ITERATIONS,rayleigh,
+                cache->velocity_eigenvalue_min,
+                cache->velocity_eigenvalue_max,
+                E->control.ala_two_level_velocity_eigenvalue_max);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)q[m]);
+        free((void *)scaled_q[m]);
+        free((void *)Kq[m]);
+        free((void *)transformed_q[m]);
     }
 }
 
@@ -656,7 +769,7 @@ static void calibrate_ala_two_level_spectrum(struct All_variables *E,
         apply_ala_galerkin_fixed_schur(
             E,coarse_p,coarse_Ap,fine_p,fine_Ap,fine_velocity,
             fine_velocity_rhs,fine_velocity_Ax,fine_velocity_direction,
-            clev,lev,factor,NULL);
+            cache,clev,lev,factor,NULL);
         local[0]=0.0;
         local[1]=0.0;
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -678,8 +791,9 @@ static void calibrate_ala_two_level_spectrum(struct All_variables *E,
 
     upper=max(2.0*rayleigh,
               2.0*E->control.ala_two_level_coarse_eigenvalue_min);
-    cache->coarse_eigenvalue_max=min(
-        upper,E->control.ala_two_level_coarse_eigenvalue_max);
+    if(upper>E->control.ala_two_level_coarse_eigenvalue_max)
+        myerror(E,"ALA Galerkin spectral safety bound exceeds configured maximum");
+    cache->coarse_eigenvalue_max=upper;
     if(cache->coarse_eigenvalue_max<=
        E->control.ala_two_level_coarse_eigenvalue_min)
         myerror(E,"ALA Galerkin calibrated interval is empty");
@@ -896,7 +1010,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 apply_ala_galerkin_fixed_schur(
                     E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
                     fine_velocity_rhs,fine_velocity_Ax,
-                    fine_velocity_direction,clev,lev,factor,NULL);
+                    fine_velocity_direction,cache,clev,lev,factor,NULL);
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(ce=1;ce<=cnpno;ce++)
                         coarse_residual[m][ce]=coarse_rhs[m][ce]
@@ -921,7 +1035,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
             apply_ala_galerkin_fixed_schur(
                 E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
                 fine_velocity_rhs,fine_velocity_Ax,
-                fine_velocity_direction,clev,lev,factor,NULL);
+                fine_velocity_direction,cache,clev,lev,factor,NULL);
             rho_new=1.0/(2.0*sigma-rho_cheb);
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(ce=1;ce<=cnpno;ce++) {
@@ -942,7 +1056,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         apply_ala_galerkin_fixed_schur(
             E,coarse_x,coarse_Ax,fine_p,fine_Ap,fine_velocity,
             fine_velocity_rhs,fine_velocity_Ax,
-            fine_velocity_direction,clev,lev,factor,
+            fine_velocity_direction,cache,clev,lev,factor,
             &velocity_residual_reduction);
         local_energy[0]=0.0;
         local_energy[1]=0.0;
@@ -1890,6 +2004,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fprintf(stderr,"ALA preconditioner startup stage=galerkin_diagonal_build_complete\n");
             fflush(stderr);
         }
+        if(strcmp(E->control.ala_two_level_velocity_solver,"chebyshev")==0) {
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=velocity_spectrum_begin\n");
+                fflush(stderr);
+            }
+            calibrate_ala_velocity_spectrum(
+                E,&preconditioner_cache,lev);
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=velocity_spectrum_complete\n");
+                fflush(stderr);
+            }
+        }
         if(strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0) {
             if(E->parallel.me==0) {
                 fprintf(stderr,"ALA preconditioner startup stage=galerkin_spectrum_begin\n");
@@ -1911,8 +2037,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
-                       ? "overlap_schwarz_plus_galerkin"
-                       : "diagonal_plus_galerkin")
+                       ? (strcmp(E->control.ala_two_level_velocity_solver,
+                                 "chebyshev")==0
+                          ? "overlap_schwarz_plus_galerkin_kpoly"
+                          : "overlap_schwarz_plus_galerkin_diagonal")
+                       : (strcmp(E->control.ala_two_level_velocity_solver,
+                                 "chebyshev")==0
+                          ? "true_galerkin_kpoly"
+                          : "diagonal_plus_galerkin"))
                     : (E->control.ala_shallow_patch_preconditioner
                        ? "overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
@@ -1928,8 +2060,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
-                       ? "overlap_schwarz_plus_galerkin"
-                       : "diagonal_plus_galerkin")
+                       ? (strcmp(E->control.ala_two_level_velocity_solver,
+                                 "chebyshev")==0
+                          ? "overlap_schwarz_plus_galerkin_kpoly"
+                          : "overlap_schwarz_plus_galerkin_diagonal")
+                       : (strcmp(E->control.ala_two_level_velocity_solver,
+                                 "chebyshev")==0
+                          ? "true_galerkin_kpoly"
+                          : "diagonal_plus_galerkin"))
                     : (E->control.ala_shallow_patch_preconditioner
                        ? "overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
@@ -1950,8 +2088,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_feasibility_min_reduction,
                     E->control.ala_two_level_preconditioner
                         ? (E->control.ala_shallow_patch_preconditioner
-                           ? "overlap_schwarz_plus_galerkin"
-                           : "diagonal_plus_galerkin")
+                           ? (strcmp(E->control.ala_two_level_velocity_solver,
+                                     "chebyshev")==0
+                              ? "overlap_schwarz_plus_galerkin_kpoly"
+                              : "overlap_schwarz_plus_galerkin_diagonal")
+                           : (strcmp(E->control.ala_two_level_velocity_solver,
+                                     "chebyshev")==0
+                              ? "true_galerkin_kpoly"
+                              : "diagonal_plus_galerkin"))
                         : (E->control.ala_shallow_patch_preconditioner
                            ? "overlap_schwarz" : "diagonal"));
             fprintf(stderr,
@@ -1971,7 +2115,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     "velocity_solver=%s velocity_iterations=%d "
                     "velocity_eigen_interval=(%e,%e) "
                     "invalid_diagonals=%d "
-                    "operator=Sc=Pt*((D+C)Kfixed^-1(D+C)^T)_fine*P "
+                    "operator=Sc=Pt*((D+C)Kapprox^-1(D+C)^T)_fine*P "
+                    "velocity_inverse=%s "
                     "transfer=Pt/P matrix_free_galerkin=on\n",
                     E->control.ala_two_level_offset,coarse_lev,
                     E->control.ala_two_level_coarse_solver,
@@ -1982,9 +2127,12 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_coarse_weight,
                     E->control.ala_two_level_velocity_solver,
                     E->control.ala_two_level_velocity_iterations,
-                    E->control.ala_two_level_velocity_eigenvalue_min,
-                    E->control.ala_two_level_velocity_eigenvalue_max,
-                    global_invalid_velocity_bi);
+                    preconditioner_cache.velocity_eigenvalue_min,
+                    preconditioner_cache.velocity_eigenvalue_max,
+                    global_invalid_velocity_bi,
+                    strcmp(E->control.ala_two_level_velocity_solver,
+                           "chebyshev")==0
+                        ? "fixed_chebyshev_polynomial" : "diagonal");
             fprintf(stderr,
                     "ALA two-level pressure correction offset=%d level=%d "
                     "coarse_solver=%s coarse_iterations=%d damping=%e "
@@ -1992,7 +2140,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     "velocity_solver=%s velocity_iterations=%d "
                     "velocity_eigen_interval=(%e,%e) "
                     "invalid_diagonals=%d "
-                    "operator=Sc=Pt*((D+C)Kfixed^-1(D+C)^T)_fine*P "
+                    "operator=Sc=Pt*((D+C)Kapprox^-1(D+C)^T)_fine*P "
+                    "velocity_inverse=%s "
                     "transfer=Pt/P matrix_free_galerkin=on\n",
                     E->control.ala_two_level_offset,coarse_lev,
                     E->control.ala_two_level_coarse_solver,
@@ -2003,9 +2152,12 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_coarse_weight,
                     E->control.ala_two_level_velocity_solver,
                     E->control.ala_two_level_velocity_iterations,
-                    E->control.ala_two_level_velocity_eigenvalue_min,
-                    E->control.ala_two_level_velocity_eigenvalue_max,
-                    global_invalid_velocity_bi);
+                    preconditioner_cache.velocity_eigenvalue_min,
+                    preconditioner_cache.velocity_eigenvalue_max,
+                    global_invalid_velocity_bi,
+                    strcmp(E->control.ala_two_level_velocity_solver,
+                           "chebyshev")==0
+                        ? "fixed_chebyshev_polynomial" : "diagonal");
         }
     }
     for(m=1; m<=E->sphere.caps_per_proc; m++)
