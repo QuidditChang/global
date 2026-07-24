@@ -327,6 +327,7 @@ class Solver(Component):
 
         datadir = inv.str("datadir", default=".")
         datadir_old = inv.str("datadir_old", default=".")
+        logfile = inv.str("logfile", default="datafile")
 
         rayleigh = inv.float("rayleigh", default=1e+05)
         dissipation_number = inv.float("dissipation_number", default=0.0)

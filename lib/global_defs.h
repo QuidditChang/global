@@ -405,6 +405,7 @@ struct CONTROL {
 
     char data_prefix[50];
     char data_prefix_old[50];
+    char log_template[100];
 
     char data_dir[150];
     char data_dir_old[150];

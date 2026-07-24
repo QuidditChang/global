@@ -609,6 +609,7 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
     getStringProperty(properties, "datafile", E->control.data_prefix, fp);
     getStringProperty(properties, "datadir_old", E->control.data_dir_old, fp);
     getStringProperty(properties, "datafile_old", E->control.data_prefix_old, fp);
+    getStringProperty(properties, "logfile", E->control.log_template, fp);
 
     getFloatProperty(properties, "rayleigh", E->control.Atemp, fp);
     getFloatProperty(properties, "dissipation_number", E->control.disptn_number, fp);

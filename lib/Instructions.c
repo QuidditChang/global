@@ -37,6 +37,7 @@
 #include <sys/errno.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <time.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 
@@ -78,6 +79,7 @@ void tracer_input(struct All_variables*);
 void viscosity_input(struct All_variables*);
 void get_vtk_filename(char *,int,struct All_variables *,int);
 void myerror(struct All_variables *,char *);
+static void expand_str(char *, size_t, const char *, const char *);
 void open_qfiles(struct All_variables *) ;
 
 
@@ -336,6 +338,7 @@ void read_initial_settings(struct All_variables *E)
   input_string("datafile",E->control.data_prefix,"initialize",m);
   input_string("datadir_old",E->control.data_dir_old,".",m);
   input_string("datafile_old",E->control.data_prefix_old,"initialize",m);
+  input_string("logfile",E->control.log_template,"datafile",m);
 
   input_int("mgunitx",&(E->mesh.mgunitx),"1",m);
   input_int("mgunitz",&(E->mesh.mgunitz),"1",m);
@@ -1228,6 +1231,7 @@ void global_default_values(E)
     E->control.ala_shallow_patch_weight = 0.25;
     E->control.ala_shallow_patch_regularization = 1.0e-3;
     E->control.ala_radial_line_preconditioner = 0;
+    strcpy(E->control.log_template,"datafile");
 
     E->control.GRID_TYPE=1;
 
@@ -1464,21 +1468,66 @@ void initial_velocity(E)
 
 
 
+static void log_timestamp(struct All_variables *E, char *timestamp,
+                          size_t timestamp_size)
+{
+  time_t now;
+  struct tm *utc;
+
+  memset(timestamp,0,timestamp_size);
+  if(E->parallel.me == 0) {
+    now=time(NULL);
+    utc=gmtime(&now);
+    if(utc == NULL ||
+       strftime(timestamp,timestamp_size,"%Y%m%dT%H%M%SZ",utc) == 0)
+      snprintf(timestamp,timestamp_size,"unknown-time");
+  }
+  MPI_Bcast(timestamp,(int)timestamp_size,MPI_CHAR,0,E->parallel.world);
+}
+
+
 static void open_log(struct All_variables *E)
 {
-  char logfile[255];
+  char logfile[512];
+  char basename[256];
+  char pressure_iterations[32];
+  char timestamp[32];
+  int written;
 
   E->fp = NULL;
-  if (strcmp(E->output.format, "ascii-gz") == 0)
-    sprintf(logfile,"%s/log", E->control.data_dir);
-  else
-    sprintf(logfile,"%s.log", E->control.data_file);
+  if(strcmp(E->control.log_template,"datafile") == 0) {
+    if (strcmp(E->output.format, "ascii-gz") == 0)
+      snprintf(logfile,sizeof(logfile),"%s/log",E->control.data_dir);
+    else
+      snprintf(logfile,sizeof(logfile),"%s.log",E->control.data_file);
+  }
+  else {
+    snprintf(basename,sizeof(basename),"%s",E->control.log_template);
+    snprintf(pressure_iterations,sizeof(pressure_iterations),"%d",
+             E->control.p_iterations);
+    log_timestamp(E,timestamp,sizeof(timestamp));
+    expand_str(basename,sizeof(basename),"%P",pressure_iterations);
+    expand_str(basename,sizeof(basename),"%T",timestamp);
+    written = snprintf(logfile,sizeof(logfile),"%s/%s.log",E->control.data_dir,
+                       basename);
+    if(written < 0 || (size_t)written >= sizeof(logfile)) {
+      fprintf(stderr,"error: expanded logfile path is too long\n");
+      parallel_process_termination();
+    }
+  }
 
   if (E->control.restart || E->control.post_p)
       /* append the log file if restart */
       E->fp = output_open(logfile, "a");
   else
       E->fp = output_open(logfile, "w");
+
+  fprintf(E->fp,"RUN_LOG file=%s template=%s piterations=%d\n",
+          logfile,E->control.log_template,E->control.p_iterations);
+  fflush(E->fp);
+  if(E->parallel.me == 0)
+    fprintf(stderr,"RUN_LOG file=%s piterations=%d\n",logfile,
+            E->control.p_iterations);
 
   return;
 }
@@ -1666,6 +1715,14 @@ static void chk_prefix(struct  All_variables *E)
   found = strchr(E->control.data_prefix, '/');
   if (found) {
       fprintf(stderr, "error in input parameter: datafile='%s' contains '/'\n", E->control.data_file);
+      parallel_process_termination();
+  }
+
+  if(E->control.log_template[0] == '\0' ||
+     strchr(E->control.log_template,'/') != NULL) {
+      fprintf(stderr,
+              "error in input parameter: logfile='%s' must be a nonempty basename template\n",
+              E->control.log_template);
       parallel_process_termination();
   }
 
