@@ -46,6 +46,25 @@ void general_stokes_solver_setup(struct All_variables *E)
   int i, m;
   void construct_node_maps();
 
+  if ((E->control.NMULTIGRID || E->control.EMULTIGRID) &&
+      E->parallel.me == 0) {
+    fprintf(E->fp,
+            "Velocity MG hierarchy levels=%d range=%d:%d cycle=%d "
+            "smooth=(down:%d,up:%d,fine:%d,coarse_max:%d)\n",
+            E->mesh.levmax - E->mesh.levmin + 1,
+            E->mesh.levmin, E->mesh.levmax, E->control.mg_cycle,
+            E->control.down_heavy, E->control.up_heavy,
+            E->control.v_steps_high, E->control.v_steps_low);
+    for (i=E->mesh.levmin;i<=E->mesh.levmax;i++)
+      fprintf(E->fp,
+              "Velocity MG level=%d global_nodes=%dx%dx%d "
+              "local_nodes=%dx%dx%d local_elements=%dx%dx%d\n",
+              i, E->mesh.NOX[i], E->mesh.NOY[i], E->mesh.NOZ[i],
+              E->lmesh.NOX[i], E->lmesh.NOY[i], E->lmesh.NOZ[i],
+              E->lmesh.ELX[i], E->lmesh.ELY[i], E->lmesh.ELZ[i]);
+    fflush(E->fp);
+  }
+
   if (E->control.NMULTIGRID || E->control.NASSEMBLE)
     construct_node_maps(E);
   else

@@ -661,6 +661,7 @@ PyObject * pyCitcom_Sphere_set_properties(PyObject *self, PyObject *args)
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
+    int level_factor;
 
     if (!PyArg_ParseTuple(args, "OOO:Sphere_set_properties",
 			  &obj, &properties, &out))
@@ -693,12 +694,36 @@ PyObject * pyCitcom_Sphere_set_properties(PyObject *self, PyObject *args)
     getIntProperty(properties, "nodez", E->mesh.noz, fp);
     getIntProperty(properties, "levels", E->mesh.levels, fp);
 
+    if (E->mesh.levels < 1 || E->mesh.levels > MAX_LEVELS) {
+	char errmsg[] = "!!!! levels must be between 1 and MAX_LEVELS";
+	PyErr_SetString(PyExc_SyntaxError, errmsg);
+	return NULL;
+    }
+
+    level_factor = (int) pow(2.0, E->mesh.levels - 1);
+    if (E->parallel.nprocx < 1 || E->parallel.nprocy < 1 ||
+	E->parallel.nprocz < 1 ||
+	(E->mesh.nox - 1) % (E->parallel.nprocx * level_factor) ||
+	(E->mesh.noy - 1) % (E->parallel.nprocy * level_factor) ||
+	(E->mesh.noz - 1) % (E->parallel.nprocz * level_factor)) {
+	char errmsg[] = "!!!! mesh elements must be divisible by the processor grid times 2^(levels-1)";
+	PyErr_SetString(PyExc_SyntaxError, errmsg);
+	return NULL;
+    }
+
     E->mesh.mgunitx = (E->mesh.nox - 1) / E->parallel.nprocx /
-	(int) pow(2.0, E->mesh.levels - 1);
+	level_factor;
     E->mesh.mgunity = (E->mesh.noy - 1) / E->parallel.nprocy /
-	(int) pow(2.0, E->mesh.levels - 1);
+	level_factor;
     E->mesh.mgunitz = (E->mesh.noz - 1) / E->parallel.nprocz /
-	(int) pow(2.0, E->mesh.levels - 1);
+	level_factor;
+
+    if (E->mesh.mgunitx < 1 || E->mesh.mgunity < 1 ||
+	E->mesh.mgunitz < 1) {
+	char errmsg[] = "!!!! coarsest multigrid level must have at least one local element per direction";
+	PyErr_SetString(PyExc_SyntaxError, errmsg);
+	return NULL;
+    }
 
     if (E->parallel.nprocxy == 12) {
 	if (E->mesh.nox != E->mesh.noy) {
