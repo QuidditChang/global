@@ -516,6 +516,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_schur_symmetry_check),"off",m);
   input_double("ala_schur_symmetry_tolerance",
                &(E->control.ala_schur_symmetry_tolerance),"1.0e-3",m);
+  input_double("ala_augmented_lagrangian_gamma",
+               &(E->control.ala_augmented_lagrangian_gamma),"0.0",m);
   input_string("ala_beta_element_source",
                E->control.ala_beta_element_source,"supplied_average",m);
   input_double("ala_inner_accuracy_max",
@@ -595,6 +597,16 @@ void read_initial_settings(struct All_variables *E)
 
   if(E->control.ala_schur_symmetry_tolerance <= 0.0)
       myerror(E, "ala_schur_symmetry_tolerance must be positive");
+  if(E->control.ala_augmented_lagrangian_gamma < 0.0)
+      myerror(E, "ala_augmented_lagrangian_gamma must be nonnegative");
+  if(E->control.ala_augmented_lagrangian_gamma > 0.0 &&
+     !E->control.ala_pressure_buoyancy)
+      myerror(E, "ala_augmented_lagrangian_gamma requires "
+              "compressible_formulation=ala");
+  if(E->control.ala_augmented_lagrangian_gamma > 0.0 &&
+     E->control.augmented_Lagr)
+      myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
+              "mutually exclusive");
   if(strcmp(E->control.ala_beta_element_source,"supplied_average") != 0 &&
      strcmp(E->control.ala_beta_element_source,"density_log_secant") != 0)
       myerror(E, "ala_beta_element_source must be supplied_average or "
@@ -1191,6 +1203,7 @@ void global_default_values(E)
     E->control.EMULTIGRID = 0;
     E->control.augmented_Lagr = 0;
     E->control.augmented = 0.0;
+    E->control.ala_augmented_lagrangian_gamma = 0.0;
     E->control.ala_schur_symmetry_check = 0;
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;
     strcpy(E->control.ala_beta_element_source,"supplied_average");

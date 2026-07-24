@@ -1022,6 +1022,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_schur_symmetry_check, fp);
     getDoubleProperty(properties, "ala_schur_symmetry_tolerance",
                       E->control.ala_schur_symmetry_tolerance, fp);
+    getDoubleProperty(properties, "ala_augmented_lagrangian_gamma",
+                      E->control.ala_augmented_lagrangian_gamma, fp);
     getStringProperty(properties, "ala_beta_element_source",
                       E->control.ala_beta_element_source, fp);
     getDoubleProperty(properties, "ala_inner_accuracy_max",
@@ -1100,6 +1102,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_radial_line_preconditioner, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
         myerror(E, "ala_schur_symmetry_tolerance must be positive");
+    if(E->control.ala_augmented_lagrangian_gamma < 0.0)
+        myerror(E, "ala_augmented_lagrangian_gamma must be nonnegative");
+    if(E->control.ala_augmented_lagrangian_gamma > 0.0 &&
+       !E->control.ala_pressure_buoyancy)
+        myerror(E, "ala_augmented_lagrangian_gamma requires "
+                "compressible_formulation=ala");
+    if(E->control.ala_augmented_lagrangian_gamma > 0.0 &&
+       E->control.augmented_Lagr)
+        myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
+                "mutually exclusive");
     if(strcmp(E->control.ala_beta_element_source,"supplied_average") != 0 &&
        strcmp(E->control.ala_beta_element_source,"density_log_secant") != 0)
         myerror(E, "ala_beta_element_source must be supplied_average or "

@@ -2373,7 +2373,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
-                "global_coarse=%s global_basis=%d global_weight=%e\n",
+                "gamma=%e global_coarse=%s global_basis=%d "
+                "global_weight=%e\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -2393,6 +2394,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
                 E->control.ala_beta_causal_diagnostics ? "on" : "off",
+                E->control.ala_augmented_lagrangian_gamma,
                 E->control.ala_global_coarse_preconditioner ? "on" : "off",
                 preconditioner_cache.global_basis_count,
                 E->control.ala_global_coarse_weight);
@@ -2400,7 +2402,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
-                "global_coarse=%s global_basis=%d global_weight=%e\n",
+                "gamma=%e global_coarse=%s global_basis=%d "
+                "global_weight=%e\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_two_level_preconditioner
                     ? (E->control.ala_shallow_patch_preconditioner
@@ -2420,6 +2423,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
                 E->control.ala_beta_causal_diagnostics ? "on" : "off",
+                E->control.ala_augmented_lagrangian_gamma,
                 E->control.ala_global_coarse_preconditioner ? "on" : "off",
                 preconditioner_cache.global_basis_count,
                 E->control.ala_global_coarse_weight);

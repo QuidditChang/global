@@ -468,6 +468,7 @@ struct CONTROL {
     /* compressible Stokes force form: 0=TALA, 1=ALA pressure buoyancy */
     int ala_pressure_buoyancy;
     char compressible_formulation[20];
+    double ala_augmented_lagrangian_gamma;
 
     /* strict-ALA Krylov diagnostics and inexact velocity solves */
     int ala_schur_symmetry_check;

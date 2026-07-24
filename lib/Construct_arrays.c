@@ -323,6 +323,7 @@ void construct_node_ks(E)
 
     void get_elt_k();
     void get_aug_k();
+    void get_ala_aug_k();
     void build_diagonal_of_K();
     void parallel_process_termination();
 
@@ -354,6 +355,9 @@ void construct_node_ks(E)
 
 	    if (E->control.augmented_Lagr)
 	         get_aug_k(E,element,elt_K,level,m);
+
+            if(E->control.ala_augmented_lagrangian_gamma > 0.0)
+                get_ala_aug_k(E,element,elt_K,level,m);
 
             build_diagonal_of_K(E,element,elt_K,level,m);
 
@@ -628,6 +632,7 @@ void construct_elt_ks(E)
     int e,el,lev,j,k,ii,m;
     void get_elt_k();
     void get_aug_k();
+    void get_ala_aug_k();
     void build_diagonal_of_K();
 
     const int dims=E->mesh.nsd;
@@ -646,6 +651,9 @@ void construct_elt_ks(E)
 
 	    if (E->control.augmented_Lagr)
 	        get_aug_k(E,el,E->elt_k[lev][m][el].k,lev,m);
+
+            if(E->control.ala_augmented_lagrangian_gamma > 0.0)
+                get_ala_aug_k(E,el,E->elt_k[lev][m][el].k,lev,m);
 
             build_diagonal_of_K(E,el,E->elt_k[lev][m][el].k,lev,m);
 

@@ -110,6 +110,8 @@ class Incompressible(CitcomComponent):
                                              default=False)
         ala_schur_symmetry_tolerance = prop.float(
             "ala_schur_symmetry_tolerance", default=1.0e-3)
+        ala_augmented_lagrangian_gamma = prop.float(
+            "ala_augmented_lagrangian_gamma", default=0.0)
         ala_beta_element_source = prop.str(
             "ala_beta_element_source", default="supplied_average",
             validator=prop.choice(["supplied_average", "density_log_secant"]))

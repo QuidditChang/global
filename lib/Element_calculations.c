@@ -1236,6 +1236,7 @@ void get_elt_f(E,el,elt_f,bcs,m)
 
   void get_global_shape_fn();
   void construct_c3x3matrix_el();
+  void get_ala_aug_k();
 
   struct Shape_function GN;
   struct Shape_function_dA dOmega;
@@ -1292,6 +1293,8 @@ void get_elt_f(E,el,elt_f,bcs,m)
             if ((E->node[m][nodeb]&type)&&(E->sphere.cap[m].VB[j][nodeb]!=0.0)){
               if(!got_elt_k) {
                 get_elt_k(E,el,elt_k,E->mesh.levmax,m,1);
+                if(E->control.ala_augmented_lagrangian_gamma>0.0)
+                  get_ala_aug_k(E,el,elt_k,E->mesh.levmax,m);
                 got_elt_k = 1;
                 }
               q = dims*(b-1)+j-1;
@@ -1570,6 +1573,110 @@ void get_aug_k(E,el,elt_k,level,m)
 
    return;
    }
+
+
+/* Add gamma * G^T * M_p^-1 * G for strict ALA, where the elementwise
+   P0 pressure mass is M_p=V_e and G=D+C. */
+void get_ala_aug_k(struct All_variables *E, int el,
+                   double elt_k[24*24], int level, int m)
+{
+    int a,b,da,db,ia,ib;
+    double ga,gb,scale,volume;
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+    const int n=loc_mat_size[dims];
+
+    volume=E->ECO[level][m][el].area;
+    if(!isfinite(volume) || volume<=0.0)
+        myerror(E,"Invalid P0 pressure mass in strict-ALA augmentation");
+    scale=E->control.ala_augmented_lagrangian_gamma/volume;
+
+    for(a=1;a<=ends;a++)
+        for(da=0;da<dims;da++) {
+            ia=(a-1)*dims+da;
+            ga=E->elt_del[level][m][el].g[ia][0]
+              +E->elt_c[level][m][el].c[ia][0];
+            for(b=1;b<=ends;b++)
+                for(db=0;db<dims;db++) {
+                    ib=(b-1)*dims+db;
+                    gb=E->elt_del[level][m][el].g[ib][0]
+                      +E->elt_c[level][m][el].c[ib][0];
+                    elt_k[ia*n+ib] += scale*ga*gb;
+                }
+        }
+}
+
+
+/* Apply only the strict-ALA augmentation.  Keeping this operation separate
+   permits an exact audit of the original, unaugmented momentum equation. */
+void assemble_ala_augmented_u(struct All_variables *E, double **u,
+                              double **Au, int level, int strip_bcs)
+{
+    int m,e,a,d,node,eq,ia;
+    double gu,scale,volume;
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+    const int nel=E->lmesh.NEL[level];
+    const int neq=E->lmesh.NEQ[level];
+    void strip_bcs_from_residual();
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(eq=0;eq<neq;eq++)
+            Au[m][eq]=0.0;
+        for(e=1;e<=nel;e++) {
+            gu=0.0;
+            for(a=1;a<=ends;a++) {
+                node=E->IEN[level][m][e].node[a];
+                for(d=0;d<dims;d++) {
+                    ia=(a-1)*dims+d;
+                    eq=E->ID[level][m][node].doff[d+1];
+                    gu += (E->elt_del[level][m][e].g[ia][0]
+                          +E->elt_c[level][m][e].c[ia][0])*u[m][eq];
+                }
+            }
+            volume=E->ECO[level][m][e].area;
+            if(!isfinite(volume) || volume<=0.0)
+                myerror(E,"Invalid P0 pressure mass in strict-ALA action");
+            scale=E->control.ala_augmented_lagrangian_gamma*gu/volume;
+            for(a=1;a<=ends;a++) {
+                node=E->IEN[level][m][e].node[a];
+                for(d=0;d<dims;d++) {
+                    ia=(a-1)*dims+d;
+                    eq=E->ID[level][m][node].doff[d+1];
+                    Au[m][eq] += scale*(E->elt_del[level][m][e].g[ia][0]
+                                      +E->elt_c[level][m][e].c[ia][0]);
+                }
+            }
+        }
+    }
+    (E->solver.exchange_id_d)(E,Au,level);
+    if(strip_bcs)
+        strip_bcs_from_residual(E,Au,level);
+}
+
+
+void assemble_unaugmented_del2_u(struct All_variables *E, double **u,
+                                 double **Au, int level, int strip_bcs)
+{
+    int m,i;
+    double *aug[NCS];
+    const int neq=E->lmesh.NEQ[level];
+    void assemble_del2_u();
+    void assemble_ala_augmented_u();
+
+    assemble_del2_u(E,u,Au,level,strip_bcs);
+    if(E->control.ala_augmented_lagrangian_gamma==0.0)
+        return;
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        aug[m]=(double *)malloc(neq*sizeof(double));
+    assemble_ala_augmented_u(E,u,aug,level,strip_bcs);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<neq;i++)
+            Au[m][i] -= aug[m][i];
+        free(aug[m]);
+    }
+}
 
 
 /* version */

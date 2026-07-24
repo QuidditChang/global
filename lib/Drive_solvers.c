@@ -538,7 +538,7 @@ static struct power_stats plate_power(struct All_variables *E, double scale)
     double local_max, local_min;
     double **ku, **grad_p, **external_force, **plate_velocity;
     struct power_stats result;
-    void assemble_del2_u();
+    void assemble_unaugmented_del2_u();
     void get_elt_f();
     void get_elt_tr();
 
@@ -551,7 +551,7 @@ static struct power_stats plate_power(struct All_variables *E, double scale)
     external_force = allocate_equation_field(E);
     plate_velocity = allocate_equation_field(E);
 
-    assemble_del2_u(E, E->U, ku, lev, 0);
+    assemble_unaugmented_del2_u(E, E->U, ku, lev, 0);
     assemble_grad_p_unstripped(E, grad_p);
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
@@ -850,10 +850,65 @@ static void write_ala_residual(struct All_variables *E)
 }
 
 
+static void write_ala_unaugmented_momentum_residual(struct All_variables *E)
+{
+    int m,i;
+    double force_norm,residual_norm,rms,relative;
+    double **ku,**grad_p,**force,**residual;
+    const int lev=E->mesh.levmax;
+    const int neq=E->lmesh.neq;
+    const int gneq=E->mesh.neq;
+    void assemble_forces();
+    void assemble_grad_p();
+    void assemble_unaugmented_del2_u();
+    void strip_bcs_from_residual();
+
+    /* The strict-ALA force contains the C^T p pressure-buoyancy term;
+       assemble_grad_p supplies D^T p.  Their combination audits
+       f-(D+C)^T p-Ku using the original K. */
+    assemble_forces(E,0);
+    ku=allocate_equation_field(E);
+    grad_p=allocate_equation_field(E);
+    force=allocate_equation_field(E);
+    residual=allocate_equation_field(E);
+    assemble_unaugmented_del2_u(E,E->U,ku,lev,1);
+    assemble_grad_p(E,E->P,grad_p,lev);
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<neq;i++) {
+            force[m][i]=E->F[m][i];
+            residual[m][i]=E->F[m][i]-grad_p[m][i]-ku[m][i];
+        }
+        strip_bcs_from_residual(E,force,lev);
+        strip_bcs_from_residual(E,residual,lev);
+    }
+    force_norm=sqrt(global_vdot(E,force,force,lev));
+    residual_norm=sqrt(global_vdot(E,residual,residual,lev));
+    rms=residual_norm/sqrt((double)gneq);
+    relative=residual_norm/(force_norm+1.0e-32);
+
+    if(E->parallel.me==0) {
+        fprintf(stderr,"ALA unaugmented momentum residual: gamma=%e "
+                "rms=%e relative=%e\n",
+                E->control.ala_augmented_lagrangian_gamma,rms,relative);
+        fprintf(E->fp,"ALA unaugmented momentum residual: gamma=%e "
+                "rms=%e relative=%e\n",
+                E->control.ala_augmented_lagrangian_gamma,rms,relative);
+        fflush(E->fp);
+    }
+
+    free_equation_field(E,ku);
+    free_equation_field(E,grad_p);
+    free_equation_field(E,force);
+    free_equation_field(E,residual);
+}
+
+
 static void write_stokes_diagnostics(struct All_variables *E)
 {
     if(!E->control.ala_pressure_buoyancy)
         return;
+    write_ala_unaugmented_momentum_residual(E);
     write_mechanical_power(E);
     write_ala_residual(E);
 }
