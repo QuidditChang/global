@@ -1082,6 +1082,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_velocity_eigenvalue_min, fp);
     getDoubleProperty(properties, "ala_two_level_velocity_eigenvalue_max",
                       E->control.ala_two_level_velocity_eigenvalue_max, fp);
+    getIntProperty(properties, "ala_global_coarse_preconditioner",
+                   E->control.ala_global_coarse_preconditioner, fp);
+    getDoubleProperty(properties, "ala_global_coarse_weight",
+                      E->control.ala_global_coarse_weight, fp);
+    getDoubleProperty(properties, "ala_global_coarse_regularization",
+                      E->control.ala_global_coarse_regularization, fp);
     getIntProperty(properties, "ala_shallow_patch_preconditioner",
                    E->control.ala_shallow_patch_preconditioner, fp);
     getDoubleProperty(properties, "ala_shallow_patch_depth_km",
@@ -1152,6 +1158,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_two_level_velocity_eigenvalue_max <=
          E->control.ala_two_level_velocity_eigenvalue_min)
         myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
+    if(E->control.ala_global_coarse_weight <= 0.0 ||
+       E->control.ala_global_coarse_weight > 1.0)
+        myerror(E, "ala_global_coarse_weight must be in (0,1]");
+    if(E->control.ala_global_coarse_regularization < 0.0 ||
+       E->control.ala_global_coarse_regularization > 1.0e-4)
+        myerror(E, "ala_global_coarse_regularization must be in [0,1e-4]");
     if(E->control.ala_shallow_patch_depth_km <= 0.0)
         myerror(E, "ala_shallow_patch_depth_km must be positive");
     if(E->control.ala_shallow_patch_weight <= 0.0 ||
@@ -1204,6 +1216,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_radial_line_preconditioner)
         myerror(E, "ALA two-level and radial-line preconditioners are "
                 "mutually exclusive");
+    if(E->control.ala_global_coarse_preconditioner &&
+       !E->control.ala_two_level_preconditioner)
+        myerror(E, "ala_global_coarse_preconditioner requires "
+                "ala_two_level_preconditioner=on");
     if(E->control.ala_shallow_patch_preconditioner &&
        (!E->control.precondition ||
         !E->control.ala_pressure_buoyancy ||

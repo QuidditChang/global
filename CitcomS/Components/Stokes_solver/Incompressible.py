@@ -171,6 +171,12 @@ class Incompressible(CitcomComponent):
             "ala_two_level_velocity_eigenvalue_min", default=0.01)
         ala_two_level_velocity_eigenvalue_max = prop.float(
             "ala_two_level_velocity_eigenvalue_max", default=4.0)
+        ala_global_coarse_preconditioner = prop.bool(
+            "ala_global_coarse_preconditioner", default=False)
+        ala_global_coarse_weight = prop.float(
+            "ala_global_coarse_weight", default=1.0)
+        ala_global_coarse_regularization = prop.float(
+            "ala_global_coarse_regularization", default=1.0e-10)
         ala_shallow_patch_preconditioner = prop.bool(
             "ala_shallow_patch_preconditioner", default=False)
         ala_shallow_patch_depth_km = prop.float(
