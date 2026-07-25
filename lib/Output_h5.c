@@ -1710,6 +1710,10 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_schur_symmetry_tolerance);
     status = set_attribute_double(input, "ala_augmented_lagrangian_gamma",
                                   E->control.ala_augmented_lagrangian_gamma);
+    status = set_attribute_int(input, "ala_element_vanka_smoother",
+                               E->control.ala_element_vanka_smoother);
+    status = set_attribute_double(input, "ala_element_vanka_damping",
+                                  E->control.ala_element_vanka_damping);
     status = set_attribute_string(input, "ala_beta_element_source",
                                   E->control.ala_beta_element_source);
     status = set_attribute_int(input, "ala_beta_causal_diagnostics",

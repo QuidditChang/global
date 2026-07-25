@@ -50,11 +50,15 @@ void general_stokes_solver_setup(struct All_variables *E)
       E->parallel.me == 0) {
     fprintf(E->fp,
             "Velocity MG hierarchy levels=%d range=%d:%d cycle=%d "
-            "smooth=(down:%d,up:%d,fine:%d,coarse_max:%d)\n",
+            "smooth=(down:%d,up:%d,fine:%d,coarse_max:%d) "
+            "smoother=%s vanka_damping=%g\n",
             E->mesh.levmax - E->mesh.levmin + 1,
             E->mesh.levmin, E->mesh.levmax, E->control.mg_cycle,
             E->control.down_heavy, E->control.up_heavy,
-            E->control.v_steps_high, E->control.v_steps_low);
+            E->control.v_steps_high, E->control.v_steps_low,
+            E->control.ala_element_vanka_smoother
+              ? "element_vanka" : "point_gauss_seidel",
+            E->control.ala_element_vanka_damping);
     for (i=E->mesh.levmin;i<=E->mesh.levmax;i++)
       fprintf(E->fp,
               "Velocity MG level=%d global_nodes=%dx%dx%d "

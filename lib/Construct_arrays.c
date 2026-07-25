@@ -312,7 +312,7 @@ void construct_node_maps(E)
 void construct_node_ks(E)
      struct All_variables *E;
 {
-    int m,level,i,j,k,e;
+    int m,level,i,j,k,e,a,da,ia,eq;
     int node,node1,eqn1,eqn2,eqn3,loc0,loc1,loc2,loc3,found,element,index,pp,qq;
     int neq,nno,nel,max_eqn;
 
@@ -326,6 +326,7 @@ void construct_node_ks(E)
     void get_ala_aug_k();
     void build_diagonal_of_K();
     void parallel_process_termination();
+    void myerror();
 
     const int dims=E->mesh.nsd,dofs=E->mesh.dof;
     const int ends=enodes[dims];
@@ -343,6 +344,11 @@ void construct_node_ks(E)
         nno=E->lmesh.NNO[level];
 	for(i=0;i<neq;i++)
 	    E->BI[level][m][i] = zero;
+        if(E->control.ala_element_vanka_smoother)
+            for(i=0;i<neq;i++) {
+                E->ALA_vanka_base_BI[level][m][i] = zero;
+                E->ALA_vanka_overlap_BI[level][m][i] = zero;
+            }
         for(i=0;i<E->mesh.matrix_size[level];i++) {
             E->Eqn_k1[level][m][i] = zero;
             E->Eqn_k2[level][m][i] = zero;
@@ -352,6 +358,22 @@ void construct_node_ks(E)
         for(element=1;element<=nel;element++) {
 
 	    get_elt_k(E,element,elt_K,level,m,0);
+
+            if(E->control.ala_element_vanka_smoother)
+                for(a=1;a<=ends;a++) {
+                    node=E->IEN[level][m][element].node[a];
+                    for(da=0;da<dims;da++) {
+                        if((da==0 && (E->NODE[level][m][node] & VBX)) ||
+                           (da==1 && (E->NODE[level][m][node] & VBY)) ||
+                           (da==2 && (E->NODE[level][m][node] & VBZ)))
+                            continue;
+                        ia=(a-1)*dims+da;
+                        eq=E->ID[level][m][node].doff[da+1];
+                        E->ALA_vanka_base_BI[level][m][eq] +=
+                            elt_K[ia*lms+ia];
+                        E->ALA_vanka_overlap_BI[level][m][eq] += 1.0;
+                    }
+                }
 
 	    if (E->control.augmented_Lagr)
 	         get_aug_k(E,element,elt_K,level,m);
@@ -444,6 +466,10 @@ void construct_node_ks(E)
 	}           /* end for m */
 
      (E->solver.exchange_id_d)(E, E->BI[level], level);
+     if(E->control.ala_element_vanka_smoother) {
+         (E->solver.exchange_id_d)(E,E->ALA_vanka_base_BI[level],level);
+         (E->solver.exchange_id_d)(E,E->ALA_vanka_overlap_BI[level],level);
+     }
 
      for(m=1;m<=E->sphere.caps_per_proc;m++)     {
         neq=E->lmesh.NEQ[level];
@@ -452,6 +478,21 @@ void construct_node_ks(E)
             if(E->BI[level][m][j] ==0.0)  fprintf(stderr,"me= %d level %d, equation %d/%d has zero diagonal term\n",E->parallel.me,level,j,neq);
 	    assert( E->BI[level][m][j] != 0 /* diagonal of matrix = 0, not acceptable */);
             E->BI[level][m][j]  = (double) 1.0/E->BI[level][m][j];
+	    if(E->control.ala_element_vanka_smoother) {
+                if(E->ALA_vanka_overlap_BI[level][m][j] > 0.0) {
+                    if(!isfinite(E->ALA_vanka_base_BI[level][m][j]) ||
+                       E->ALA_vanka_base_BI[level][m][j] <= 0.0)
+                        myerror(E,"ALA element-Vanka base diagonal is not positive");
+                    E->ALA_vanka_base_BI[level][m][j] =
+                        1.0/E->ALA_vanka_base_BI[level][m][j];
+                    E->ALA_vanka_overlap_BI[level][m][j] =
+                        1.0/E->ALA_vanka_overlap_BI[level][m][j];
+                }
+                else {
+                    E->ALA_vanka_base_BI[level][m][j] = 0.0;
+                    E->ALA_vanka_overlap_BI[level][m][j] = 0.0;
+                }
+            }
 	    }
 	}           /* end for m */
 
@@ -744,6 +785,20 @@ void construct_stiffness_B_matrix(E)
 
   if (E->control.NMULTIGRID || E->control.NASSEMBLE) {
     construct_node_ks(E);
+    if(E->control.ala_element_vanka_smoother && E->parallel.me==0) {
+      fprintf(E->fp,
+              "ALA element-Vanka cache rebuilt levels=%d gamma=%e damping=%g\n",
+              E->mesh.gridmax-E->mesh.gridmin+1,
+              E->control.ala_augmented_lagrangian_gamma,
+              E->control.ala_element_vanka_damping);
+      fprintf(stderr,
+              "ALA element-Vanka cache rebuilt levels=%d gamma=%e damping=%g\n",
+              E->mesh.gridmax-E->mesh.gridmin+1,
+              E->control.ala_augmented_lagrangian_gamma,
+              E->control.ala_element_vanka_damping);
+      fflush(E->fp);
+      fflush(stderr);
+    }
   }
   else {
     construct_elt_ks(E);

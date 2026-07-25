@@ -594,6 +594,10 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_shallow_patch_regularization),"1.0e-3",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
+  input_boolean("ala_element_vanka_smoother",
+                &(E->control.ala_element_vanka_smoother),"off",m);
+  input_double("ala_element_vanka_damping",
+               &(E->control.ala_element_vanka_damping),"0.8",m);
 
   if(E->control.ala_schur_symmetry_tolerance <= 0.0)
       myerror(E, "ala_schur_symmetry_tolerance must be positive");
@@ -679,6 +683,15 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_shallow_patch_regularization < 0.0 ||
      E->control.ala_shallow_patch_regularization > 0.1)
       myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
+  if(E->control.ala_element_vanka_damping <= 0.0 ||
+     E->control.ala_element_vanka_damping > 1.0)
+      myerror(E, "ala_element_vanka_damping must be in (0,1]");
+  if(E->control.ala_element_vanka_smoother &&
+     (!E->control.NMULTIGRID ||
+      !E->control.ala_pressure_buoyancy ||
+      E->control.ala_augmented_lagrangian_gamma <= 0.0))
+      myerror(E, "ala_element_vanka_smoother requires multigrid, "
+              "compressible_formulation=ala, and positive gamma");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
@@ -1159,6 +1172,16 @@ void allocate_velocity_vars(E)
       E->BI[l][j] = (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
       E->ALA_velocity_BI[l][j] =
           (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
+      if(E->control.ala_element_vanka_smoother) {
+        E->ALA_vanka_base_BI[l][j] =
+            (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
+        E->ALA_vanka_overlap_BI[l][j] =
+            (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
+      }
+      else {
+        E->ALA_vanka_base_BI[l][j] = NULL;
+        E->ALA_vanka_overlap_BI[l][j] = NULL;
+      }
       k = (E->lmesh.NOX[l]*E->lmesh.NOZ[l]+E->lmesh.NOX[l]*E->lmesh.NOY[l]+
           E->lmesh.NOY[l]*E->lmesh.NOZ[l])*6;
       E->zero_resid[l][j] = (int *) malloc((k+2)*sizeof(int));
@@ -1167,6 +1190,10 @@ void allocate_velocity_vars(E)
       for(i=0;i<E->lmesh.NEQ[l];i++) {
          E->BI[l][j][i]=0.0;
          E->ALA_velocity_BI[l][j][i]=0.0;
+         if(E->control.ala_element_vanka_smoother) {
+           E->ALA_vanka_base_BI[l][j][i]=0.0;
+           E->ALA_vanka_overlap_BI[l][j][i]=0.0;
+         }
          }
 
       }   /* end for j & l */
@@ -1244,6 +1271,8 @@ void global_default_values(E)
     E->control.ala_shallow_patch_weight = 0.25;
     E->control.ala_shallow_patch_regularization = 1.0e-3;
     E->control.ala_radial_line_preconditioner = 0;
+    E->control.ala_element_vanka_smoother = 0;
+    E->control.ala_element_vanka_damping = 0.8;
     strcpy(E->control.log_template,"datafile");
 
     E->control.GRID_TYPE=1;

@@ -511,6 +511,8 @@ struct CONTROL {
     double ala_shallow_patch_weight;
     double ala_shallow_patch_regularization;
     int ala_radial_line_preconditioner;
+    int ala_element_vanka_smoother;
+    double ala_element_vanka_damping;
 
     /* surface temperature */
     float surface_temp;
@@ -836,6 +838,8 @@ struct All_variables {
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
     double *ALA_velocity_BI[MAX_LEVELS][NCS];
+    double *ALA_vanka_base_BI[MAX_LEVELS][NCS];
+    double *ALA_vanka_overlap_BI[MAX_LEVELS][NCS];
     double *ALA_BPI_line_diag[MAX_LEVELS][NCS];
     double *ALA_BPI_line_lower[MAX_LEVELS][NCS];
     unsigned char *ALA_BPI_line_valid[MAX_LEVELS][NCS];

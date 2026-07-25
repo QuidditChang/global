@@ -735,6 +735,114 @@ void element_gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
 }
 
 
+/* Apply an overlapping element correction for the strict-ALA augmented
+   velocity operator.  The local block uses the assembled unaugmented velocity
+   diagonal and the complete element gamma/V * (D+C)^T(D+C) coupling.  Its
+   inverse is applied exactly with Sherman-Morrison. */
+void ala_element_vanka_smooth(struct All_variables *E, double **d0,
+                              double **F, double **Ad, double acc,
+                              int *cycles, int level, int guess)
+{
+    int m,e,a,da,ia,eq,count,steps,node;
+    int eqs[24];
+    double g[24],dinv[24],y[24],t[24];
+    double volume,alpha,denom,g_dot_y,g_dot_t,coefficient;
+    double correction,damping;
+    double *delta[NCS];
+    static int announced[MAX_LEVELS];
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+    const int n=loc_mat_size[dims];
+    const int neq=E->lmesh.NEQ[level];
+    const int nel=E->lmesh.NEL[level];
+    void n_assemble_del2_u();
+    void myerror();
+
+    (void)acc;
+    steps=*cycles;
+    damping=E->control.ala_element_vanka_damping;
+    if(E->parallel.me==0 && !announced[level]) {
+        fprintf(E->fp,
+                "ALA element-Vanka active level=%d local_elements=%d "
+                "sweeps=%d damping=%g\n",
+                level,nel,steps,damping);
+        fprintf(stderr,
+                "ALA element-Vanka active level=%d local_elements=%d "
+                "sweeps=%d damping=%g\n",
+                level,nel,steps,damping);
+        fflush(E->fp);
+        fflush(stderr);
+        announced[level]=1;
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        delta[m]=(double *)malloc(neq*sizeof(double));
+
+    if(guess)
+        n_assemble_del2_u(E,d0,Ad,level,1);
+    else
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(eq=0;eq<neq;eq++)
+                d0[m][eq]=Ad[m][eq]=0.0;
+
+    for(count=0;count<steps;count++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(eq=0;eq<neq;eq++)
+                delta[m][eq]=0.0;
+
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=nel;e++) {
+                volume=E->ECO[level][m][e].area;
+                if(!isfinite(volume) || volume<=0.0)
+                    myerror(E,"Invalid pressure mass in ALA element-Vanka smoother");
+                alpha=E->control.ala_augmented_lagrangian_gamma/volume;
+                g_dot_y=0.0;
+                g_dot_t=0.0;
+
+                for(a=1;a<=ends;a++) {
+                    node=E->IEN[level][m][e].node[a];
+                    for(da=0;da<dims;da++) {
+                        ia=(a-1)*dims+da;
+                        eq=E->ID[level][m][node].doff[da+1];
+                        eqs[ia]=eq;
+                        dinv[ia]=E->ALA_vanka_base_BI[level][m][eq];
+                        if(dinv[ia]==0.0)
+                            g[ia]=0.0;
+                        else
+                            g[ia]=E->elt_del[level][m][e].g[ia][0]
+                                 +E->elt_c[level][m][e].c[ia][0];
+                        y[ia]=dinv[ia]*(F[m][eq]-Ad[m][eq]);
+                        t[ia]=dinv[ia]*g[ia];
+                        g_dot_y += g[ia]*y[ia];
+                        g_dot_t += g[ia]*t[ia];
+                    }
+                }
+
+                denom=1.0+alpha*g_dot_t;
+                if(!isfinite(denom) || denom<=0.0)
+                    myerror(E,"ALA element-Vanka local block is not positive");
+                coefficient=alpha*g_dot_y/denom;
+                for(ia=0;ia<n;ia++)
+                    delta[m][eqs[ia]] += y[ia]-coefficient*t[ia];
+            }
+
+        (E->solver.exchange_id_d)(E,delta,level);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(eq=0;eq<neq;eq++) {
+                correction=damping
+                    *E->ALA_vanka_overlap_BI[level][m][eq]*delta[m][eq];
+                if(!isfinite(correction))
+                    myerror(E,"Non-finite ALA element-Vanka correction");
+                d0[m][eq] += correction;
+            }
+        n_assemble_del2_u(E,d0,Ad,level,1);
+    }
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        free(delta[m]);
+    *cycles=steps;
+}
+
+
 /* ============================================================================
    Multigrid Gauss-Seidel relaxation scheme which requires the storage of local
    information, otherwise some other method is required. NOTE this is a bit worse
@@ -751,7 +859,6 @@ void gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
      int level;
      int guess;
 {
-
     int count,i,j,k,l,m,ns,steps;
     int *C;
     int eqn1,eqn2,eqn3;
@@ -777,6 +884,12 @@ void gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
     const int max_eqn=14*dims;
 
     const double zeroo = 0.0;
+
+    if(E->control.ala_element_vanka_smoother &&
+       E->control.ala_augmented_lagrangian_gamma>0.0) {
+      ala_element_vanka_smooth(E,d0,F,Ad,acc,cycles,level,guess);
+      return;
+    }
 
     steps=*cycles;
     sor = 1.3;
