@@ -687,7 +687,7 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
   if(E->control.ala_element_vanka_smoother &&
-     (!E->control.NMULTIGRID ||
+     (strcmp(E->control.SOLVER_TYPE,"multigrid") != 0 ||
       !E->control.ala_pressure_buoyancy ||
       E->control.ala_augmented_lagrangian_gamma <= 0.0))
       myerror(E, "ala_element_vanka_smoother requires multigrid, "

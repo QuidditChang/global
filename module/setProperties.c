@@ -1281,7 +1281,7 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_feasibility_audit requires "
                 "compressible_formulation=ala and uzawa=ala_cg");
     if(E->control.ala_element_vanka_smoother &&
-       (!E->control.NMULTIGRID ||
+       (strcmp(E->control.SOLVER_TYPE,"multigrid") != 0 ||
         !E->control.ala_pressure_buoyancy ||
         E->control.ala_augmented_lagrangian_gamma <= 0.0))
         myerror(E, "ala_element_vanka_smoother requires multigrid, "
