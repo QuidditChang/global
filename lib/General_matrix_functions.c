@@ -885,8 +885,12 @@ void gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
 
     const double zeroo = 0.0;
 
+    /* Vanka is a multigrid smoother, not the coarse-grid solver.  In
+       particular, v_steps_low can be O(1000), which would turn the additive
+       element update and its halo exchange into thousands of global sweeps. */
     if(E->control.ala_element_vanka_smoother &&
-       E->control.ala_augmented_lagrangian_gamma>0.0) {
+       E->control.ala_augmented_lagrangian_gamma>0.0 &&
+       level>E->mesh.levmin) {
       ala_element_vanka_smooth(E,d0,F,Ad,acc,cycles,level,guess);
       return;
     }
