@@ -81,6 +81,8 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_RADIAL_ELEMENTS 2
 #define ALA_PATCH_HORIZONTAL_STRIDE 2
 #define ALA_PATCH_RADIAL_STRIDE 1
+#define ALA_PATCH_MPI_FACES 4
+#define ALA_HALO_ELEMENT_RECORD_DOUBLES 74
 #define ALA_COARSE_POWER_ITERATIONS 6
 #define ALA_VELOCITY_POWER_ITERATIONS 6
 #define ALA_GLOBAL_ANGULAR_BASIS 16
@@ -88,14 +90,25 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_GLOBAL_BASIS_COUNT \
     (ALA_GLOBAL_ANGULAR_BASIS*ALA_GLOBAL_RADIAL_BASIS)
 #define ALA_PATCH_MAX_ELEMENTS \
-    (ALA_PATCH_HORIZONTAL_ELEMENTS*ALA_PATCH_HORIZONTAL_ELEMENTS \
+    (4*ALA_PATCH_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
 struct ala_pressure_preconditioner_cache {
     int blocks[NCS];
     unsigned char *size[NCS];
-    unsigned char *multiplicity[NCS];
+    unsigned short *multiplicity[NCS];
     int *elements[NCS];
     double *chol[NCS];
+    int interface_blocks[NCS];
+    unsigned char *interface_size[NCS];
+    unsigned char *interface_face[NCS];
+    int *interface_elements[NCS];
+    double *interface_chol[NCS];
+    int halo_send_count[NCS][ALA_PATCH_MPI_FACES];
+    int halo_recv_count[NCS][ALA_PATCH_MPI_FACES];
+    int *halo_send_elements[NCS][ALA_PATCH_MPI_FACES];
+    double *halo_send_records[NCS][ALA_PATCH_MPI_FACES];
+    double *halo_recv_records[NCS][ALA_PATCH_MPI_FACES];
+    unsigned short *halo_multiplicity[NCS][ALA_PATCH_MPI_FACES];
     double *coarse_bpi[NCS];
     double *global_basis[NCS];
     double *global_matrix;
@@ -108,6 +121,9 @@ struct ala_pressure_preconditioner_cache {
 };
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
+static void exchange_ala_shallow_halo_values(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev, int m,
+    double **local, double *ghost[ALA_PATCH_MPI_FACES], int return_to_owner);
 static void build_ala_two_level_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void calibrate_ala_two_level_spectrum(struct All_variables *E,
@@ -123,6 +139,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **work, int lev,
                                               int iteration,
     struct ala_pressure_preconditioner_cache *cache);
+static void audit_ala_shallow_patch_preconditioner(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
 static void apply_ala_coarse_fixed_schur(struct All_variables *E,
                                          double **p, double **Ap,
                                          double **velocity,
@@ -146,6 +164,162 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
                                            double *residual_reduction);
 
 
+
+
+static void ala_fill_halo_element_record(struct All_variables *E,
+    int e, int lev, int m, int normal_layer, double *record)
+{
+    int a,d,node,eqn,p;
+    const int ends=enodes[E->mesh.nsd];
+    const int dims=E->mesh.nsd;
+
+    record[0]=(double)normal_layer;
+    record[1]=1.0/E->BPI[lev][m][e];
+    for(a=1;a<=ends;a++) {
+        node=E->IEN[lev][m][e].node[a];
+        for(d=1;d<=dims;d++) {
+            p=(a-1)*dims+d-1;
+            record[2+p]=E->X[lev][m][d][node];
+            record[26+p]=E->elt_del[lev][m][e].g[p][0];
+            if(E->control.ala_pressure_buoyancy)
+                record[26+p] += E->elt_c[lev][m][e].c[p][0];
+            eqn=E->ID[lev][m][node].doff[d];
+            record[50+p]=E->ALA_velocity_BI[lev][m][eqn];
+        }
+    }
+}
+
+
+static double ala_halo_record_coupling(const double *left,
+                                        const double *right)
+{
+    int a,b,d,p1,p2;
+    double dx,dy,dz,distance2,value,bi;
+    const double coordinate_tolerance2=1.0e-18;
+
+    value=0.0;
+    for(a=0;a<8;a++)
+        for(b=0;b<8;b++) {
+            p1=3*a;
+            p2=3*b;
+            dx=left[2+p1]-right[2+p2];
+            dy=left[3+p1]-right[3+p2];
+            dz=left[4+p1]-right[4+p2];
+            distance2=dx*dx+dy*dy+dz*dz;
+            if(distance2>coordinate_tolerance2)
+                continue;
+            for(d=0;d<3;d++) {
+                bi=0.5*(left[50+p1+d]+right[50+p2+d]);
+                value += left[26+p1+d]*bi*right[26+p2+d];
+            }
+        }
+    return(value);
+}
+
+
+static void ala_halo_record_center(const double *record, double center[3])
+{
+    int a,d;
+    for(d=0;d<3;d++) {
+        center[d]=0.0;
+        for(a=0;a<8;a++)
+            center[d] += record[2+3*a+d];
+        center[d] *= 0.125;
+    }
+}
+
+
+static int ala_factor_pressure_patch(struct All_variables *E,
+    double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS],
+    int n, double *L, double *minimum_pivot_ratio)
+{
+    int i,j,k;
+    double maxdiag,sum,pivot,ratio;
+    const double pivot_tolerance=1.0e-12;
+
+    maxdiag=0.0;
+    for(i=0;i<n;i++) {
+        matrix[i][i] *=
+            1.0+E->control.ala_shallow_patch_regularization;
+        maxdiag=max(maxdiag,matrix[i][i]);
+    }
+    if(!isfinite(maxdiag) || maxdiag<=0.0)
+        return(0);
+    for(i=0;i<n;i++) {
+        for(j=0;j<=i;j++) {
+            sum=matrix[i][j];
+            for(k=0;k<j;k++)
+                sum -= L[i*ALA_PATCH_MAX_ELEMENTS+k]
+                    *L[j*ALA_PATCH_MAX_ELEMENTS+k];
+            if(i==j) {
+                pivot=sum;
+                if(!isfinite(pivot) || pivot<=pivot_tolerance*maxdiag)
+                    return(0);
+                ratio=pivot/maxdiag;
+                *minimum_pivot_ratio=min(*minimum_pivot_ratio,ratio);
+                L[i*ALA_PATCH_MAX_ELEMENTS+j]=sqrt(pivot);
+            }
+            else
+                L[i*ALA_PATCH_MAX_ELEMENTS+j]=
+                    sum/L[j*ALA_PATCH_MAX_ELEMENTS+j];
+        }
+    }
+    return(1);
+}
+
+
+static void ala_exchange_halo_records(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev, int m)
+{
+    int face,target,nrequest;
+    MPI_Request requests[2*ALA_PATCH_MPI_FACES];
+    MPI_Status statuses[2*ALA_PATCH_MPI_FACES];
+
+    nrequest=0;
+    for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+        target=E->parallel.PROCESSOR[lev][m].pass[face+1];
+        MPI_Irecv(cache->halo_recv_records[m][face],
+            cache->halo_recv_count[m][face]
+                *ALA_HALO_ELEMENT_RECORD_DOUBLES,
+            MPI_DOUBLE,target,31901,E->parallel.world,
+            &requests[nrequest++]);
+        MPI_Isend(cache->halo_send_records[m][face],
+            cache->halo_send_count[m][face]
+                *ALA_HALO_ELEMENT_RECORD_DOUBLES,
+            MPI_DOUBLE,target,31901,E->parallel.world,
+            &requests[nrequest++]);
+    }
+    MPI_Waitall(nrequest,requests,statuses);
+}
+
+
+static int ala_find_halo_record(const double *records, int count,
+    int normal_layer, const double target_center[3])
+{
+    int i,best;
+    double center[3],dx,dy,dz,distance2,best_distance2;
+
+    best=-1;
+    best_distance2=1.0e300;
+    for(i=0;i<count;i++) {
+        if((int)(records[i*ALA_HALO_ELEMENT_RECORD_DOUBLES]+0.5)
+           !=normal_layer)
+            continue;
+        ala_halo_record_center(
+            records+i*ALA_HALO_ELEMENT_RECORD_DOUBLES,center);
+        dx=center[0]-target_center[0];
+        dy=center[1]-target_center[1];
+        dz=center[2]-target_center[2];
+        distance2=dx*dx+dy*dy+dz*dz;
+        if(distance2<best_distance2) {
+            best_distance2=distance2;
+            best=i;
+        }
+    }
+    if(best_distance2>4.0e-2)
+        return(-1);
+    return(best);
+}
 
 
 /* Build a pressure-space principal block of the complete strict-ALA
@@ -185,20 +359,38 @@ static void ala_build_pressure_patch_schur(struct All_variables *E,
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev)
 {
-    int m,ex,ey,ez,dx,dy,dz,b,i,j,k,n,block_count;
+    int m,ex,ey,ez,dx,dy,dz,b,i,j,n,block_count;
     int elx,ely,elz,shallow_min_ez,shallow_layers,e,npno;
     int local_blocks,global_blocks,local_fallback,global_fallback;
     int local_elements,global_elements,local_unique,global_unique;
     int local_overlap_min,global_overlap_min;
     int local_overlap_max,global_overlap_max;
-    double depth_km,sum,pivot,maxdiag;
+    int face,q,t,tangent,tangent_count,overlap,interface_count;
+    int local_interface_blocks,global_interface_blocks;
+    int local_interface_entries,global_interface_entries;
+    int local_ghost_elements,global_ghost_elements,ghost_index;
+    int ref,boundary_coordinate;
+    int nrequest,target;
+    int received_counts[ALA_PATCH_MPI_FACES];
+    unsigned short *ghost_count[ALA_PATCH_MPI_FACES];
+    unsigned short *owner_count[ALA_PATCH_MPI_FACES];
+    unsigned short *final_count[ALA_PATCH_MPI_FACES];
+    double depth_km;
     double build_start,build_seconds,global_build_seconds;
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
+    double patch_records[ALA_PATCH_MAX_ELEMENTS]
+                        [ALA_HALO_ELEMENT_RECORD_DOUBLES];
+    double target_record[ALA_HALO_ELEMENT_RECORD_DOUBLES];
+    double target_center[3];
+    double local_min_pivot_ratio,global_min_pivot_ratio;
     double *L;
-    const double pivot_tolerance=1.0e-12;
+    MPI_Request requests[2*ALA_PATCH_MPI_FACES];
+    MPI_Status statuses[2*ALA_PATCH_MPI_FACES];
     double CPU_time0();
 
     memset(cache,0,sizeof(*cache));
+    if(E->sphere.caps_per_proc!=1)
+        myerror(E,"ALA MPI-overlap Schwarz requires one cap per rank");
     build_start=CPU_time0();
     elx=E->lmesh.ELX[lev];
     ely=E->lmesh.ELY[lev];
@@ -226,14 +418,19 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     local_unique=0;
     local_overlap_min=255;
     local_overlap_max=0;
+    local_interface_blocks=0;
+    local_interface_entries=0;
+    local_ghost_elements=0;
+    local_min_pivot_ratio=1.0e300;
+    overlap=E->control.ala_shallow_patch_mpi_overlap;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         cache->blocks[m]=block_count;
         /* Deep radial ranks legitimately own no cells above the configured
            shallow depth.  The apply path still scans their pressure cells, so
            multiplicity must exist even when this rank has zero patch blocks. */
-        cache->multiplicity[m]=(unsigned char *)calloc(npno+1,
-                                                       sizeof(unsigned char));
+        cache->multiplicity[m]=(unsigned short *)calloc(npno+1,
+                                                       sizeof(unsigned short));
         if(cache->multiplicity[m]==NULL)
             myerror(E,"Unable to allocate ALA shallow-patch multiplicity");
         if(block_count==0)
@@ -272,35 +469,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     ala_build_pressure_patch_schur(
                         E,cache->elements[m]+b*ALA_PATCH_MAX_ELEMENTS,
                         n,lev,m,&matrix[0][0]);
-                    maxdiag=0.0;
-                    for(i=0;i<n;i++) {
-                        matrix[i][i] *=
-                            1.0+E->control.ala_shallow_patch_regularization;
-                        maxdiag=max(maxdiag,matrix[i][i]);
-                    }
                     L=cache->chol[m]+b*ALA_PATCH_MAX_ELEMENTS
                         *ALA_PATCH_MAX_ELEMENTS;
-                    for(i=0;i<n;i++) {
-                        for(j=0;j<=i;j++) {
-                            sum=matrix[i][j];
-                            for(k=0;k<j;k++)
-                                sum -= L[i*ALA_PATCH_MAX_ELEMENTS+k]
-                                    *L[j*ALA_PATCH_MAX_ELEMENTS+k];
-                            if(i==j) {
-                                pivot=sum;
-                                if(!isfinite(pivot) ||
-                                   pivot<=pivot_tolerance*maxdiag)
-                                    break;
-                                L[i*ALA_PATCH_MAX_ELEMENTS+j]=sqrt(pivot);
-                            }
-                            else
-                                L[i*ALA_PATCH_MAX_ELEMENTS+j]=sum
-                                    /L[j*ALA_PATCH_MAX_ELEMENTS+j];
-                        }
-                        if(j<=i)
-                            break;
-                    }
-                    if(i<n) {
+                    if(!ala_factor_pressure_patch(E,matrix,n,L,
+                                                  &local_min_pivot_ratio)) {
                         cache->size[m][b]=0;
                         local_fallback++;
                     }
@@ -313,11 +485,288 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             n=cache->size[m][b];
             for(i=0;i<n;i++) {
                 e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
-                if(cache->multiplicity[m][e]==255)
+                if(cache->multiplicity[m][e]==65535)
                     myerror(E,"ALA shallow-patch overlap count overflow");
                 cache->multiplicity[m][e]++;
             }
         }
+
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            tangent_count=(face<2) ? ely : elx;
+            cache->halo_send_count[m][face]=
+                overlap*tangent_count*shallow_layers;
+            cache->halo_recv_count[m][face]=
+                cache->halo_send_count[m][face];
+            cache->halo_send_elements[m][face]=(int *)calloc(
+                max(cache->halo_send_count[m][face],1),sizeof(int));
+            cache->halo_send_records[m][face]=(double *)calloc(
+                max(cache->halo_send_count[m][face],1)
+                    *ALA_HALO_ELEMENT_RECORD_DOUBLES,sizeof(double));
+            cache->halo_recv_records[m][face]=(double *)calloc(
+                max(cache->halo_recv_count[m][face],1)
+                    *ALA_HALO_ELEMENT_RECORD_DOUBLES,sizeof(double));
+            cache->halo_multiplicity[m][face]=(unsigned short *)calloc(
+                max(cache->halo_recv_count[m][face],1),
+                sizeof(unsigned short));
+            if(cache->halo_send_elements[m][face]==NULL ||
+               cache->halo_send_records[m][face]==NULL ||
+               cache->halo_recv_records[m][face]==NULL ||
+               cache->halo_multiplicity[m][face]==NULL)
+                myerror(E,"Unable to allocate ALA MPI-overlap halo");
+            i=0;
+            for(q=0;q<overlap;q++)
+                for(t=1;t<=tangent_count;t++)
+                    for(ez=shallow_min_ez;ez<=elz;ez++) {
+                        if(face==0) {
+                            ex=1+q;
+                            ey=t;
+                        }
+                        else if(face==1) {
+                            ex=elx-q;
+                            ey=t;
+                        }
+                        else if(face==2) {
+                            ex=t;
+                            ey=1+q;
+                        }
+                        else {
+                            ex=t;
+                            ey=ely-q;
+                        }
+                        e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                        cache->halo_send_elements[m][face][i]=e;
+                        ala_fill_halo_element_record(E,e,lev,m,q,
+                            cache->halo_send_records[m][face]
+                                +i*ALA_HALO_ELEMENT_RECORD_DOUBLES);
+                        i++;
+                    }
+            local_ghost_elements += cache->halo_recv_count[m][face];
+        }
+        nrequest=0;
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            target=E->parallel.PROCESSOR[lev][m].pass[face+1];
+            MPI_Irecv(&received_counts[face],1,MPI_INT,target,31900,
+                E->parallel.world,&requests[nrequest++]);
+            MPI_Isend(&cache->halo_send_count[m][face],1,MPI_INT,target,31900,
+                E->parallel.world,&requests[nrequest++]);
+        }
+        MPI_Waitall(nrequest,requests,statuses);
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++)
+            if(received_counts[face]!=cache->halo_recv_count[m][face]) {
+                fprintf(stderr,"rank=%d ALA halo count mismatch face=%d "
+                        "target=%d send=%d receive=%d expected=%d\n",
+                        E->parallel.me,face+1,
+                        E->parallel.PROCESSOR[lev][m].pass[face+1],
+                        cache->halo_send_count[m][face],received_counts[face],
+                        cache->halo_recv_count[m][face]);
+                fflush(stderr);
+                myerror(E,"ALA MPI halo face sizes do not match");
+            }
+        ala_exchange_halo_records(E,cache,lev,m);
+
+        interface_count=0;
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            tangent_count=(face<2) ? ely : elx;
+            interface_count +=
+                ((tangent_count+ALA_PATCH_HORIZONTAL_STRIDE-1)
+                 /ALA_PATCH_HORIZONTAL_STRIDE)
+                *((shallow_layers+ALA_PATCH_RADIAL_STRIDE-1)
+                  /ALA_PATCH_RADIAL_STRIDE);
+        }
+        cache->interface_blocks[m]=interface_count;
+        cache->interface_size[m]=(unsigned char *)calloc(
+            max(interface_count,1),sizeof(unsigned char));
+        cache->interface_face[m]=(unsigned char *)calloc(
+            max(interface_count,1),sizeof(unsigned char));
+        cache->interface_elements[m]=(int *)calloc(
+            max(interface_count,1)*ALA_PATCH_MAX_ELEMENTS,sizeof(int));
+        cache->interface_chol[m]=(double *)calloc(
+            max(interface_count,1)*ALA_PATCH_MAX_ELEMENTS
+                *ALA_PATCH_MAX_ELEMENTS,sizeof(double));
+        if(cache->interface_size[m]==NULL ||
+           cache->interface_face[m]==NULL ||
+           cache->interface_elements[m]==NULL ||
+           cache->interface_chol[m]==NULL)
+            myerror(E,"Unable to allocate ALA MPI-overlap patch cache");
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            ghost_count[face]=(unsigned short *)calloc(
+                max(cache->halo_recv_count[m][face],1),
+                sizeof(unsigned short));
+            owner_count[face]=(unsigned short *)calloc(
+                max(cache->halo_send_count[m][face],1),
+                sizeof(unsigned short));
+            final_count[face]=(unsigned short *)calloc(
+                max(cache->halo_send_count[m][face],1),
+                sizeof(unsigned short));
+            if(ghost_count[face]==NULL || owner_count[face]==NULL ||
+               final_count[face]==NULL)
+                myerror(E,"Unable to allocate ALA halo overlap counts");
+        }
+
+        b=0;
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            tangent_count=(face<2) ? ely : elx;
+            for(tangent=1;tangent<=tangent_count;
+                tangent+=ALA_PATCH_HORIZONTAL_STRIDE)
+                for(ez=elz;ez>=shallow_min_ez;
+                    ez-=ALA_PATCH_RADIAL_STRIDE) {
+                    n=0;
+                    for(q=0;q<overlap;q++)
+                        for(t=0;t<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                            tangent+t<=tangent_count;t++)
+                            for(dz=0;dz<ALA_PATCH_RADIAL_ELEMENTS &&
+                                ez-dz>=shallow_min_ez;dz++) {
+                                if(face==0) {
+                                    ex=1+q;
+                                    ey=tangent+t;
+                                    boundary_coordinate=1;
+                                }
+                                else if(face==1) {
+                                    ex=elx-q;
+                                    ey=tangent+t;
+                                    boundary_coordinate=elx;
+                                }
+                                else if(face==2) {
+                                    ex=tangent+t;
+                                    ey=1+q;
+                                    boundary_coordinate=1;
+                                }
+                                else {
+                                    ex=tangent+t;
+                                    ey=ely-q;
+                                    boundary_coordinate=ely;
+                                }
+                                e=(ez-dz)+(ex-1)*elz
+                                    +(ey-1)*elz*elx;
+                                cache->interface_elements[m]
+                                    [b*ALA_PATCH_MAX_ELEMENTS+n]=e;
+                                ala_fill_halo_element_record(E,e,lev,m,q,
+                                    patch_records[n]);
+                                n++;
+                            }
+                    for(q=0;q<overlap;q++)
+                        for(t=0;t<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                            tangent+t<=tangent_count;t++)
+                            for(dz=0;dz<ALA_PATCH_RADIAL_ELEMENTS &&
+                                ez-dz>=shallow_min_ez;dz++) {
+                                if(face<2) {
+                                    ex=boundary_coordinate;
+                                    ey=tangent+t;
+                                }
+                                else {
+                                    ex=tangent+t;
+                                    ey=boundary_coordinate;
+                                }
+                                e=(ez-dz)+(ex-1)*elz
+                                    +(ey-1)*elz*elx;
+                                ala_fill_halo_element_record(E,e,lev,m,0,
+                                                             target_record);
+                                ala_halo_record_center(target_record,
+                                                       target_center);
+                                ghost_index=ala_find_halo_record(
+                                    cache->halo_recv_records[m][face],
+                                    cache->halo_recv_count[m][face],q,
+                                    target_center);
+                                if(ghost_index<0) {
+                                    fprintf(stderr,"rank=%d ALA halo match "
+                                            "failed face=%d q=%d element=%d "
+                                            "target=%d\n",E->parallel.me,
+                                            face+1,q,e,
+                                            E->parallel.PROCESSOR[lev][m]
+                                              .pass[face+1]);
+                                    fflush(stderr);
+                                    myerror(E,"Unable to match ALA halo element");
+                                }
+                                cache->interface_elements[m]
+                                    [b*ALA_PATCH_MAX_ELEMENTS+n]
+                                    =-(ghost_index+1);
+                                memcpy(patch_records[n],
+                                    cache->halo_recv_records[m][face]
+                                      +ghost_index
+                                       *ALA_HALO_ELEMENT_RECORD_DOUBLES,
+                                    ALA_HALO_ELEMENT_RECORD_DOUBLES
+                                      *sizeof(double));
+                                n++;
+                            }
+                    cache->interface_size[m][b]=(unsigned char)n;
+                    cache->interface_face[m][b]=(unsigned char)face;
+                    for(i=0;i<n;i++)
+                        for(j=0;j<=i;j++) {
+                            matrix[i][j]=(i==j) ? patch_records[i][1]
+                                : ala_halo_record_coupling(
+                                    patch_records[i],patch_records[j]);
+                            matrix[j][i]=matrix[i][j];
+                        }
+                    L=cache->interface_chol[m]
+                        +b*ALA_PATCH_MAX_ELEMENTS*ALA_PATCH_MAX_ELEMENTS;
+                    if(!ala_factor_pressure_patch(E,matrix,n,L,
+                                                  &local_min_pivot_ratio)) {
+                        cache->interface_size[m][b]=0;
+                        local_fallback++;
+                    }
+                    else {
+                        local_interface_blocks++;
+                        local_interface_entries += n;
+                        for(i=0;i<n;i++) {
+                            ref=cache->interface_elements[m]
+                                [b*ALA_PATCH_MAX_ELEMENTS+i];
+                            if(ref>0) {
+                                if(cache->multiplicity[m][ref]==65535)
+                                    myerror(E,"ALA MPI overlap count overflow");
+                                cache->multiplicity[m][ref]++;
+                            }
+                            else {
+                                ghost_index=-ref-1;
+                                if(ghost_count[face][ghost_index]==65535)
+                                    myerror(E,"ALA ghost overlap count overflow");
+                                ghost_count[face][ghost_index]++;
+                            }
+                        }
+                    }
+                    b++;
+                }
+        }
+
+        nrequest=0;
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            target=E->parallel.PROCESSOR[lev][m].pass[face+1];
+            MPI_Irecv(owner_count[face],cache->halo_send_count[m][face],
+                MPI_UNSIGNED_SHORT,target,31902,E->parallel.world,
+                &requests[nrequest++]);
+            MPI_Isend(ghost_count[face],cache->halo_recv_count[m][face],
+                MPI_UNSIGNED_SHORT,target,31902,E->parallel.world,
+                &requests[nrequest++]);
+        }
+        MPI_Waitall(nrequest,requests,statuses);
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++)
+            for(i=0;i<cache->halo_send_count[m][face];i++) {
+                e=cache->halo_send_elements[m][face][i];
+                if(65535-cache->multiplicity[m][e]<owner_count[face][i])
+                    myerror(E,"ALA global overlap count overflow");
+                cache->multiplicity[m][e] += owner_count[face][i];
+            }
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++)
+            for(i=0;i<cache->halo_send_count[m][face];i++) {
+                e=cache->halo_send_elements[m][face][i];
+                final_count[face][i]=cache->multiplicity[m][e];
+            }
+        nrequest=0;
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            target=E->parallel.PROCESSOR[lev][m].pass[face+1];
+            MPI_Irecv(cache->halo_multiplicity[m][face],
+                cache->halo_recv_count[m][face],MPI_UNSIGNED_SHORT,
+                target,31903,E->parallel.world,&requests[nrequest++]);
+            MPI_Isend(final_count[face],cache->halo_send_count[m][face],
+                MPI_UNSIGNED_SHORT,target,31903,E->parallel.world,
+                &requests[nrequest++]);
+        }
+        MPI_Waitall(nrequest,requests,statuses);
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            free((void *)ghost_count[face]);
+            free((void *)owner_count[face]);
+            free((void *)final_count[face]);
+        }
+
         for(e=1;e<=npno;e++)
             if(cache->multiplicity[m][e]>0) {
                 local_unique++;
@@ -339,42 +788,64 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   E->parallel.world);
     MPI_Allreduce(&local_overlap_max,&global_overlap_max,1,MPI_INT,MPI_MAX,
                   E->parallel.world);
+    MPI_Allreduce(&local_interface_blocks,&global_interface_blocks,1,MPI_INT,
+                  MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_interface_entries,&global_interface_entries,1,MPI_INT,
+                  MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_ghost_elements,&global_ghost_elements,1,MPI_INT,
+                  MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_min_pivot_ratio,&global_min_pivot_ratio,1,MPI_DOUBLE,
+                  MPI_MIN,E->parallel.world);
     build_seconds=CPU_time0()-build_start;
     MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
     if(global_blocks+global_fallback==0)
         myerror(E,"ALA shallow-patch depth selects no global elements");
+    if(global_interface_blocks==0)
+        myerror(E,"ALA shallow-patch built no MPI interface blocks");
     if(global_unique==0) {
         global_overlap_min=0;
         global_overlap_max=0;
     }
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=4x4x2 stride=2x2x1 symmetric_overlap_weighting=on "
+                "block=4x4x2 stride=2x2x1 mpi_halo_overlap=%d "
+                "interface_block=2x%dx4x2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "operator=principal((D+C)diag(K)^-1(D+C)^T) "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
-                "valid_blocks=%d fallback_blocks=%d build_seconds_max=%e\n",
+                "valid_blocks=%d interface_blocks=%d "
+                "interface_entries=%d ghost_elements=%d "
+                "fallback_blocks=%d min_pivot_ratio=%e "
+                "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
+                overlap,overlap,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_unique,global_overlap_min,
-                global_overlap_max,global_blocks,global_fallback,
-                global_build_seconds);
+                global_overlap_max,global_blocks,global_interface_blocks,
+                global_interface_entries,global_ghost_elements,
+                global_fallback,global_min_pivot_ratio,global_build_seconds);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=4x4x2 stride=2x2x1 symmetric_overlap_weighting=on "
+                "block=4x4x2 stride=2x2x1 mpi_halo_overlap=%d "
+                "interface_block=2x%dx4x2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "operator=principal((D+C)diag(K)^-1(D+C)^T) "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
-                "valid_blocks=%d fallback_blocks=%d build_seconds_max=%e\n",
+                "valid_blocks=%d interface_blocks=%d "
+                "interface_entries=%d ghost_elements=%d "
+                "fallback_blocks=%d min_pivot_ratio=%e "
+                "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
+                overlap,overlap,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_unique,global_overlap_min,
-                global_overlap_max,global_blocks,global_fallback,
-                global_build_seconds);
+                global_overlap_max,global_blocks,global_interface_blocks,
+                global_interface_entries,global_ghost_elements,
+                global_fallback,global_min_pivot_ratio,global_build_seconds);
     }
 }
 
@@ -473,18 +944,86 @@ static void build_ala_two_level_cache(struct All_variables *E,
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache)
 {
-    int m;
+    int m,face;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         free((void *)cache->size[m]);
         free((void *)cache->multiplicity[m]);
         free((void *)cache->elements[m]);
         free((void *)cache->chol[m]);
+        free((void *)cache->interface_size[m]);
+        free((void *)cache->interface_face[m]);
+        free((void *)cache->interface_elements[m]);
+        free((void *)cache->interface_chol[m]);
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+            free((void *)cache->halo_send_elements[m][face]);
+            free((void *)cache->halo_send_records[m][face]);
+            free((void *)cache->halo_recv_records[m][face]);
+            free((void *)cache->halo_multiplicity[m][face]);
+        }
         free((void *)cache->coarse_bpi[m]);
         free((void *)cache->global_basis[m]);
     }
     free((void *)cache->global_chol);
     free((void *)cache->global_matrix);
     memset(cache,0,sizeof(*cache));
+}
+
+
+static void exchange_ala_shallow_halo_values(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev, int m,
+    double **local, double *ghost[ALA_PATCH_MPI_FACES], int return_to_owner)
+{
+    int face,i,e,target,nrequest;
+    double *send[ALA_PATCH_MPI_FACES];
+    double *received[ALA_PATCH_MPI_FACES];
+    MPI_Request requests[2*ALA_PATCH_MPI_FACES];
+    MPI_Status statuses[2*ALA_PATCH_MPI_FACES];
+
+    for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+        if(return_to_owner) {
+            send[face]=ghost[face];
+            received[face]=(double *)calloc(
+                max(cache->halo_send_count[m][face],1),sizeof(double));
+        }
+        else {
+            send[face]=(double *)calloc(
+                max(cache->halo_send_count[m][face],1),sizeof(double));
+            received[face]=ghost[face];
+            for(i=0;i<cache->halo_send_count[m][face];i++) {
+                e=cache->halo_send_elements[m][face][i];
+                send[face][i]=local[m][e];
+            }
+        }
+        if(send[face]==NULL || received[face]==NULL)
+            myerror(E,"Unable to allocate ALA halo exchange buffer");
+    }
+    nrequest=0;
+    for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+        target=E->parallel.PROCESSOR[lev][m].pass[face+1];
+        MPI_Irecv(received[face],
+            return_to_owner ? cache->halo_send_count[m][face]
+                            : cache->halo_recv_count[m][face],
+            MPI_DOUBLE,target,return_to_owner ? 31905 : 31904,
+            E->parallel.world,&requests[nrequest++]);
+        MPI_Isend(send[face],
+            return_to_owner ? cache->halo_recv_count[m][face]
+                            : cache->halo_send_count[m][face],
+            MPI_DOUBLE,target,return_to_owner ? 31905 : 31904,
+            E->parallel.world,&requests[nrequest++]);
+    }
+    MPI_Waitall(nrequest,requests,statuses);
+    if(return_to_owner)
+        for(face=0;face<ALA_PATCH_MPI_FACES;face++)
+            for(i=0;i<cache->halo_send_count[m][face];i++) {
+                e=cache->halo_send_elements[m][face][i];
+                local[m][e] += received[face][i];
+            }
+    for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+        if(return_to_owner)
+            free((void *)received[face]);
+        else
+            free((void *)send[face]);
+    }
 }
 
 
@@ -1099,6 +1638,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache)
 {
     int m,j,col,k,e,ex,ey,ez,elz,ncolumns,npno,b,n,i;
+    int face,ref,ghost_index;
     int clev,factor,celx,celz,cnpno,ce,cx,cy,cz,neq;
     double damping,theta,delta,sigma,rho_cheb,rho_new;
     double velocity_residual_reduction;
@@ -1115,6 +1655,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
     double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
     double *fine_velocity_direction[NCS];
+    double *ghost_r[NCS][ALA_PATCH_MPI_FACES];
+    double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
 
     npno=E->lmesh.NPNO[lev];
     if(E->control.ala_radial_line_preconditioner) {
@@ -1157,13 +1699,24 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         weight=E->control.ala_shallow_patch_weight;
         local_patch_energy[0]=0.0;
         local_patch_energy[1]=0.0;
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+                ghost_r[m][face]=(double *)calloc(
+                    max(cache->halo_recv_count[m][face],1),sizeof(double));
+                ghost_work[m][face]=(double *)calloc(
+                    max(cache->halo_recv_count[m][face],1),sizeof(double));
+                if(ghost_r[m][face]==NULL || ghost_work[m][face]==NULL)
+                    myerror(E,"Unable to allocate ALA MPI-overlap work");
+            }
+            exchange_ala_shallow_halo_values(E,cache,lev,m,r,
+                                              ghost_r[m],0);
             for(e=1;e<=npno;e++) {
                 work[m][e]=0.0;
                 if(cache->multiplicity[m][e]>0)
                     local_patch_energy[0] += r[m][e]*E->BPI[lev][m][e]
                         *r[m][e];
             }
+        }
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(b=0;b<cache->blocks[m];b++) {
                 n=cache->size[m][b];
@@ -1193,6 +1746,59 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 }
             }
         for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(b=0;b<cache->interface_blocks[m];b++) {
+                n=cache->interface_size[m][b];
+                if(n==0)
+                    continue;
+                face=cache->interface_face[m][b];
+                L=cache->interface_chol[m]
+                    +b*ALA_PATCH_MAX_ELEMENTS*ALA_PATCH_MAX_ELEMENTS;
+                for(i=0;i<n;i++) {
+                    ref=cache->interface_elements[m]
+                        [b*ALA_PATCH_MAX_ELEMENTS+i];
+                    if(ref>0) {
+                        if(cache->multiplicity[m][ref]==0)
+                            myerror(E,"ALA local partition weight is zero");
+                        rhs[i]=r[m][ref]
+                            /sqrt((double)cache->multiplicity[m][ref]);
+                    }
+                    else {
+                        ghost_index=-ref-1;
+                        if(cache->halo_multiplicity[m][face][ghost_index]==0)
+                            myerror(E,"ALA ghost partition weight is zero");
+                        rhs[i]=ghost_r[m][face][ghost_index]
+                            /sqrt((double)cache->halo_multiplicity[m][face]
+                                                [ghost_index]);
+                    }
+                    sum=rhs[i];
+                    for(j=0;j<i;j++)
+                        sum -= L[i*ALA_PATCH_MAX_ELEMENTS+j]*solution[j];
+                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                }
+                for(i=n-1;i>=0;i--) {
+                    sum=solution[i];
+                    for(j=i+1;j<n;j++)
+                        sum -= L[j*ALA_PATCH_MAX_ELEMENTS+i]*solution[j];
+                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                }
+                for(i=0;i<n;i++) {
+                    ref=cache->interface_elements[m]
+                        [b*ALA_PATCH_MAX_ELEMENTS+i];
+                    if(ref>0)
+                        work[m][ref] += solution[i]
+                            /sqrt((double)cache->multiplicity[m][ref]);
+                    else {
+                        ghost_index=-ref-1;
+                        ghost_work[m][face][ghost_index] += solution[i]
+                            /sqrt((double)cache->halo_multiplicity[m][face]
+                                                [ghost_index]);
+                    }
+                }
+            }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            exchange_ala_shallow_halo_values(E,cache,lev,m,work,
+                                              ghost_work[m],1);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=npno;e++)
                 if(cache->multiplicity[m][e]>0) {
                     local_patch_energy[1] += r[m][e]*work[m][e];
@@ -1210,8 +1816,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         global_patch_energy[1]
                         /max(global_patch_energy[0],1.0e-300),weight);
                 fflush(E->fp);
-            }
+                }
         }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+                free((void *)ghost_r[m][face]);
+                free((void *)ghost_work[m][face]);
+            }
     }
 
     if(!E->control.ala_two_level_preconditioner)
@@ -1444,6 +2055,73 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         free((void *)fine_velocity_rhs[m]);
         free((void *)fine_velocity_Ax[m]);
         free((void *)fine_velocity_direction[m]);
+    }
+}
+
+
+static void audit_ala_shallow_patch_preconditioner(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int m,e,npno;
+    double local[4],global[4],left,right,defect;
+    double *x[NCS],*y[NCS],*Mx[NCS],*My[NCS],*work[NCS];
+
+    npno=E->lmesh.NPNO[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        x[m]=(double *)calloc(npno+1,sizeof(double));
+        y[m]=(double *)calloc(npno+1,sizeof(double));
+        Mx[m]=(double *)calloc(npno+1,sizeof(double));
+        My[m]=(double *)calloc(npno+1,sizeof(double));
+        work[m]=(double *)calloc(npno+1,sizeof(double));
+        if(x[m]==NULL || y[m]==NULL || Mx[m]==NULL || My[m]==NULL ||
+           work[m]==NULL)
+            myerror(E,"Unable to allocate ALA Schwarz audit workspace");
+        for(e=1;e<=npno;e++) {
+            x[m][e]=sin(0.371*(double)e
+                         +0.113*(double)(E->parallel.me+1));
+            y[m][e]=cos(0.529*(double)e
+                         +0.197*(double)(E->parallel.me+1));
+        }
+    }
+    apply_ala_pressure_preconditioner(E,x,Mx,work,lev,-1,cache);
+    apply_ala_pressure_preconditioner(E,y,My,work,lev,-1,cache);
+    for(e=0;e<4;e++)
+        local[e]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++) {
+            local[0] += x[m][e]*My[m][e];
+            local[1] += y[m][e]*Mx[m][e];
+            local[2] += x[m][e]*Mx[m][e];
+            local[3] += y[m][e]*My[m][e];
+        }
+    MPI_Allreduce(local,global,4,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    left=global[0];
+    right=global[1];
+    defect=fabs(left-right)/max(fabs(left)+fabs(right),1.0e-300);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA MPI-overlap Schwarz audit symmetry_defect=%e "
+                "energy_x=%e energy_y=%e status=%s\n",defect,
+                global[2],global[3],
+                (defect<=1.0e-10 && global[2]>0.0 && global[3]>0.0)
+                    ? "pass" : "fail");
+        fprintf(stderr,"ALA MPI-overlap Schwarz audit symmetry_defect=%e "
+                "energy_x=%e energy_y=%e status=%s\n",defect,
+                global[2],global[3],
+                (defect<=1.0e-10 && global[2]>0.0 && global[3]>0.0)
+                    ? "pass" : "fail");
+        fflush(E->fp);
+        fflush(stderr);
+    }
+    if(!isfinite(defect) || defect>1.0e-10 ||
+       !isfinite(global[2]) || !isfinite(global[3]) ||
+       global[2]<=0.0 || global[3]<=0.0)
+        myerror(E,"ALA MPI-overlap Schwarz failed SPD audit");
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)x[m]);
+        free((void *)y[m]);
+        free((void *)Mx[m]);
+        free((void *)My[m]);
+        free((void *)work[m]);
     }
 }
 
@@ -2368,6 +3046,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             }
         }
     }
+    if(E->control.ala_shallow_patch_preconditioner)
+        audit_ala_shallow_patch_preconditioner(
+            E,&preconditioner_cache,lev);
     if(E->parallel.me == 0) {
         fprintf(E->fp,
                 "ALA PCG pressure preconditioner = %s mode=%s "
@@ -2380,14 +3061,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     ? (E->control.ala_shallow_patch_preconditioner
                        ? (strcmp(E->control.ala_two_level_velocity_solver,
                                  "chebyshev")==0
-                          ? "overlap_schwarz_plus_galerkin_kpoly"
-                          : "overlap_schwarz_plus_galerkin_diagonal")
+                          ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
+                          : "mpi_overlap_schwarz_plus_galerkin_diagonal")
                        : (strcmp(E->control.ala_two_level_velocity_solver,
                                  "chebyshev")==0
                           ? "true_galerkin_kpoly"
                           : "diagonal_plus_galerkin"))
                     : (E->control.ala_shallow_patch_preconditioner
-                       ? "overlap_schwarz"
+                       ? "mpi_overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
@@ -2409,14 +3090,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     ? (E->control.ala_shallow_patch_preconditioner
                        ? (strcmp(E->control.ala_two_level_velocity_solver,
                                  "chebyshev")==0
-                          ? "overlap_schwarz_plus_galerkin_kpoly"
-                          : "overlap_schwarz_plus_galerkin_diagonal")
+                          ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
+                          : "mpi_overlap_schwarz_plus_galerkin_diagonal")
                        : (strcmp(E->control.ala_two_level_velocity_solver,
                                  "chebyshev")==0
                           ? "true_galerkin_kpoly"
                           : "diagonal_plus_galerkin"))
                     : (E->control.ala_shallow_patch_preconditioner
-                       ? "overlap_schwarz"
+                       ? "mpi_overlap_schwarz"
                        : (E->control.ala_radial_line_preconditioner
                           ? "radial_line" : "diagonal")),
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
@@ -2441,14 +3122,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                         ? (E->control.ala_shallow_patch_preconditioner
                            ? (strcmp(E->control.ala_two_level_velocity_solver,
                                      "chebyshev")==0
-                              ? "overlap_schwarz_plus_galerkin_kpoly"
-                              : "overlap_schwarz_plus_galerkin_diagonal")
+                              ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
+                              : "mpi_overlap_schwarz_plus_galerkin_diagonal")
                            : (strcmp(E->control.ala_two_level_velocity_solver,
                                      "chebyshev")==0
                               ? "true_galerkin_kpoly"
                               : "diagonal_plus_galerkin"))
                         : (E->control.ala_shallow_patch_preconditioner
-                           ? "overlap_schwarz" : "diagonal"));
+                           ? "mpi_overlap_schwarz" : "diagonal"));
             fprintf(stderr,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
                     "pressure_iterations=%d restart_interval=%d "

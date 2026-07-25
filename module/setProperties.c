@@ -1123,6 +1123,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_shallow_patch_weight, fp);
     getDoubleProperty(properties, "ala_shallow_patch_regularization",
                       E->control.ala_shallow_patch_regularization, fp);
+    getIntProperty(properties, "ala_shallow_patch_mpi_overlap",
+                   E->control.ala_shallow_patch_mpi_overlap, fp);
     getIntProperty(properties, "ala_radial_line_preconditioner",
                    E->control.ala_radial_line_preconditioner, fp);
     getIntProperty(properties, "ala_element_vanka_smoother",
@@ -1215,6 +1217,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_shallow_patch_regularization < 0.0 ||
        E->control.ala_shallow_patch_regularization > 0.1)
         myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
+    if(E->control.ala_shallow_patch_mpi_overlap < 1 ||
+       E->control.ala_shallow_patch_mpi_overlap > 2)
+        myerror(E, "ala_shallow_patch_mpi_overlap must be one or two");
     if(E->control.ala_element_vanka_damping <= 0.0 ||
        E->control.ala_element_vanka_damping > 1.0)
         myerror(E, "ala_element_vanka_damping must be in (0,1]");

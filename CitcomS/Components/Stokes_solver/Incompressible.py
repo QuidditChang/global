@@ -187,6 +187,8 @@ class Incompressible(CitcomComponent):
             "ala_shallow_patch_weight", default=0.25)
         ala_shallow_patch_regularization = prop.float(
             "ala_shallow_patch_regularization", default=1.0e-3)
+        ala_shallow_patch_mpi_overlap = prop.int(
+            "ala_shallow_patch_mpi_overlap", default=2)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         ala_element_vanka_smoother = prop.bool(

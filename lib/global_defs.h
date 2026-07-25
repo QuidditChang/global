@@ -512,6 +512,7 @@ struct CONTROL {
     double ala_shallow_patch_depth_km;
     double ala_shallow_patch_weight;
     double ala_shallow_patch_regularization;
+    int ala_shallow_patch_mpi_overlap;
     int ala_radial_line_preconditioner;
     int ala_element_vanka_smoother;
     double ala_element_vanka_damping;

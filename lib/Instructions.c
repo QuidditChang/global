@@ -592,6 +592,8 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_shallow_patch_weight),"0.25",m);
   input_double("ala_shallow_patch_regularization",
                &(E->control.ala_shallow_patch_regularization),"1.0e-3",m);
+  input_int("ala_shallow_patch_mpi_overlap",
+            &(E->control.ala_shallow_patch_mpi_overlap),"2",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
   input_boolean("ala_element_vanka_smoother",
@@ -685,6 +687,9 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_shallow_patch_regularization < 0.0 ||
      E->control.ala_shallow_patch_regularization > 0.1)
       myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
+  if(E->control.ala_shallow_patch_mpi_overlap < 1 ||
+     E->control.ala_shallow_patch_mpi_overlap > 2)
+      myerror(E, "ala_shallow_patch_mpi_overlap must be one or two");
   if(E->control.ala_element_vanka_damping <= 0.0 ||
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
@@ -1281,6 +1286,7 @@ void global_default_values(E)
     E->control.ala_shallow_patch_depth_km = 410.0;
     E->control.ala_shallow_patch_weight = 0.25;
     E->control.ala_shallow_patch_regularization = 1.0e-3;
+    E->control.ala_shallow_patch_mpi_overlap = 2;
     E->control.ala_radial_line_preconditioner = 0;
     E->control.ala_element_vanka_smoother = 0;
     E->control.ala_element_vanka_damping = 0.8;

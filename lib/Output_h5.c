@@ -1716,6 +1716,16 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_element_vanka_damping);
     status = set_attribute_double(input, "ala_element_vanka_regularization",
                                   E->control.ala_element_vanka_regularization);
+    status = set_attribute_int(input, "ala_shallow_patch_preconditioner",
+                               E->control.ala_shallow_patch_preconditioner);
+    status = set_attribute_double(input, "ala_shallow_patch_depth_km",
+                                  E->control.ala_shallow_patch_depth_km);
+    status = set_attribute_double(input, "ala_shallow_patch_weight",
+                                  E->control.ala_shallow_patch_weight);
+    status = set_attribute_double(input, "ala_shallow_patch_regularization",
+                                  E->control.ala_shallow_patch_regularization);
+    status = set_attribute_int(input, "ala_shallow_patch_mpi_overlap",
+                               E->control.ala_shallow_patch_mpi_overlap);
     status = set_attribute_string(input, "ala_beta_element_source",
                                   E->control.ala_beta_element_source);
     status = set_attribute_int(input, "ala_beta_causal_diagnostics",
