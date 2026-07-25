@@ -104,6 +104,8 @@ extern "C" {
 
 #define MAX_LEVELS 12   /* max. number of multigrid levels */
 #define NCS      14   /* max. number of sphere caps */
+#define ALA_VANKA_DOF 24
+#define ALA_VANKA_CHOL_SIZE 300
 #define PHASE_TRANSITIONS 3
 
 typedef float higher_precision;  /* matrix coeffs etc */
@@ -513,6 +515,7 @@ struct CONTROL {
     int ala_radial_line_preconditioner;
     int ala_element_vanka_smoother;
     double ala_element_vanka_damping;
+    double ala_element_vanka_regularization;
 
     /* surface temperature */
     float surface_temp;
@@ -838,8 +841,9 @@ struct All_variables {
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
     double *ALA_velocity_BI[MAX_LEVELS][NCS];
-    double *ALA_vanka_base_BI[MAX_LEVELS][NCS];
     double *ALA_vanka_overlap_BI[MAX_LEVELS][NCS];
+    higher_precision *ALA_vanka_chol[MAX_LEVELS][NCS];
+    unsigned char *ALA_vanka_valid[MAX_LEVELS][NCS];
     double *ALA_BPI_line_diag[MAX_LEVELS][NCS];
     double *ALA_BPI_line_lower[MAX_LEVELS][NCS];
     unsigned char *ALA_BPI_line_valid[MAX_LEVELS][NCS];

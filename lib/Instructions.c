@@ -598,6 +598,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_element_vanka_smoother),"off",m);
   input_double("ala_element_vanka_damping",
                &(E->control.ala_element_vanka_damping),"0.8",m);
+  input_double("ala_element_vanka_regularization",
+               &(E->control.ala_element_vanka_regularization),"1.0e-8",m);
 
   if(E->control.ala_schur_symmetry_tolerance <= 0.0)
       myerror(E, "ala_schur_symmetry_tolerance must be positive");
@@ -686,6 +688,9 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_element_vanka_damping <= 0.0 ||
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
+  if(E->control.ala_element_vanka_regularization < 0.0 ||
+     E->control.ala_element_vanka_regularization > 0.1)
+      myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
   if(E->control.ala_element_vanka_smoother &&
      (strcmp(E->control.SOLVER_TYPE,"multigrid") != 0 ||
       !E->control.ala_pressure_buoyancy ||
@@ -1122,7 +1127,6 @@ void allocate_velocity_vars(E)
 
 {
     int m,n,i,j,k,l;
-
  m=0;
  n=1;
   for (j=1;j<=E->sphere.caps_per_proc;j++)   {
@@ -1173,14 +1177,22 @@ void allocate_velocity_vars(E)
       E->ALA_velocity_BI[l][j] =
           (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
       if(E->control.ala_element_vanka_smoother) {
-        E->ALA_vanka_base_BI[l][j] =
-            (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
         E->ALA_vanka_overlap_BI[l][j] =
             (double *) malloc((E->lmesh.NEQ[l])*sizeof(double));
+        E->ALA_vanka_chol[l][j] = (higher_precision *)malloc(
+            (E->lmesh.NEL[l]+1)*ALA_VANKA_CHOL_SIZE
+            *sizeof(higher_precision));
+        E->ALA_vanka_valid[l][j] = (unsigned char *)malloc(
+            (E->lmesh.NEL[l]+1)*sizeof(unsigned char));
+        if(E->ALA_vanka_overlap_BI[l][j]==NULL ||
+           E->ALA_vanka_chol[l][j]==NULL ||
+           E->ALA_vanka_valid[l][j]==NULL)
+          myerror(E,"Unable to allocate full ALA element-Vanka cache");
       }
       else {
-        E->ALA_vanka_base_BI[l][j] = NULL;
         E->ALA_vanka_overlap_BI[l][j] = NULL;
+        E->ALA_vanka_chol[l][j] = NULL;
+        E->ALA_vanka_valid[l][j] = NULL;
       }
       k = (E->lmesh.NOX[l]*E->lmesh.NOZ[l]+E->lmesh.NOX[l]*E->lmesh.NOY[l]+
           E->lmesh.NOY[l]*E->lmesh.NOZ[l])*6;
@@ -1191,7 +1203,6 @@ void allocate_velocity_vars(E)
          E->BI[l][j][i]=0.0;
          E->ALA_velocity_BI[l][j][i]=0.0;
          if(E->control.ala_element_vanka_smoother) {
-           E->ALA_vanka_base_BI[l][j][i]=0.0;
            E->ALA_vanka_overlap_BI[l][j][i]=0.0;
          }
          }
@@ -1273,6 +1284,7 @@ void global_default_values(E)
     E->control.ala_radial_line_preconditioner = 0;
     E->control.ala_element_vanka_smoother = 0;
     E->control.ala_element_vanka_damping = 0.8;
+    E->control.ala_element_vanka_regularization = 1.0e-8;
     strcpy(E->control.log_template,"datafile");
 
     E->control.GRID_TYPE=1;

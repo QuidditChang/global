@@ -193,6 +193,8 @@ class Incompressible(CitcomComponent):
             "ala_element_vanka_smoother", default=False)
         ala_element_vanka_damping = prop.float(
             "ala_element_vanka_damping", default=0.8)
+        ala_element_vanka_regularization = prop.float(
+            "ala_element_vanka_regularization", default=1.0e-8)
         uzawa = prop.str("uzawa", default="cg",
                          validator=prop.choice(["cg", "bicg", "ala_cg"]))
         compress_iter_maxstep = prop.int("compress_iter_maxstep", default=100)

@@ -735,20 +735,21 @@ void element_gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
 }
 
 
-/* Apply an overlapping element correction for the strict-ALA augmented
-   velocity operator.  The local block uses the assembled unaugmented velocity
-   diagonal and the complete element gamma/V * (D+C)^T(D+C) coupling.  Its
-   inverse is applied exactly with Sherman-Morrison. */
+/* Apply an overlapping full-element correction for the strict-ALA augmented
+   velocity operator.  Each cached factor contains the complete 24x24 local
+   K_gamma block plus the assembled diagonal contribution from neighboring
+   elements, so local rigid modes are controlled without discarding component
+   coupling. */
 void ala_element_vanka_smooth(struct All_variables *E, double **d0,
                               double **F, double **Ad, double acc,
                               int *cycles, int level, int guess)
 {
-    int m,e,a,da,ia,eq,count,steps,node;
+    int m,e,a,da,ia,j,eq,count,steps,node,fixed;
     int eqs[24];
-    double g[24],dinv[24],y[24],t[24];
-    double volume,alpha,denom,g_dot_y,g_dot_t,coefficient;
-    double correction,damping;
+    double rhs[24],forward[24],solution[24],sum,diagonal;
+    double correction,damping,residual;
     double *delta[NCS];
+    higher_precision *chol;
     static int announced[MAX_LEVELS];
     const int dims=E->mesh.nsd;
     const int ends=enodes[dims];
@@ -763,19 +764,22 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
     damping=E->control.ala_element_vanka_damping;
     if(E->parallel.me==0 && !announced[level]) {
         fprintf(E->fp,
-                "ALA element-Vanka active level=%d local_elements=%d "
+                "ALA full element-Vanka active level=%d local_elements=%d "
                 "sweeps=%d damping=%g\n",
                 level,nel,steps,damping);
         fprintf(stderr,
-                "ALA element-Vanka active level=%d local_elements=%d "
+                "ALA full element-Vanka active level=%d local_elements=%d "
                 "sweeps=%d damping=%g\n",
                 level,nel,steps,damping);
         fflush(E->fp);
         fflush(stderr);
         announced[level]=1;
     }
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
         delta[m]=(double *)malloc(neq*sizeof(double));
+        if(delta[m]==NULL)
+            myerror(E,"Unable to allocate ALA element-Vanka correction");
+    }
 
     if(guess)
         n_assemble_del2_u(E,d0,Ad,level,1);
@@ -791,38 +795,48 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
 
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=nel;e++) {
-                volume=E->ECO[level][m][e].area;
-                if(!isfinite(volume) || volume<=0.0)
-                    myerror(E,"Invalid pressure mass in ALA element-Vanka smoother");
-                alpha=E->control.ala_augmented_lagrangian_gamma/volume;
-                g_dot_y=0.0;
-                g_dot_t=0.0;
-
+                if(!E->ALA_vanka_valid[level][m][e])
+                    myerror(E,"ALA element-Vanka factor cache is invalid");
+                chol=E->ALA_vanka_chol[level][m]
+                    +e*ALA_VANKA_CHOL_SIZE;
                 for(a=1;a<=ends;a++) {
                     node=E->IEN[level][m][e].node[a];
                     for(da=0;da<dims;da++) {
                         ia=(a-1)*dims+da;
                         eq=E->ID[level][m][node].doff[da+1];
                         eqs[ia]=eq;
-                        dinv[ia]=E->ALA_vanka_base_BI[level][m][eq];
-                        if(dinv[ia]==0.0)
-                            g[ia]=0.0;
-                        else
-                            g[ia]=E->elt_del[level][m][e].g[ia][0]
-                                 +E->elt_c[level][m][e].c[ia][0];
-                        y[ia]=dinv[ia]*(F[m][eq]-Ad[m][eq]);
-                        t[ia]=dinv[ia]*g[ia];
-                        g_dot_y += g[ia]*y[ia];
-                        g_dot_t += g[ia]*t[ia];
+                        fixed=(da==0 && (E->NODE[level][m][node]&VBX)) ||
+                              (da==1 && (E->NODE[level][m][node]&VBY)) ||
+                              (da==2 && (E->NODE[level][m][node]&VBZ));
+                        residual=F[m][eq]-Ad[m][eq];
+                        rhs[ia]=fixed ? 0.0 : residual;
                     }
                 }
-
-                denom=1.0+alpha*g_dot_t;
-                if(!isfinite(denom) || denom<=0.0)
-                    myerror(E,"ALA element-Vanka local block is not positive");
-                coefficient=alpha*g_dot_y/denom;
+                for(ia=0;ia<n;ia++) {
+                    sum=rhs[ia];
+                    for(j=0;j<ia;j++)
+                        sum -= chol[ia*(ia+1)/2+j]*forward[j];
+                    diagonal=chol[ia*(ia+1)/2+ia];
+                    if(!isfinite(diagonal) || diagonal<=0.0)
+                        myerror(E,"ALA element-Vanka factor diagonal is invalid");
+                    forward[ia]=sum/diagonal;
+                }
+                for(ia=n-1;ia>=0;ia--) {
+                    sum=forward[ia];
+                    for(j=ia+1;j<n;j++)
+                        sum -= chol[j*(j+1)/2+ia]*solution[j];
+                    diagonal=chol[ia*(ia+1)/2+ia];
+                    solution[ia]=sum/diagonal;
+                    if(!isfinite(solution[ia])) {
+                        fprintf(stderr,"rank=%d level=%d sweep=%d cap=%d "
+                                "element=%d local_dof=%d rhs=%e forward=%e "
+                                "diagonal=%e\n",E->parallel.me,level,count,m,e,
+                                ia,rhs[ia],forward[ia],diagonal);
+                        myerror(E,"Non-finite full element-Vanka block solve");
+                    }
+                }
                 for(ia=0;ia<n;ia++)
-                    delta[m][eqs[ia]] += y[ia]-coefficient*t[ia];
+                    delta[m][eqs[ia]] += solution[ia];
             }
 
         (E->solver.exchange_id_d)(E,delta,level);
@@ -830,8 +844,14 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
             for(eq=0;eq<neq;eq++) {
                 correction=damping
                     *E->ALA_vanka_overlap_BI[level][m][eq]*delta[m][eq];
-                if(!isfinite(correction))
-                    myerror(E,"Non-finite ALA element-Vanka correction");
+                if(!isfinite(correction)) {
+                    fprintf(stderr,"rank=%d level=%d sweep=%d cap=%d eq=%d "
+                            "overlap_inverse=%e delta=%e damping=%e\n",
+                            E->parallel.me,level,count,m,eq,
+                            E->ALA_vanka_overlap_BI[level][m][eq],
+                            delta[m][eq],damping);
+                    myerror(E,"Non-finite full element-Vanka correction");
+                }
                 d0[m][eq] += correction;
             }
         n_assemble_del2_u(E,d0,Ad,level,1);

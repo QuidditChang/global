@@ -312,7 +312,7 @@ void construct_node_maps(E)
 void construct_node_ks(E)
      struct All_variables *E;
 {
-    int m,level,i,j,k,e,a,da,ia,eq;
+    int m,level,i,j,k,e,a,da,eq;
     int node,node1,eqn1,eqn2,eqn3,loc0,loc1,loc2,loc3,found,element,index,pp,qq;
     int neq,nno,nel,max_eqn;
 
@@ -345,10 +345,8 @@ void construct_node_ks(E)
 	for(i=0;i<neq;i++)
 	    E->BI[level][m][i] = zero;
         if(E->control.ala_element_vanka_smoother)
-            for(i=0;i<neq;i++) {
-                E->ALA_vanka_base_BI[level][m][i] = zero;
+            for(i=0;i<neq;i++)
                 E->ALA_vanka_overlap_BI[level][m][i] = zero;
-            }
         for(i=0;i<E->mesh.matrix_size[level];i++) {
             E->Eqn_k1[level][m][i] = zero;
             E->Eqn_k2[level][m][i] = zero;
@@ -367,10 +365,7 @@ void construct_node_ks(E)
                            (da==1 && (E->NODE[level][m][node] & VBY)) ||
                            (da==2 && (E->NODE[level][m][node] & VBZ)))
                             continue;
-                        ia=(a-1)*dims+da;
                         eq=E->ID[level][m][node].doff[da+1];
-                        E->ALA_vanka_base_BI[level][m][eq] +=
-                            elt_K[ia*lms+ia];
                         E->ALA_vanka_overlap_BI[level][m][eq] += 1.0;
                     }
                 }
@@ -466,10 +461,8 @@ void construct_node_ks(E)
 	}           /* end for m */
 
      (E->solver.exchange_id_d)(E, E->BI[level], level);
-     if(E->control.ala_element_vanka_smoother) {
-         (E->solver.exchange_id_d)(E,E->ALA_vanka_base_BI[level],level);
+     if(E->control.ala_element_vanka_smoother)
          (E->solver.exchange_id_d)(E,E->ALA_vanka_overlap_BI[level],level);
-     }
 
      for(m=1;m<=E->sphere.caps_per_proc;m++)     {
         neq=E->lmesh.NEQ[level];
@@ -477,19 +470,13 @@ void construct_node_ks(E)
         for(j=0;j<neq;j++)                 {
             if(E->BI[level][m][j] ==0.0)  fprintf(stderr,"me= %d level %d, equation %d/%d has zero diagonal term\n",E->parallel.me,level,j,neq);
 	    assert( E->BI[level][m][j] != 0 /* diagonal of matrix = 0, not acceptable */);
-            E->BI[level][m][j]  = (double) 1.0/E->BI[level][m][j];
+	    E->BI[level][m][j]  = (double) 1.0/E->BI[level][m][j];
 	    if(E->control.ala_element_vanka_smoother) {
                 if(E->ALA_vanka_overlap_BI[level][m][j] > 0.0) {
-                    if(!isfinite(E->ALA_vanka_base_BI[level][m][j]) ||
-                       E->ALA_vanka_base_BI[level][m][j] <= 0.0)
-                        myerror(E,"ALA element-Vanka base diagonal is not positive");
-                    E->ALA_vanka_base_BI[level][m][j] =
-                        1.0/E->ALA_vanka_base_BI[level][m][j];
                     E->ALA_vanka_overlap_BI[level][m][j] =
                         1.0/E->ALA_vanka_overlap_BI[level][m][j];
                 }
                 else {
-                    E->ALA_vanka_base_BI[level][m][j] = 0.0;
                     E->ALA_vanka_overlap_BI[level][m][j] = 0.0;
                 }
             }
@@ -500,6 +487,146 @@ void construct_node_ks(E)
     }     /* end for level */
 
     return;
+}
+
+
+/* Cache a Cholesky factor of the complete local augmented velocity block.
+   A single element stiffness has rigid-body null modes, so its diagonal is
+   completed with the positive contribution from all other assembled elements
+   incident on the same velocity dofs. */
+void build_ala_element_vanka_factors(struct All_variables *E)
+{
+    int level,m,e,a,da,i,j,k,node,eq,fixed[ALA_VANKA_DOF];
+    int local_elements,global_elements;
+    double matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
+    double L[ALA_VANKA_DOF*ALA_VANKA_DOF];
+    double sum,pivot,maxdiag,global_diag,external,shift;
+    double local_min_ratio,global_min_ratio,local_megabytes,global_max_megabytes;
+    higher_precision *cache;
+    void get_elt_k();
+    void get_ala_aug_k();
+    void myerror();
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+    const int n=loc_mat_size[dims];
+
+    if(n!=ALA_VANKA_DOF)
+        myerror(E,"Full ALA element-Vanka requires 3-D 24-dof elements");
+
+    local_elements=0;
+    local_megabytes=0.0;
+    local_min_ratio=1.0e300;
+    for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            local_elements += E->lmesh.NEL[level];
+            local_megabytes += (E->lmesh.NEL[level]+1)
+                *ALA_VANKA_CHOL_SIZE*sizeof(higher_precision)/(1024.0*1024.0);
+            for(e=1;e<=E->lmesh.NEL[level];e++) {
+                get_elt_k(E,e,matrix,level,m,0);
+                get_ala_aug_k(E,e,matrix,level,m);
+                for(i=0;i<n*n;i++)
+                    L[i]=0.0;
+                for(a=1;a<=ends;a++) {
+                    node=E->IEN[level][m][e].node[a];
+                    for(da=0;da<dims;da++) {
+                        i=(a-1)*dims+da;
+                        fixed[i]=(da==0 && (E->NODE[level][m][node]&VBX)) ||
+                                 (da==1 && (E->NODE[level][m][node]&VBY)) ||
+                                 (da==2 && (E->NODE[level][m][node]&VBZ));
+                    }
+                }
+                maxdiag=0.0;
+                for(i=0;i<n;i++) {
+                    a=i/dims+1;
+                    da=i%dims;
+                    node=E->IEN[level][m][e].node[a];
+                    eq=E->ID[level][m][node].doff[da+1];
+                    if(!isfinite(E->BI[level][m][eq]) ||
+                       E->BI[level][m][eq]<=0.0)
+                        myerror(E,"ALA element-Vanka assembled diagonal is invalid");
+                    global_diag=1.0/E->BI[level][m][eq];
+                    if(!fixed[i]) {
+                        external=global_diag-matrix[i*n+i];
+                        if(external < -1.0e-8*max(global_diag,1.0e-300)) {
+                            fprintf(stderr,"rank=%d level=%d element=%d dof=%d "
+                                    "global_diag=%e local_diag=%e\n",
+                                    E->parallel.me,level,e,i,global_diag,
+                                    matrix[i*n+i]);
+                            myerror(E,"ALA element-Vanka external diagonal is negative");
+                        }
+                        matrix[i*n+i] += max(external,0.0);
+                        maxdiag=max(maxdiag,matrix[i*n+i]);
+                    }
+                }
+                if(!isfinite(maxdiag) || maxdiag<=0.0)
+                    myerror(E,"ALA element-Vanka local diagonal is invalid");
+                shift=E->control.ala_element_vanka_regularization*maxdiag;
+                for(i=0;i<n;i++) {
+                    if(fixed[i]) {
+                        for(j=0;j<n;j++)
+                            matrix[i*n+j]=matrix[j*n+i]=0.0;
+                        matrix[i*n+i]=maxdiag;
+                    }
+                    else {
+                        matrix[i*n+i] += shift;
+                        for(j=0;j<i;j++) {
+                            sum=0.5*(matrix[i*n+j]+matrix[j*n+i]);
+                            matrix[i*n+j]=matrix[j*n+i]=sum;
+                        }
+                    }
+                }
+                for(i=0;i<n;i++) {
+                    for(j=0;j<=i;j++) {
+                        sum=matrix[i*n+j];
+                        for(k=0;k<j;k++)
+                            sum -= L[i*n+k]*L[j*n+k];
+                        if(i==j) {
+                            pivot=sum;
+                            if(!isfinite(pivot) ||
+                               pivot<=1.0e-14*maxdiag) {
+                                fprintf(stderr,"rank=%d level=%d element=%d "
+                                        "pivot_dof=%d pivot=%e maxdiag=%e shift=%e\n",
+                                        E->parallel.me,level,e,i,pivot,maxdiag,shift);
+                                myerror(E,"ALA element-Vanka Cholesky failed");
+                            }
+                            L[i*n+j]=sqrt(pivot);
+                            local_min_ratio=min(local_min_ratio,pivot/maxdiag);
+                        }
+                        else
+                            L[i*n+j]=sum/L[j*n+j];
+                    }
+                }
+                cache=E->ALA_vanka_chol[level][m]
+                    +e*ALA_VANKA_CHOL_SIZE;
+                k=0;
+                for(i=0;i<n;i++)
+                    for(j=0;j<=i;j++)
+                        cache[k++]=(higher_precision)L[i*n+j];
+                E->ALA_vanka_valid[level][m][e]=1;
+            }
+        }
+    MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_min_ratio,&global_min_ratio,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_megabytes,&global_max_megabytes,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA full element-Vanka factors levels=%d "
+                "global_elements=%d max_cache_per_rank_mb=%g "
+                "regularization=%e min_pivot_ratio=%e\n",
+                E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
+                global_max_megabytes,
+                E->control.ala_element_vanka_regularization,global_min_ratio);
+        fprintf(stderr,"ALA full element-Vanka factors levels=%d "
+                "global_elements=%d max_cache_per_rank_mb=%g "
+                "regularization=%e min_pivot_ratio=%e\n",
+                E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
+                global_max_megabytes,
+                E->control.ala_element_vanka_regularization,global_min_ratio);
+        fflush(E->fp);
+        fflush(stderr);
+    }
 }
 
 void rebuild_BI_on_boundary(E)
@@ -776,6 +903,7 @@ void construct_stiffness_B_matrix(E)
   void project_viscosity();
   void construct_node_maps();
   void construct_node_ks();
+  void build_ala_element_vanka_factors(struct All_variables *);
   void construct_elt_ks();
   void rebuild_BI_on_boundary();
   int lev,m,j;
@@ -785,20 +913,8 @@ void construct_stiffness_B_matrix(E)
 
   if (E->control.NMULTIGRID || E->control.NASSEMBLE) {
     construct_node_ks(E);
-    if(E->control.ala_element_vanka_smoother && E->parallel.me==0) {
-      fprintf(E->fp,
-              "ALA element-Vanka cache rebuilt levels=%d gamma=%e damping=%g\n",
-              E->mesh.gridmax-E->mesh.gridmin+1,
-              E->control.ala_augmented_lagrangian_gamma,
-              E->control.ala_element_vanka_damping);
-      fprintf(stderr,
-              "ALA element-Vanka cache rebuilt levels=%d gamma=%e damping=%g\n",
-              E->mesh.gridmax-E->mesh.gridmin+1,
-              E->control.ala_augmented_lagrangian_gamma,
-              E->control.ala_element_vanka_damping);
-      fflush(E->fp);
-      fflush(stderr);
-    }
+    if(E->control.ala_element_vanka_smoother)
+      build_ala_element_vanka_factors(E);
   }
   else {
     construct_elt_ks(E);
