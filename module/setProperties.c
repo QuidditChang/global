@@ -1178,9 +1178,6 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
        strcmp(E->control.ala_outer_solver,"fgmres") != 0)
         myerror(E, "ala_outer_solver must be pcg or fgmres");
-    if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
-       strcmp(E->control.uzawa,"ala_cg") != 0)
-        myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
     if(E->control.ala_feasibility_window < 1)
         myerror(E, "ala_feasibility_window must be at least one");
     if(E->control.ala_feasibility_min_reduction < 0.0 ||
@@ -1299,6 +1296,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         else
             myerror(E, "Error: unknown Uzawa iteration");
     }
+    if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
+       strcmp(E->control.uzawa,"ala_cg") != 0)
+        myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
     if(E->control.ala_radial_line_preconditioner &&
        (!E->control.precondition ||
         !E->control.ala_pressure_buoyancy ||

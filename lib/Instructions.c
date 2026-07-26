@@ -647,9 +647,6 @@ void read_initial_settings(struct All_variables *E)
   if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
      strcmp(E->control.ala_outer_solver,"fgmres") != 0)
       myerror(E, "ala_outer_solver must be pcg or fgmres");
-  if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
-     strcmp(E->control.uzawa,"ala_cg") != 0)
-      myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
   if(E->control.ala_feasibility_window < 1)
       myerror(E, "ala_feasibility_window must be at least one");
   if(E->control.ala_feasibility_min_reduction < 0.0 ||
@@ -775,6 +772,9 @@ void read_initial_settings(struct All_variables *E)
       else
           myerror(E, "Error: unknown Uzawa iteration\n");
   }
+  if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
+     strcmp(E->control.uzawa,"ala_cg") != 0)
+      myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
   if(E->control.ala_radial_line_preconditioner &&
      (!E->control.precondition ||
       !E->control.ala_pressure_buoyancy ||
