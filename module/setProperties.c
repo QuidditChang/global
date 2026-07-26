@@ -1057,6 +1057,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_inner_accuracy_factor, fp);
     getIntProperty(properties, "ala_pcg_restart_interval",
                    E->control.ala_pcg_restart_interval, fp);
+    getStringProperty(properties, "ala_outer_solver",
+                      E->control.ala_outer_solver, fp);
     getIntProperty(properties, "ala_feasibility_audit",
                    E->control.ala_feasibility_audit, fp);
     getIntProperty(properties, "ala_feasibility_window",
@@ -1173,6 +1175,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_inner_accuracy_factor must be positive");
     if(E->control.ala_pcg_restart_interval < 1)
         myerror(E, "ala_pcg_restart_interval must be at least one");
+    if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
+       strcmp(E->control.ala_outer_solver,"fgmres") != 0)
+        myerror(E, "ala_outer_solver must be pcg or fgmres");
+    if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
+       strcmp(E->control.uzawa,"ala_cg") != 0)
+        myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
     if(E->control.ala_feasibility_window < 1)
         myerror(E, "ala_feasibility_window must be at least one");
     if(E->control.ala_feasibility_min_reduction < 0.0 ||

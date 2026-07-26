@@ -1746,6 +1746,8 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_geneo_regularization);
     status = set_attribute_string(input, "ala_beta_element_source",
                                   E->control.ala_beta_element_source);
+    status = set_attribute_string(input, "ala_outer_solver",
+                                  E->control.ala_outer_solver);
     status = set_attribute_int(input, "ala_beta_causal_diagnostics",
                                E->control.ala_beta_causal_diagnostics);
     status = set_attribute_double(input, "ala_inner_accuracy_max",

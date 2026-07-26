@@ -121,6 +121,8 @@ class Incompressible(CitcomComponent):
                                                default=1.0e-2)
         ala_pcg_restart_interval = prop.int("ala_pcg_restart_interval",
                                             default=20)
+        ala_outer_solver = prop.str("ala_outer_solver", default="pcg",
+                                    validator=prop.choice(["pcg", "fgmres"]))
         ala_feasibility_audit = prop.bool("ala_feasibility_audit",
                                           default=False)
         ala_feasibility_window = prop.int("ala_feasibility_window",

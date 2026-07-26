@@ -526,6 +526,7 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_inner_accuracy_factor),"1.0e-2",m);
   input_int("ala_pcg_restart_interval",
             &(E->control.ala_pcg_restart_interval),"20",m);
+  input_string("ala_outer_solver",E->control.ala_outer_solver,"pcg",m);
   input_boolean("ala_feasibility_audit",
                 &(E->control.ala_feasibility_audit),"off",m);
   input_int("ala_feasibility_window",
@@ -643,6 +644,12 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_inner_accuracy_factor must be positive");
   if(E->control.ala_pcg_restart_interval < 1)
       myerror(E, "ala_pcg_restart_interval must be at least one");
+  if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
+     strcmp(E->control.ala_outer_solver,"fgmres") != 0)
+      myerror(E, "ala_outer_solver must be pcg or fgmres");
+  if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
+     strcmp(E->control.uzawa,"ala_cg") != 0)
+      myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
   if(E->control.ala_feasibility_window < 1)
       myerror(E, "ala_feasibility_window must be at least one");
   if(E->control.ala_feasibility_min_reduction < 0.0 ||
@@ -1303,6 +1310,7 @@ void global_default_values(E)
     E->control.ala_inner_accuracy_max = 1.0e-4;
     E->control.ala_inner_accuracy_factor = 1.0e-2;
     E->control.ala_pcg_restart_interval = 20;
+    strcpy(E->control.ala_outer_solver, "pcg");
     E->control.ala_feasibility_audit = 0;
     E->control.ala_feasibility_window = 20;
     E->control.ala_feasibility_min_reduction = 0.02;

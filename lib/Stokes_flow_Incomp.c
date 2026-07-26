@@ -51,6 +51,308 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                                        double **V, double **P, double **F,
                                        double imp, int *steps_max);
+struct ala_pressure_preconditioner_cache;
+static void strict_ala_continuity_metrics(struct All_variables *E,
+                                          double **V, double **r,
+                                          double **div_u, int lev,
+                                          double *mass_norm,
+                                          double *cancellation_l2);
+static double strict_ala_inner_accuracy(struct All_variables *E,
+                                        double **F, int lev,
+                                        double relative_accuracy);
+static void apply_ala_pressure_preconditioner(struct All_variables *E,
+                                              double **r, double **z,
+                                              double **work, int lev,
+                                              int iteration,
+                                              struct ala_pressure_preconditioner_cache
+                                              *cache);
+static void strict_ala_depth_diagnostics(struct All_variables *E,
+                                         double **r, double **div_u,
+                                         int lev, int iteration);
+static void strict_ala_beta_causal_diagnostics(
+    struct All_variables *E, double **V, double **active_r,
+    double **alternate_r, double **div_u, int lev, int iteration);
+static void strict_ala_coarse_residual_diagnostics(
+    struct All_variables *E, double **r, int lev, int iteration);
+/* Restarted flexible GMRES for the strict-ALA Schur equation.  The basis
+ * stores both the preconditioned pressure vectors and their velocity
+ * corrections, so the original coupled (P,V) iterate is updated with the
+ * same transpose and K^{-1} actions used by the PCG path. */
+static float solve_ala_fgmres_core(struct All_variables *E, double **V,
+                                   double **P, int *steps_max, int lev,
+                                   struct ala_pressure_preconditioner_cache
+                                   *cache, double **r, double **explicit_r,
+                                   double **div_u, double **preconditioner_work)
+{
+    void assemble_div_rho_u();
+    void assemble_grad_rho_p();
+    void strip_bcs_from_residual();
+    int solve_del2_u();
+    void parallel_process_termination();
+    double global_pdot();
+    int m,j,i,e,count,valid,levnpno,neq,restart,used;
+    int arnoldi_breakdown,converged;
+    double beta,norm,inner_accuracy,relative_residual;
+    double cancellation_l2,mass_norm,initial_mass_norm,mass_relative;
+    double initial_rnorm,residual_est,residual,delta;
+    double audit_best_cancellation;
+    double sum,explicit_norm;
+    double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
+    double **w,**tmpF,**tmpU;
+    double ***vb,***zb,***ub;
+    int max_basis;
+
+    levnpno=E->lmesh.NPNO[lev];
+    neq=E->lmesh.NEQ[lev];
+    restart=E->control.ala_pcg_restart_interval;
+    if(restart<1 || restart>64)
+        myerror(E,"ALA FGMRES restart interval must be between 1 and 64");
+    max_basis=restart+1;
+    vb=(double ***)calloc(max_basis,sizeof(double **));
+    zb=(double ***)calloc(restart,sizeof(double **));
+    ub=(double ***)calloc(restart,sizeof(double **));
+    w=(double **)calloc(NCS,sizeof(double *));
+    tmpF=(double **)calloc(NCS,sizeof(double *));
+    tmpU=(double **)calloc(NCS,sizeof(double *));
+    if(vb==NULL || zb==NULL || ub==NULL || w==NULL || tmpF==NULL ||
+       tmpU==NULL)
+        myerror(E,"Unable to allocate ALA FGMRES basis tables");
+    for(j=0;j<max_basis;j++) {
+        vb[j]=(double **)calloc(NCS,sizeof(double *));
+        if(vb[j]==NULL)
+            myerror(E,"Unable to allocate ALA FGMRES pressure basis");
+    }
+    for(j=0;j<restart;j++) {
+        zb[j]=(double **)calloc(NCS,sizeof(double *));
+        ub[j]=(double **)calloc(NCS,sizeof(double *));
+        if(zb[j]==NULL || ub[j]==NULL)
+            myerror(E,"Unable to allocate ALA FGMRES correction basis");
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        w[m]=(double *)calloc(levnpno+1,sizeof(double));
+        tmpF[m]=(double *)calloc(neq,sizeof(double));
+        tmpU[m]=(double *)calloc(neq,sizeof(double));
+        if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL)
+            myerror(E,"Unable to allocate ALA FGMRES operator workspace");
+        for(j=0;j<max_basis;j++) {
+            vb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
+            if(vb[j][m]==NULL)
+                myerror(E,"Unable to allocate ALA FGMRES Krylov basis");
+        }
+        for(j=0;j<restart;j++) {
+            zb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
+            ub[j][m]=(double *)calloc(neq,sizeof(double));
+            if(zb[j][m]==NULL || ub[j][m]==NULL)
+                myerror(E,"Unable to allocate ALA FGMRES flexible basis");
+        }
+    }
+
+    count=0;
+    initial_mass_norm=0.0;
+    assemble_div_rho_u(E,V,r,lev);
+    initial_rnorm=sqrt(global_pdot(E,r,r,lev));
+    assemble_div_rho_u(E,V,explicit_r,lev);
+    strict_ala_continuity_metrics(E,V,r,div_u,lev,&initial_mass_norm,
+                                  &cancellation_l2);
+    if(initial_rnorm<=1.0e-300)
+        initial_rnorm=1.0;
+    mass_norm=initial_mass_norm;
+    mass_relative=(initial_mass_norm>0.0) ? 1.0 : 0.0;
+    residual=cancellation_l2;
+    audit_best_cancellation=cancellation_l2;
+    converged=(cancellation_l2<E->control.tole_comp);
+    arnoldi_breakdown=0;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA FGMRES startup restart=%d\n",restart);
+        fprintf(stderr,"ALA FGMRES startup restart=%d\n",restart);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+
+    while(count<*steps_max && !converged) {
+        for(j=0;j<65;j++) {
+            g[j]=0.0;
+            for(i=0;i<64;i++)
+                h[j][i]=0.0;
+        }
+        for(j=0;j<64;j++) {
+            cs[j]=0.0;
+            sn[j]=0.0;
+            y[j]=0.0;
+            y_old[j]=0.0;
+        }
+        beta=sqrt(global_pdot(E,r,r,lev));
+        if(!isfinite(beta) || beta<=1.0e-300)
+            break;
+        g[0]=beta;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=levnpno;e++)
+                vb[0][m][e]=r[m][e]/beta;
+        used=0;
+        for(j=0;j<restart && count<*steps_max;j++) {
+            apply_ala_pressure_preconditioner(E,vb[j],zb[j],
+                                              preconditioner_work,lev,count,
+                                              cache);
+            assemble_grad_rho_p(E,zb[j],tmpF,lev);
+            inner_accuracy=strict_ala_inner_accuracy(
+                E,tmpF,lev,E->control.ala_inner_accuracy_max);
+            valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+            if(!valid)
+                parallel_process_termination();
+            strip_bcs_from_residual(E,tmpU,lev);
+            assemble_div_rho_u(E,tmpU,w,lev);
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=0;e<neq;e++)
+                    ub[j][m][e]=tmpU[m][e];
+            for(i=0;i<=j;i++) {
+                h[i][j]=global_pdot(E,w,vb[i],lev);
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=1;e<=levnpno;e++)
+                        w[m][e]-=h[i][j]*vb[i][m][e];
+            }
+            h[j+1][j]=sqrt(global_pdot(E,w,w,lev));
+            if(h[j+1][j]>1.0e-300) {
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=1;e<=levnpno;e++)
+                        vb[j+1][m][e]=w[m][e]/h[j+1][j];
+            }
+            else {
+                arnoldi_breakdown=1;
+                h[j+1][j]=0.0;
+            }
+            for(i=0;i<j;i++) {
+                sum=cs[i]*h[i][j]+sn[i]*h[i+1][j];
+                h[i+1][j]=-sn[i]*h[i][j]+cs[i]*h[i+1][j];
+                h[i][j]=sum;
+            }
+            norm=sqrt(h[j][j]*h[j][j]+h[j+1][j]*h[j+1][j]);
+            if(norm<=1.0e-300) {
+                cs[j]=1.0;
+                sn[j]=0.0;
+            }
+            else {
+                cs[j]=h[j][j]/norm;
+                sn[j]=h[j+1][j]/norm;
+            }
+            h[j][j]=cs[j]*h[j][j]+sn[j]*h[j+1][j];
+            h[j+1][j]=0.0;
+            sum=cs[j]*g[j]+sn[j]*g[j+1];
+            g[j+1]=-sn[j]*g[j]+cs[j]*g[j+1];
+            g[j]=sum;
+            used=j+1;
+            for(i=used-1;i>=0;i--) {
+                sum=g[i];
+                for(e=i+1;e<used;e++)
+                    sum-=h[i][e]*y[e];
+                y[i]=sum/h[i][i];
+            }
+            for(i=0;i<used;i++) {
+                delta=y[i]-y_old[i];
+                if(delta==0.0)
+                    continue;
+                for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                    for(e=1;e<=levnpno;e++)
+                        P[m][e]+=delta*zb[i][m][e];
+                    for(e=0;e<neq;e++)
+                        V[m][e]-=delta*ub[i][m][e];
+                }
+                y_old[i]=y[i];
+            }
+            assemble_div_rho_u(E,V,explicit_r,lev);
+            strict_ala_continuity_metrics(E,V,explicit_r,div_u,lev,
+                                          &mass_norm,&cancellation_l2);
+            mass_relative=(initial_mass_norm>0.0)
+                ? mass_norm/initial_mass_norm : 0.0;
+            residual=cancellation_l2;
+            residual_est=fabs(g[j+1])/initial_rnorm;
+            count++;
+            if(cancellation_l2<audit_best_cancellation)
+                audit_best_cancellation=cancellation_l2;
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"ALA FGMRES continuity iteration=%d "
+                        "cancellation=%e mass_relative=%e "
+                        "arnoldi_relative=%e drift=%e\n",count,
+                        cancellation_l2,mass_relative,residual_est,
+                        residual_est/max(cancellation_l2,1.0e-300));
+                fflush(E->fp);
+            }
+            strict_ala_depth_diagnostics(E,explicit_r,div_u,lev,count);
+            strict_ala_beta_causal_diagnostics(
+                E,V,explicit_r,preconditioner_work,div_u,lev,count);
+            strict_ala_coarse_residual_diagnostics(E,explicit_r,lev,count);
+            if(cancellation_l2<E->control.tole_comp)
+                converged=1;
+            if(arnoldi_breakdown)
+                break;
+            for(i=0;i<used;i++)
+                y_old[i]=y[i];
+        }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=levnpno;e++)
+                r[m][e]=explicit_r[m][e];
+        if(E->parallel.me==0)
+            fprintf(E->fp,"ALA FGMRES restart cycle completed count=%d "
+                    "residual=%e arnoldi_breakdown=%d\n",count,
+                    residual,arnoldi_breakdown);
+        if(arnoldi_breakdown)
+            break;
+    }
+    explicit_norm=sqrt(global_pdot(E,explicit_r,explicit_r,lev));
+    relative_residual=explicit_norm/initial_rnorm;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA FGMRES operator audit restarts=%d iterations=%d "
+                "basis=%d final=%e best=%e algebraic_relative=%e\n",
+                (count+restart-1)/restart,count,restart,residual,
+                audit_best_cancellation,relative_residual);
+        fprintf(E->fp,"ALA_FEASIBILITY_SUMMARY status=%s final=%e "
+                "best=%e target=%e iterations=%d\n",
+                converged ? "discrete_target_reached"
+                          : "iteration_budget_exhausted",
+                residual,audit_best_cancellation,E->control.tole_comp,count);
+        fflush(E->fp);
+    }
+    if(!converged) {
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"Strict ALA FGMRES failed physical continuity: "
+                    "cancellation=%e tolerance=%e iterations=%d "
+                    "arnoldi_breakdown=%d\n",residual,
+                    E->control.tole_comp,count,arnoldi_breakdown);
+            fprintf(stderr,"Strict ALA FGMRES failed physical continuity: "
+                    "cancellation=%e tolerance=%e iterations=%d "
+                    "arnoldi_breakdown=%d\n",residual,
+                    E->control.tole_comp,count,arnoldi_breakdown);
+            fflush(E->fp);
+        }
+        parallel_process_termination();
+    }
+    *steps_max=count;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)w[m]);
+        free((void *)tmpF[m]);
+        free((void *)tmpU[m]);
+        for(j=0;j<max_basis;j++)
+            free((void *)vb[j][m]);
+        for(j=0;j<restart;j++) {
+            free((void *)zb[j][m]);
+            free((void *)ub[j][m]);
+        }
+    }
+    for(j=0;j<max_basis;j++)
+        free((void *)vb[j]);
+    for(j=0;j<restart;j++) {
+        free((void *)zb[j]);
+        free((void *)ub[j]);
+    }
+    free((void *)vb);
+    free((void *)zb);
+    free((void *)ub);
+    free((void *)w);
+    free((void *)tmpF);
+    free((void *)tmpU);
+    return((float)residual);
+}
+
+
 static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
                                       double **V, double **P, double **F,
                                       double imp, int *steps_max);
@@ -3699,12 +4001,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         preconditioner_mode="diagonal";
     if(E->parallel.me == 0) {
         fprintf(E->fp,
-                "ALA PCG pressure preconditioner = %s mode=%s "
+                "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
                 E->control.precondition ? "on" : "off",
+                E->control.ala_outer_solver,
                 preconditioner_mode,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
@@ -3718,12 +4021,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 preconditioner_cache.geneo_basis_count,
                 E->control.ala_geneo_weight);
         fprintf(stderr,
-                "ALA PCG pressure preconditioner = %s mode=%s "
+                "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
                 E->control.precondition ? "on" : "off",
+                E->control.ala_outer_solver,
                 preconditioner_mode,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
@@ -3812,6 +4116,27 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     for(m=1; m<=E->sphere.caps_per_proc; m++)
         for(j=0; j<neq; j++)
             F[m][j] = FF[m][j];
+
+    if(strcmp(E->control.ala_outer_solver,"fgmres")==0) {
+        residual=solve_ala_fgmres_core(
+            E,V,P,steps_max,lev,&preconditioner_cache,r,
+            explicit_r,div_u,preconditioner_work);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            free((void *)F[m]);
+            free((void *)r[m]);
+            free((void *)z[m]);
+            free((void *)p[m]);
+            free((void *)q[m]);
+            free((void *)explicit_r[m]);
+            free((void *)div_u[m]);
+            free((void *)preconditioner_work[m]);
+        }
+        if(E->control.ala_shallow_patch_preconditioner ||
+           E->control.ala_two_level_preconditioner ||
+           E->control.ala_geneo_preconditioner)
+            free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
+        return(residual);
+    }
 
     /* FF contains the current -C^T*P forcing.  Pressure increments below
      * apply the complete strict-ALA transpose explicitly. */
