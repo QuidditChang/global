@@ -1639,6 +1639,8 @@ static void build_ala_geneo_coarse_cache(struct All_variables *E,
     int *active_map,*mode_counts,*mode_offsets;
     double depth,value,norm,local_eigen_min,local_eigen_max;
     double global_eigen_min,global_eigen_max,threshold;
+    double local_second_min,local_second_max;
+    double global_second_min,global_second_max;
     double *aggregate,*normalized,*vectors,*eigenvalues,*local_selected;
     double *local_column,*global_column,*matrix;
     double *coarse_p[NCS],*coarse_Ap[NCS];
@@ -1949,9 +1951,15 @@ static void build_ala_geneo_coarse_cache(struct All_variables *E,
     }
     local_eigen_min=(local_modes>0) ? local_selected[0] : 1.0e300;
     local_eigen_max=(local_modes>0) ? local_selected[local_modes-1] : 0.0;
+    local_second_min=(nactive>1) ? eigenvalues[1] : 1.0e300;
+    local_second_max=(nactive>1) ? eigenvalues[1] : 0.0;
     MPI_Allreduce(&local_eigen_min,&global_eigen_min,1,MPI_DOUBLE,MPI_MIN,
                   E->parallel.world);
     MPI_Allreduce(&local_eigen_max,&global_eigen_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&local_second_min,&global_second_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_second_max,&global_second_max,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
     local_active_rank=(local_modes>0) ? 1 : 0;
     local_mode_min=(local_modes>0) ? local_modes : 1000000000;
@@ -1972,22 +1980,25 @@ static void build_ala_geneo_coarse_cache(struct All_variables *E,
                 "active_ranks=%d local_mode_range=(%d,%d) "
                 "aggregate_bins=%dx%dx%d "
                 "threshold=%e selected_eigen_range=(%e,%e) "
+                "second_eigen_range=(%e,%e) "
                 "local_jacobi_iterations=%d Galerkin_applications=%d "
                 "symmetry_defect=%e diagonal_range=(%e,%e) "
                 "regularization=%e shift=%e min_pivot=%e "
                 "setup_seconds_max=%e status=pass\n",
                 n,global_active_ranks,global_mode_min,global_mode_max,
                 hbins,hbins,rbins,threshold,global_eigen_min,global_eigen_max,
-                global_iterations,n,
+                global_second_min,global_second_max,global_iterations,n,
                 symmetry,diagonal_min,diagonal_max,
                 E->control.ala_geneo_regularization,shift,min_pivot,
                 global_setup_seconds);
         fprintf(stderr,"ALA GenEO coarse space global_modes=%d "
                 "aggregate_bins=%dx%dx%d threshold=%e "
-                "selected_eigen_range=(%e,%e) Galerkin_applications=%d "
+                "selected_eigen_range=(%e,%e) second_eigen_range=(%e,%e) "
+                "Galerkin_applications=%d "
                 "symmetry_defect=%e setup_seconds_max=%e status=pass\n",
                 n,hbins,hbins,rbins,threshold,global_eigen_min,
-                global_eigen_max,n,symmetry,global_setup_seconds);
+                global_eigen_max,global_second_min,global_second_max,n,
+                symmetry,global_setup_seconds);
         fflush(E->fp);
         fflush(stderr);
     }
