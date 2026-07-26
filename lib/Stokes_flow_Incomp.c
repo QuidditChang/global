@@ -62,6 +62,8 @@ static double strict_ala_continuity_term_strength(struct All_variables *E,
                                                   double **div_u, int lev);
 static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double **V, double **P,
+                                               double **grad_work,
+                                               double **residual_work,
                                                int lev, double *rms,
                                                double *relative);
 static double strict_ala_inner_accuracy(struct All_variables *E,
@@ -182,7 +184,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
-    strict_ala_momentum_residual_audit(E,V,P,lev,
+    strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev,
                                        &momentum_rms,&momentum_relative);
     if(E->parallel.me==0)
         fprintf(E->fp,"ALA FGMRES momentum audit restart=0 "
@@ -317,7 +319,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=levnpno;e++)
                 r[m][e]=explicit_r[m][e];
-        strict_ala_momentum_residual_audit(E,V,P,lev,
+        strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev,
                                            &momentum_rms,&momentum_relative);
         if(E->parallel.me==0)
             fprintf(E->fp,"ALA FGMRES restart cycle completed count=%d "
@@ -3161,17 +3163,18 @@ static double strict_ala_continuity_term_strength(struct All_variables *E,
 }
 
 
-/* Read-only audit of the original, unaugmented momentum equation at the
- * current (V,P) iterate. The supplied force is kept unchanged; this helper
- * does not feed its residual back into any Krylov recurrence. */
+/* Audit the original, unaugmented momentum equation at the current (V,P)
+ * iterate. Reuse FGMRES work arrays and do not feed the result into any
+ * Krylov recurrence. */
 static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double **V, double **P,
+                                               double **grad_work,
+                                               double **residual_work,
                                                int lev, double *rms,
                                                double *relative)
 {
     int m, i, neq, gneq;
     double force_norm, residual_norm;
-    double *ku[NCS], *grad_p[NCS], *residual[NCS], *force_audit[NCS];
     void assemble_unaugmented_del2_u();
     void assemble_forces();
     void assemble_grad_p();
@@ -3180,41 +3183,22 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
 
     neq = E->lmesh.neq;
     gneq = E->mesh.neq;
-    for(m=1; m<=E->sphere.caps_per_proc; m++) {
-        ku[m] = (double *)calloc(neq,sizeof(double));
-        grad_p[m] = (double *)calloc(neq,sizeof(double));
-        residual[m] = (double *)calloc(neq,sizeof(double));
-        force_audit[m] = (double *)calloc(neq,sizeof(double));
-        if(ku[m] == NULL || grad_p[m] == NULL || residual[m] == NULL ||
-           force_audit[m] == NULL)
-            myerror(E,"Unable to allocate ALA momentum audit workspace");
-    }
-
     /* Rebuild the force so its strict-ALA C^T P contribution matches the
      * current pressure iterate, exactly as in the post-solve audit. */
     assemble_forces(E,0);
-    assemble_unaugmented_del2_u(E,V,ku,lev,1);
-    assemble_grad_p(E,P,grad_p,lev);
-    for(m=1; m<=E->sphere.caps_per_proc; m++)
-        for(i=0; i<neq; i++)
-            force_audit[m][i] = E->F[m][i];
-    strip_bcs_from_residual(E,force_audit,lev);
+    assemble_unaugmented_del2_u(E,V,residual_work,lev,1);
+    assemble_grad_p(E,P,grad_work,lev);
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         for(i=0; i<neq; i++)
-            residual[m][i] = force_audit[m][i] - grad_p[m][i] - ku[m][i];
-        strip_bcs_from_residual(E,residual,lev);
+            residual_work[m][i] = E->F[m][i] - grad_work[m][i]
+                                 - residual_work[m][i];
     }
-    force_norm = sqrt(max(global_vdot(E,force_audit,force_audit,lev),0.0));
-    residual_norm = sqrt(max(global_vdot(E,residual,residual,lev),0.0));
+    strip_bcs_from_residual(E,residual_work,lev);
+    force_norm = sqrt(max(global_vdot(E,E->F,E->F,lev),0.0));
+    residual_norm = sqrt(max(global_vdot(E,residual_work,residual_work,lev),
+                             0.0));
     *rms = residual_norm / sqrt(max((double)gneq,1.0));
     *relative = residual_norm / max(force_norm,1.0e-32);
-
-    for(m=1; m<=E->sphere.caps_per_proc; m++) {
-        free((void *)ku[m]);
-        free((void *)grad_p[m]);
-        free((void *)residual[m]);
-        free((void *)force_audit[m]);
-    }
 }
 
 
