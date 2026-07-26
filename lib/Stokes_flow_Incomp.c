@@ -62,8 +62,8 @@ static double strict_ala_continuity_term_strength(struct All_variables *E,
                                                   double **div_u, int lev);
 static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double **V, double **P,
-                                               double **force, int lev,
-                                               double *rms, double *relative);
+                                               int lev, double *rms,
+                                               double *relative);
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
@@ -88,8 +88,7 @@ static void strict_ala_coarse_residual_diagnostics(
 static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                                    double **P, int *steps_max, int lev,
                                    struct ala_pressure_preconditioner_cache
-                                   *cache, double **force, double **r,
-                                   double **explicit_r,
+                                   *cache, double **r, double **explicit_r,
                                    double **div_u, double **preconditioner_work)
 {
     void assemble_div_rho_u();
@@ -183,7 +182,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
-    strict_ala_momentum_residual_audit(E,V,P,force,lev,
+    strict_ala_momentum_residual_audit(E,V,P,lev,
                                        &momentum_rms,&momentum_relative);
     if(E->parallel.me==0)
         fprintf(E->fp,"ALA FGMRES momentum audit restart=0 "
@@ -318,7 +317,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=levnpno;e++)
                 r[m][e]=explicit_r[m][e];
-        strict_ala_momentum_residual_audit(E,V,P,force,lev,
+        strict_ala_momentum_residual_audit(E,V,P,lev,
                                            &momentum_rms,&momentum_relative);
         if(E->parallel.me==0)
             fprintf(E->fp,"ALA FGMRES restart cycle completed count=%d "
@@ -3167,13 +3166,14 @@ static double strict_ala_continuity_term_strength(struct All_variables *E,
  * does not feed its residual back into any Krylov recurrence. */
 static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double **V, double **P,
-                                               double **force, int lev,
-                                               double *rms, double *relative)
+                                               int lev, double *rms,
+                                               double *relative)
 {
     int m, i, neq, gneq;
     double force_norm, residual_norm;
     double *ku[NCS], *grad_p[NCS], *residual[NCS], *force_audit[NCS];
     void assemble_unaugmented_del2_u();
+    void assemble_forces();
     void assemble_grad_p();
     void strip_bcs_from_residual();
     double global_vdot();
@@ -3190,11 +3190,14 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
             myerror(E,"Unable to allocate ALA momentum audit workspace");
     }
 
+    /* Rebuild the force so its strict-ALA C^T P contribution matches the
+     * current pressure iterate, exactly as in the post-solve audit. */
+    assemble_forces(E,0);
     assemble_unaugmented_del2_u(E,V,ku,lev,1);
     assemble_grad_p(E,P,grad_p,lev);
     for(m=1; m<=E->sphere.caps_per_proc; m++)
         for(i=0; i<neq; i++)
-            force_audit[m][i] = force[m][i];
+            force_audit[m][i] = E->F[m][i];
     strip_bcs_from_residual(E,force_audit,lev);
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         for(i=0; i<neq; i++)
@@ -4232,8 +4235,12 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             F[m][j] = FF[m][j];
 
     if(strcmp(E->control.ala_outer_solver,"fgmres")==0) {
+        /* Start from the same momentum-consistent velocity used by PCG.
+         * Skipping this correction makes Gu small without solving the
+         * coupled strict-ALA momentum equation. */
+        initial_vel_residual(E,V,P,F,imp);
         residual=solve_ala_fgmres_core(
-            E,V,P,steps_max,lev,&preconditioner_cache,F,r,
+            E,V,P,steps_max,lev,&preconditioner_cache,r,
             explicit_r,div_u,preconditioner_work);
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             free((void *)F[m]);
