@@ -57,6 +57,9 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
                                           double **div_u, int lev,
                                           double *mass_norm,
                                           double *cancellation_l2);
+static double strict_ala_continuity_term_strength(struct All_variables *E,
+                                                  double **r,
+                                                  double **div_u, int lev);
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
@@ -90,10 +93,13 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     int solve_del2_u();
     void parallel_process_termination();
     double global_pdot();
+    double global_vdot();
     int m,j,i,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
     double beta,norm,inner_accuracy,relative_residual;
     double cancellation_l2,mass_norm,initial_mass_norm,mass_relative;
+    double term_strength,initial_term_strength,velocity_norm;
+    double initial_velocity_norm;
     double initial_rnorm,residual_est,residual,delta;
     double audit_best_cancellation;
     double sum,explicit_norm;
@@ -154,6 +160,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     assemble_div_rho_u(E,V,explicit_r,lev);
     strict_ala_continuity_metrics(E,V,r,div_u,lev,&initial_mass_norm,
                                   &cancellation_l2);
+    initial_term_strength = strict_ala_continuity_term_strength(
+        E,r,div_u,lev);
+    initial_velocity_norm = sqrt(max(global_vdot(E,V,V,lev),0.0));
     if(initial_rnorm<=1.0e-300)
         initial_rnorm=1.0;
     mass_norm=initial_mass_norm;
@@ -261,6 +270,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             assemble_div_rho_u(E,V,explicit_r,lev);
             strict_ala_continuity_metrics(E,V,explicit_r,div_u,lev,
                                           &mass_norm,&cancellation_l2);
+            term_strength = strict_ala_continuity_term_strength(
+                E,explicit_r,div_u,lev);
+            velocity_norm = sqrt(max(global_vdot(E,V,V,lev),0.0));
             mass_relative=(initial_mass_norm>0.0)
                 ? mass_norm/initial_mass_norm : 0.0;
             residual=cancellation_l2;
@@ -271,9 +283,14 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             if(E->parallel.me==0) {
                 fprintf(E->fp,"ALA FGMRES continuity iteration=%d "
                         "cancellation=%e mass_relative=%e "
-                        "arnoldi_relative=%e drift=%e\n",count,
+                        "arnoldi_relative=%e drift=%e "
+                        "term_strength=%e term_strength_relative=%e "
+                        "velocity_relative=%e\n",count,
                         cancellation_l2,mass_relative,residual_est,
-                        residual_est/max(cancellation_l2,1.0e-300));
+                        residual_est/max(cancellation_l2,1.0e-300),
+                        term_strength,
+                        term_strength/max(initial_term_strength,1.0e-300),
+                        velocity_norm/max(initial_velocity_norm,1.0e-300));
                 fflush(E->fp);
             }
             strict_ala_depth_diagnostics(E,explicit_r,div_u,lev,count);
@@ -3102,6 +3119,34 @@ static void strict_ala_continuity_metrics(struct All_variables *E,
 }
 
 
+/* The cancellation denominator is a physical-strength diagnostic, not an
+ * algebraic residual norm. Track it explicitly so a shrinking velocity
+ * field cannot be mistaken for improved D/C balance. */
+static double strict_ala_continuity_term_strength(struct All_variables *E,
+                                                  double **r,
+                                                  double **div_u, int lev)
+{
+    int m, e, nel;
+    double volume, div_e, c_e, scale_e, local, global;
+
+    nel = E->lmesh.NEL[lev];
+    local = 0.0;
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=nel; e++) {
+            volume = E->eco[m][e].area;
+            if(volume <= 0.0)
+                continue;
+            div_e = div_u[m][e];
+            c_e = r[m][e] - div_e;
+            scale_e = fabs(div_e) + fabs(c_e);
+            local += scale_e * scale_e / volume;
+        }
+    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM,
+                  E->parallel.world);
+    return sqrt(max(global, 0.0));
+}
+
+
 static void strict_ala_depth_diagnostics(struct All_variables *E,
                                          double **r, double **div_u,
                                          int lev, int iteration)
@@ -3818,6 +3863,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double recursive_rnorm, recursive_relative_residual, drift_ratio;
     double initial_mass_norm, mass_norm, mass_relative_residual;
     double cancellation_l2;
+    double initial_term_strength, term_strength;
     double inner_accuracy, inner_relative_accuracy;
     double local_bpi_min, local_bpi_max;
     double global_bpi_min, global_bpi_max;
@@ -4148,6 +4194,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     relative_residual = (initial_rnorm > 0.0) ? 1.0 : 0.0;
     strict_ala_continuity_metrics(E, V, r, div_u, lev,
                                   &initial_mass_norm, &cancellation_l2);
+    initial_term_strength = strict_ala_continuity_term_strength(
+        E,r,div_u,lev);
     mass_norm = initial_mass_norm;
     mass_relative_residual = (initial_mass_norm > 0.0) ? 1.0 : 0.0;
 
@@ -4159,9 +4207,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                                    dvelocity, dpressure);
         fprintf(E->fp,
                 "ALA PCG continuity residuals: cancellation=%e "
-                "mass_relative=%e algebraic_relative=%e\n",
+                "mass_relative=%e algebraic_relative=%e "
+                "term_strength=%e term_strength_relative=%e\n",
                 cancellation_l2, mass_relative_residual,
-                relative_residual);
+                relative_residual, initial_term_strength, 1.0);
     }
     strict_ala_depth_diagnostics(E, r, div_u, lev, count);
     strict_ala_beta_causal_diagnostics(
@@ -4288,6 +4337,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             ? rnorm / initial_rnorm : 0.0;
         strict_ala_continuity_metrics(E, V, explicit_r, div_u, lev,
                                       &mass_norm, &cancellation_l2);
+        term_strength = strict_ala_continuity_term_strength(
+            E,explicit_r,div_u,lev);
         mass_relative_residual = (initial_mass_norm > 0.0)
             ? mass_norm / initial_mass_norm : 0.0;
         drift_ratio = (relative_residual > 0.0)
@@ -4364,10 +4415,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     "ALA PCG continuity residuals: cancellation=%e "
                     "mass_relative=%e algebraic_relative=%e "
                     "recursive_algebraic=%e drift=%e inner_rel=%e "
-                    "curvature=%e\n",
+                    "curvature=%e term_strength=%e "
+                    "term_strength_relative=%e\n",
                     cancellation_l2, mass_relative_residual,
                     relative_residual, recursive_relative_residual,
-                    drift_ratio, inner_relative_accuracy, curvature);
+                    drift_ratio, inner_relative_accuracy, curvature,
+                    term_strength,
+                    term_strength/max(initial_term_strength,1.0e-300));
             if(E->control.ala_hybrid_convergence)
                 fprintf(E->fp,
                         "ALA hybrid convergence streak = %d/%d "
