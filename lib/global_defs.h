@@ -513,6 +513,15 @@ struct CONTROL {
     double ala_shallow_patch_weight;
     double ala_shallow_patch_regularization;
     int ala_shallow_patch_mpi_overlap;
+    int ala_geneo_preconditioner;
+    double ala_geneo_eigenvalue_threshold;
+    int ala_geneo_min_modes_per_rank;
+    int ala_geneo_max_modes_per_rank;
+    int ala_geneo_horizontal_bins;
+    int ala_geneo_radial_bins;
+    int ala_geneo_max_global_modes;
+    double ala_geneo_weight;
+    double ala_geneo_regularization;
     int ala_radial_line_preconditioner;
     int ala_element_vanka_smoother;
     double ala_element_vanka_damping;

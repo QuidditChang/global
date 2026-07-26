@@ -89,6 +89,7 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_GLOBAL_RADIAL_BASIS 6
 #define ALA_GLOBAL_BASIS_COUNT \
     (ALA_GLOBAL_ANGULAR_BASIS*ALA_GLOBAL_RADIAL_BASIS)
+#define ALA_GENEO_MAX_BINS 256
 #define ALA_PATCH_MAX_ELEMENTS \
     (4*ALA_PATCH_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
@@ -114,6 +115,14 @@ struct ala_pressure_preconditioner_cache {
     double *global_matrix;
     double *global_chol;
     int global_basis_count;
+    double *geneo_basis[NCS];
+    double *geneo_matrix;
+    double *geneo_chol;
+    double *geneo_eigenvalues;
+    int geneo_basis_count;
+    int geneo_local_modes;
+    int geneo_local_offset;
+    int geneo_schur_applications;
     double coarse_eigenvalue_min;
     double coarse_eigenvalue_max;
     double velocity_eigenvalue_min;
@@ -132,8 +141,128 @@ static void calibrate_ala_velocity_spectrum(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void build_ala_global_coarse_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
+static void build_ala_geneo_coarse_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
+static void apply_ala_geneo_correction(struct All_variables *E,
+    double **r, double **z, int lev, int iteration,
+    struct ala_pressure_preconditioner_cache *cache);
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache);
+static void apply_ala_geneo_correction(struct All_variables *E,
+    double **r, double **z, int lev, int iteration,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int m,e,ex,ey,ez,cx,cy,cz,ce,i,j,n,clev,factor;
+    int celx,celz,cnpno,stride;
+    double sum,correction,local_energy,global_energy;
+    double residual2,rhs2;
+    double *coarse_rhs[NCS];
+    double *local_rhs,*global_rhs,*solution;
+
+    n=cache->geneo_basis_count;
+    if(n<=0)
+        myerror(E,"ALA GenEO correction has no basis");
+    clev=lev-E->control.ala_two_level_offset;
+    factor=1 << E->control.ala_two_level_offset;
+    celx=E->lmesh.ELX[clev];
+    celz=E->lmesh.ELZ[clev];
+    cnpno=E->lmesh.NPNO[clev];
+    stride=cnpno+1;
+    local_rhs=(double *)calloc(n,sizeof(double));
+    global_rhs=(double *)calloc(n,sizeof(double));
+    solution=(double *)calloc(n,sizeof(double));
+    if(local_rhs==NULL || global_rhs==NULL || solution==NULL)
+        myerror(E,"Unable to allocate ALA GenEO solve vectors");
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        coarse_rhs[m]=(double *)calloc(cnpno+1,sizeof(double));
+        if(coarse_rhs[m]==NULL)
+            myerror(E,"Unable to allocate ALA GenEO restricted residual");
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+            for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
+                for(ez=1;ez<=E->lmesh.ELZ[lev];ez++) {
+                    e=ez+(ex-1)*E->lmesh.ELZ[lev]
+                        +(ey-1)*E->lmesh.ELZ[lev]*E->lmesh.ELX[lev];
+                    cx=(ex-1)/factor+1;
+                    cy=(ey-1)/factor+1;
+                    cz=(ez-1)/factor+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    coarse_rhs[m][ce] += r[m][e];
+                }
+    for(i=cache->geneo_local_offset;
+        i<cache->geneo_local_offset+cache->geneo_local_modes;i++)
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                local_rhs[i] += cache->geneo_basis[m][i*stride+ce]
+                    *coarse_rhs[m][ce];
+    MPI_Allreduce(local_rhs,global_rhs,n,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    for(i=0;i<n;i++) {
+        sum=global_rhs[i];
+        for(j=0;j<i;j++)
+            sum -= cache->geneo_chol[i*n+j]*solution[j];
+        solution[i]=sum/cache->geneo_chol[i*n+i];
+    }
+    for(i=n-1;i>=0;i--) {
+        sum=solution[i];
+        for(j=i+1;j<n;j++)
+            sum -= cache->geneo_chol[j*n+i]*solution[j];
+        solution[i]=sum/cache->geneo_chol[i*n+i];
+    }
+    local_energy=0.0;
+    for(i=cache->geneo_local_offset;
+        i<cache->geneo_local_offset+cache->geneo_local_modes;i++)
+        local_energy += global_rhs[i]*solution[i];
+    MPI_Allreduce(&local_energy,&global_energy,1,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+            for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
+                for(ez=1;ez<=E->lmesh.ELZ[lev];ez++) {
+                    e=ez+(ex-1)*E->lmesh.ELZ[lev]
+                        +(ey-1)*E->lmesh.ELZ[lev]*E->lmesh.ELX[lev];
+                    cx=(ex-1)/factor+1;
+                    cy=(ey-1)/factor+1;
+                    cz=(ez-1)/factor+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    correction=0.0;
+                    for(i=cache->geneo_local_offset;
+                        i<cache->geneo_local_offset
+                          +cache->geneo_local_modes;i++)
+                        correction += cache->geneo_basis[m][i*stride+ce]
+                            *solution[i];
+                    z[m][e] += E->control.ala_geneo_weight*correction;
+                }
+    if(iteration==0 ||
+       iteration%E->control.ala_coarse_residual_interval==0) {
+        residual2=0.0;
+        rhs2=0.0;
+        for(i=0;i<n;i++) {
+            sum=0.0;
+            for(j=0;j<n;j++)
+                sum += 0.5*(cache->geneo_matrix[i*n+j]
+                            +cache->geneo_matrix[j*n+i])*solution[j];
+            residual2 += (global_rhs[i]-sum)*(global_rhs[i]-sum);
+            rhs2 += global_rhs[i]*global_rhs[i];
+        }
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA_GENEO_COARSE_SOLVE iteration=%d modes=%d "
+                    "projected_rhs_norm=%e residual_reduction=%e "
+                    "coarse_energy=%e weight=%e\n",iteration,n,sqrt(rhs2),
+                    sqrt(residual2/max(rhs2,1.0e-300)),global_energy,
+                    E->control.ala_geneo_weight);
+            fflush(E->fp);
+        }
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        free((void *)coarse_rhs[m]);
+    free((void *)local_rhs);
+    free((void *)global_rhs);
+    free((void *)solution);
+}
+
+
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
                                               double **work, int lev,
@@ -962,9 +1091,13 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         }
         free((void *)cache->coarse_bpi[m]);
         free((void *)cache->global_basis[m]);
+        free((void *)cache->geneo_basis[m]);
     }
     free((void *)cache->global_chol);
     free((void *)cache->global_matrix);
+    free((void *)cache->geneo_chol);
+    free((void *)cache->geneo_matrix);
+    free((void *)cache->geneo_eigenvalues);
     memset(cache,0,sizeof(*cache));
 }
 
@@ -1412,6 +1545,475 @@ static void build_ala_global_coarse_cache(struct All_variables *E,
 }
 
 
+static int ala_geneo_bin(int ex, int ey, int ez, int elx, int ely,
+                         int shallow_min_ez, int shallow_layers,
+                         int horizontal_bins, int radial_bins)
+{
+    int bx,by,bz;
+    if(ez<shallow_min_ez || shallow_layers<=0)
+        return(-1);
+    bx=min((ex-1)*horizontal_bins/elx,horizontal_bins-1);
+    by=min((ey-1)*horizontal_bins/ely,horizontal_bins-1);
+    bz=min((ez-shallow_min_ez)*radial_bins/shallow_layers,radial_bins-1);
+    return(bz+radial_bins*(bx+horizontal_bins*by));
+}
+
+
+/* Dense symmetric Jacobi eigensolver for the small local GenEO aggregate
+   problem.  Eigenvectors are returned by columns. */
+static int ala_geneo_jacobi_eigensolve(double *a, double *vectors,
+                                       double *eigenvalues, int n)
+{
+    int i,j,k,p,q,iteration,max_iterations;
+    double offdiag,maximum,app,aqq,apq,tau,t,c,s,akp,akq,vkp,vkq;
+    const double tolerance=1.0e-12;
+
+    for(i=0;i<n;i++)
+        for(j=0;j<n;j++)
+            vectors[i*n+j]=(i==j) ? 1.0 : 0.0;
+    max_iterations=max(50*n*n,1);
+    for(iteration=0;iteration<max_iterations;iteration++) {
+        maximum=0.0;
+        p=0;
+        q=0;
+        for(i=0;i<n;i++)
+            for(j=i+1;j<n;j++) {
+                offdiag=fabs(a[i*n+j]);
+                if(offdiag>maximum) {
+                    maximum=offdiag;
+                    p=i;
+                    q=j;
+                }
+            }
+        if(maximum<=tolerance)
+            break;
+        app=a[p*n+p];
+        aqq=a[q*n+q];
+        apq=a[p*n+q];
+        tau=(aqq-app)/(2.0*apq);
+        t=((tau>=0.0) ? 1.0 : -1.0)
+            /(fabs(tau)+sqrt(1.0+tau*tau));
+        c=1.0/sqrt(1.0+t*t);
+        s=t*c;
+        for(k=0;k<n;k++)
+            if(k!=p && k!=q) {
+                akp=a[k*n+p];
+                akq=a[k*n+q];
+                a[k*n+p]=c*akp-s*akq;
+                a[p*n+k]=a[k*n+p];
+                a[k*n+q]=s*akp+c*akq;
+                a[q*n+k]=a[k*n+q];
+            }
+        a[p*n+p]=c*c*app-2.0*s*c*apq+s*s*aqq;
+        a[q*n+q]=s*s*app+2.0*s*c*apq+c*c*aqq;
+        a[p*n+q]=0.0;
+        a[q*n+p]=0.0;
+        for(k=0;k<n;k++) {
+            vkp=vectors[k*n+p];
+            vkq=vectors[k*n+q];
+            vectors[k*n+p]=c*vkp-s*vkq;
+            vectors[k*n+q]=s*vkp+c*vkq;
+        }
+    }
+    for(i=0;i<n;i++)
+        eigenvalues[i]=a[i*n+i];
+    return(iteration);
+}
+
+
+/* Build a subdomain-adaptive shallow pressure space.  Each rank compresses
+   its shallow cells into a small 4x4x2-style aggregate problem and solves
+   A_i phi=lambda diag(A_i) phi.  The selected low-energy modes have disjoint
+   rank ownership; their complete global coupling is then assembled with the
+   same fixed strict-ALA Galerkin Schur map used by the legacy coarse space. */
+static void build_ala_geneo_coarse_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int m,i,j,k,col,row,e1,e2,ex1,ey1,ez1,ex2,ey2,ez2;
+    int dx,dy,dz,bin1,bin2,active1,active2,nbins,nactive;
+    int hbins,rbins,elx,ely,elz,shallow_min_ez,shallow_layers;
+    int clev,factor,celx,cely,celz,cnpno,stride,npno,neq;
+    int cx,cy,cz,ce,local_modes,n,iterations,global_iterations;
+    int local_active_rank,global_active_ranks;
+    int local_mode_min,local_mode_max,global_mode_min,global_mode_max;
+    int *active_map,*mode_counts,*mode_offsets;
+    double depth,value,norm,local_eigen_min,local_eigen_max;
+    double global_eigen_min,global_eigen_max,threshold;
+    double *aggregate,*normalized,*vectors,*eigenvalues,*local_selected;
+    double *local_column,*global_column,*matrix;
+    double *coarse_p[NCS],*coarse_Ap[NCS];
+    double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
+    double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
+    double *fine_velocity_direction[NCS];
+    double anti2,total2,symmetry,diagonal_min,diagonal_max;
+    double shift,sum,pivot,min_pivot,setup_start,setup_seconds;
+    double global_setup_seconds;
+    double CPU_time0();
+
+    setup_start=CPU_time0();
+    hbins=E->control.ala_geneo_horizontal_bins;
+    rbins=E->control.ala_geneo_radial_bins;
+    nbins=hbins*hbins*rbins;
+    if(nbins>ALA_GENEO_MAX_BINS)
+        myerror(E,"ALA GenEO aggregate dimension exceeds compiled maximum");
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    shallow_min_ez=elz+1;
+    for(ez1=elz;ez1>=1;ez1--) {
+        depth=(1.0-0.5*(E->sx[1][3][ez1]+E->sx[1][3][ez1+1]))
+            *E->data.radius_km;
+        if(depth>E->control.ala_shallow_patch_depth_km)
+            break;
+        shallow_min_ez=ez1;
+    }
+    shallow_layers=(shallow_min_ez<=elz) ? elz-shallow_min_ez+1 : 0;
+
+    aggregate=(double *)calloc(nbins*nbins,sizeof(double));
+    active_map=(int *)calloc(nbins,sizeof(int));
+    normalized=(double *)calloc(nbins*nbins,sizeof(double));
+    vectors=(double *)calloc(nbins*nbins,sizeof(double));
+    eigenvalues=(double *)calloc(nbins,sizeof(double));
+    local_selected=(double *)calloc(
+        E->control.ala_geneo_max_modes_per_rank,sizeof(double));
+    mode_counts=(int *)calloc(E->parallel.nproc,sizeof(int));
+    mode_offsets=(int *)calloc(E->parallel.nproc,sizeof(int));
+    if(aggregate==NULL || active_map==NULL || normalized==NULL ||
+       vectors==NULL || eigenvalues==NULL || local_selected==NULL ||
+       mode_counts==NULL || mode_offsets==NULL)
+        myerror(E,"Unable to allocate ALA GenEO local eigenproblem");
+
+    if(shallow_layers>0) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ey1=1;ey1<=ely;ey1++)
+                for(ex1=1;ex1<=elx;ex1++)
+                    for(ez1=shallow_min_ez;ez1<=elz;ez1++) {
+                        e1=ez1+(ex1-1)*elz+(ey1-1)*elz*elx;
+                        bin1=ala_geneo_bin(ex1,ey1,ez1,elx,ely,
+                            shallow_min_ez,shallow_layers,hbins,rbins);
+                        for(dy=-1;dy<=1;dy++) {
+                            ey2=ey1+dy;
+                            if(ey2<1 || ey2>ely)
+                                continue;
+                            for(dx=-1;dx<=1;dx++) {
+                                ex2=ex1+dx;
+                                if(ex2<1 || ex2>elx)
+                                    continue;
+                                for(dz=-1;dz<=1;dz++) {
+                                    ez2=ez1+dz;
+                                    if(ez2<shallow_min_ez || ez2>elz)
+                                        continue;
+                                    e2=ez2+(ex2-1)*elz
+                                        +(ey2-1)*elz*elx;
+                                    bin2=ala_geneo_bin(ex2,ey2,ez2,elx,ely,
+                                        shallow_min_ez,shallow_layers,
+                                        hbins,rbins);
+                                    aggregate[bin1*nbins+bin2] +=
+                                        assemble_Ahatp_jacobi_entry(
+                                            E,e1,e2,lev,m);
+                                }
+                            }
+                        }
+                    }
+    }
+    nactive=0;
+    for(i=0;i<nbins;i++) {
+        active_map[i]=-1;
+        if(isfinite(aggregate[i*nbins+i]) &&
+           aggregate[i*nbins+i]>0.0)
+            active_map[i]=nactive++;
+    }
+    for(i=0;i<nbins;i++)
+        if(active_map[i]>=0)
+            for(j=0;j<nbins;j++)
+                if(active_map[j]>=0) {
+                    active1=active_map[i];
+                    active2=active_map[j];
+                    value=0.5*(aggregate[i*nbins+j]
+                               +aggregate[j*nbins+i]);
+                    normalized[active1*nactive+active2]=value
+                        /sqrt(aggregate[i*nbins+i]
+                              *aggregate[j*nbins+j]);
+                    if(!isfinite(normalized[active1*nactive+active2]))
+                        myerror(E,"ALA GenEO local operator is not finite");
+                }
+    iterations=0;
+    if(nactive>0)
+        iterations=ala_geneo_jacobi_eigensolve(
+            normalized,vectors,eigenvalues,nactive);
+    if(nactive>0 && iterations>=max(50*nactive*nactive,1))
+        myerror(E,"ALA GenEO local eigensolve did not converge");
+    for(i=0;i<nactive;i++)
+        if(!isfinite(eigenvalues[i]))
+            myerror(E,"ALA GenEO local eigenvalue is not finite");
+    for(i=0;i<nactive;i++)
+        for(j=i+1;j<nactive;j++)
+            if(eigenvalues[j]<eigenvalues[i]) {
+                value=eigenvalues[i];
+                eigenvalues[i]=eigenvalues[j];
+                eigenvalues[j]=value;
+                for(k=0;k<nactive;k++) {
+                    value=vectors[k*nactive+i];
+                    vectors[k*nactive+i]=vectors[k*nactive+j];
+                    vectors[k*nactive+j]=value;
+                }
+            }
+    local_modes=0;
+    threshold=E->control.ala_geneo_eigenvalue_threshold;
+    while(local_modes<nactive &&
+          local_modes<E->control.ala_geneo_max_modes_per_rank &&
+          eigenvalues[local_modes]<=threshold)
+        local_modes++;
+    if(nactive>0)
+        local_modes=max(local_modes,
+                        E->control.ala_geneo_min_modes_per_rank);
+    local_modes=min(local_modes,nactive);
+    local_modes=min(local_modes,E->control.ala_geneo_max_modes_per_rank);
+    for(i=0;i<local_modes;i++)
+        local_selected[i]=eigenvalues[i];
+
+    MPI_Allgather(&local_modes,1,MPI_INT,mode_counts,1,MPI_INT,
+                  E->parallel.world);
+    n=0;
+    for(i=0;i<E->parallel.nproc;i++) {
+        mode_offsets[i]=n;
+        n += mode_counts[i];
+    }
+    if(n<1)
+        myerror(E,"ALA GenEO selected no global coarse modes");
+    if(n>E->control.ala_geneo_max_global_modes)
+        myerror(E,"ALA GenEO global mode count exceeds configured maximum");
+    cache->geneo_basis_count=n;
+    cache->geneo_local_modes=local_modes;
+    cache->geneo_local_offset=mode_offsets[E->parallel.me];
+    cache->geneo_eigenvalues=(double *)calloc(n,sizeof(double));
+    if(cache->geneo_eigenvalues==NULL)
+        myerror(E,"Unable to allocate ALA GenEO eigenvalue diagnostics");
+    MPI_Allgatherv(local_selected,local_modes,MPI_DOUBLE,
+                   cache->geneo_eigenvalues,mode_counts,mode_offsets,
+                   MPI_DOUBLE,E->parallel.world);
+
+    clev=lev-E->control.ala_two_level_offset;
+    factor=1 << E->control.ala_two_level_offset;
+    celx=E->lmesh.ELX[clev];
+    cely=E->lmesh.ELY[clev];
+    celz=E->lmesh.ELZ[clev];
+    cnpno=E->lmesh.NPNO[clev];
+    stride=cnpno+1;
+    npno=E->lmesh.NPNO[lev];
+    neq=E->lmesh.NEQ[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        cache->geneo_basis[m]=(double *)calloc(n*stride,sizeof(double));
+        if(cache->geneo_basis[m]==NULL)
+            myerror(E,"Unable to allocate ALA GenEO basis");
+    }
+    for(i=0;i<local_modes;i++) {
+        col=cache->geneo_local_offset+i;
+        norm=0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(cy=1;cy<=cely;cy++)
+                for(cx=1;cx<=celx;cx++)
+                    for(cz=1;cz<=celz;cz++) {
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        depth=(1.0-E->ECO[clev][m][ce].centre[3])
+                            *E->data.radius_km;
+                        if(depth>E->control.ala_shallow_patch_depth_km)
+                            continue;
+                        ex1=min((cx-1)*factor+1,elx);
+                        ey1=min((cy-1)*factor+1,ely);
+                        ez1=min(cz*factor,elz);
+                        bin1=ala_geneo_bin(ex1,ey1,ez1,elx,ely,
+                            shallow_min_ez,shallow_layers,hbins,rbins);
+                        if(bin1<0 || active_map[bin1]<0)
+                            continue;
+                        active1=active_map[bin1];
+                        value=vectors[active1*nactive+i]
+                            /sqrt(aggregate[bin1*nbins+bin1]);
+                        cache->geneo_basis[m][col*stride+ce]=value;
+                        norm += value*value;
+                    }
+        if(!isfinite(norm) || norm<=1.0e-30)
+            myerror(E,"ALA GenEO selected basis has zero norm");
+        norm=sqrt(norm);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                cache->geneo_basis[m][col*stride+ce] /= norm;
+    }
+
+    cache->geneo_matrix=(double *)calloc(n*n,sizeof(double));
+    cache->geneo_chol=(double *)calloc(n*n,sizeof(double));
+    local_column=(double *)calloc(n,sizeof(double));
+    global_column=(double *)calloc(n,sizeof(double));
+    if(cache->geneo_matrix==NULL || cache->geneo_chol==NULL ||
+       local_column==NULL || global_column==NULL)
+        myerror(E,"Unable to allocate ALA GenEO global matrix");
+    matrix=cache->geneo_matrix;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        coarse_p[m]=(double *)calloc(cnpno+1,sizeof(double));
+        coarse_Ap[m]=(double *)calloc(cnpno+1,sizeof(double));
+        fine_p[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_Ap[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_velocity[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_rhs[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_Ax[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_direction[m]=(double *)calloc(neq+1,sizeof(double));
+        if(coarse_p[m]==NULL || coarse_Ap[m]==NULL || fine_p[m]==NULL ||
+           fine_Ap[m]==NULL || fine_velocity[m]==NULL ||
+           fine_velocity_rhs[m]==NULL || fine_velocity_Ax[m]==NULL ||
+           fine_velocity_direction[m]==NULL)
+            myerror(E,"Unable to allocate ALA GenEO Galerkin workspace");
+    }
+    for(col=0;col<n;col++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                coarse_p[m][ce]=cache->geneo_basis[m][col*stride+ce];
+        apply_ala_galerkin_fixed_schur(
+            E,coarse_p,coarse_Ap,fine_p,fine_Ap,fine_velocity,
+            fine_velocity_rhs,fine_velocity_Ax,fine_velocity_direction,
+            cache,clev,lev,factor,NULL);
+        for(row=0;row<n;row++)
+            local_column[row]=0.0;
+        for(row=cache->geneo_local_offset;
+            row<cache->geneo_local_offset+local_modes;row++)
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(ce=1;ce<=cnpno;ce++)
+                    local_column[row] +=
+                        cache->geneo_basis[m][row*stride+ce]
+                        *coarse_Ap[m][ce];
+        MPI_Allreduce(local_column,global_column,n,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        for(row=0;row<n;row++)
+            matrix[row*n+col]=global_column[row];
+        if(col==0 || (col+1)%25==0 || col+1==n) {
+            setup_seconds=CPU_time0()-setup_start;
+            MPI_Allreduce(&setup_seconds,&global_setup_seconds,1,MPI_DOUBLE,
+                          MPI_MAX,E->parallel.world);
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"ALA_GENEO_SETUP_PROGRESS column=%d/%d "
+                        "elapsed_seconds_max=%e\n",
+                        col+1,n,global_setup_seconds);
+                fprintf(stderr,"ALA_GENEO_SETUP_PROGRESS column=%d/%d "
+                        "elapsed_seconds_max=%e\n",
+                        col+1,n,global_setup_seconds);
+                fflush(E->fp);
+                fflush(stderr);
+            }
+        }
+    }
+    cache->geneo_schur_applications=n;
+
+    anti2=0.0;
+    total2=0.0;
+    diagonal_min=1.0e300;
+    diagonal_max=0.0;
+    for(i=0;i<n;i++) {
+        diagonal_min=min(diagonal_min,matrix[i*n+i]);
+        diagonal_max=max(diagonal_max,matrix[i*n+i]);
+        for(j=0;j<n;j++) {
+            anti2 += (matrix[i*n+j]-matrix[j*n+i])
+                *(matrix[i*n+j]-matrix[j*n+i]);
+            total2 += matrix[i*n+j]*matrix[i*n+j];
+            cache->geneo_chol[i*n+j]=
+                0.5*(matrix[i*n+j]+matrix[j*n+i]);
+        }
+    }
+    symmetry=sqrt(anti2/max(total2,1.0e-300));
+    if(!isfinite(symmetry) || symmetry>1.0e-8)
+        myerror(E,"ALA GenEO Galerkin matrix is not symmetric");
+    if(!isfinite(diagonal_min) || diagonal_min<=0.0)
+        myerror(E,"ALA GenEO Galerkin diagonal is not positive");
+    shift=E->control.ala_geneo_regularization*diagonal_max;
+    for(i=0;i<n;i++)
+        cache->geneo_chol[i*n+i] += shift;
+    min_pivot=1.0e300;
+    for(i=0;i<n;i++) {
+        for(j=0;j<=i;j++) {
+            sum=cache->geneo_chol[i*n+j];
+            for(k=0;k<j;k++)
+                sum -= cache->geneo_chol[i*n+k]
+                    *cache->geneo_chol[j*n+k];
+            if(i==j) {
+                pivot=sum;
+                if(!isfinite(pivot) ||
+                   pivot<=1.0e-14*max(diagonal_max,1.0e-300))
+                    myerror(E,"ALA GenEO Galerkin Cholesky failed");
+                cache->geneo_chol[i*n+j]=sqrt(pivot);
+                min_pivot=min(min_pivot,pivot);
+            }
+            else
+                cache->geneo_chol[i*n+j]=
+                    sum/cache->geneo_chol[j*n+j];
+        }
+        for(j=i+1;j<n;j++)
+            cache->geneo_chol[i*n+j]=0.0;
+    }
+    local_eigen_min=(local_modes>0) ? local_selected[0] : 1.0e300;
+    local_eigen_max=(local_modes>0) ? local_selected[local_modes-1] : 0.0;
+    MPI_Allreduce(&local_eigen_min,&global_eigen_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_eigen_max,&global_eigen_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    local_active_rank=(local_modes>0) ? 1 : 0;
+    local_mode_min=(local_modes>0) ? local_modes : 1000000000;
+    local_mode_max=local_modes;
+    MPI_Allreduce(&local_active_rank,&global_active_ranks,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_mode_min,&global_mode_min,1,MPI_INT,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_mode_max,&global_mode_max,1,MPI_INT,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&iterations,&global_iterations,1,MPI_INT,MPI_MAX,
+                  E->parallel.world);
+    setup_seconds=CPU_time0()-setup_start;
+    MPI_Allreduce(&setup_seconds,&global_setup_seconds,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA GenEO coarse space global_modes=%d "
+                "active_ranks=%d local_mode_range=(%d,%d) "
+                "aggregate_bins=%dx%dx%d "
+                "threshold=%e selected_eigen_range=(%e,%e) "
+                "local_jacobi_iterations=%d Galerkin_applications=%d "
+                "symmetry_defect=%e diagonal_range=(%e,%e) "
+                "regularization=%e shift=%e min_pivot=%e "
+                "setup_seconds_max=%e status=pass\n",
+                n,global_active_ranks,global_mode_min,global_mode_max,
+                hbins,hbins,rbins,threshold,global_eigen_min,global_eigen_max,
+                global_iterations,n,
+                symmetry,diagonal_min,diagonal_max,
+                E->control.ala_geneo_regularization,shift,min_pivot,
+                global_setup_seconds);
+        fprintf(stderr,"ALA GenEO coarse space global_modes=%d "
+                "aggregate_bins=%dx%dx%d threshold=%e "
+                "selected_eigen_range=(%e,%e) Galerkin_applications=%d "
+                "symmetry_defect=%e setup_seconds_max=%e status=pass\n",
+                n,hbins,hbins,rbins,threshold,global_eigen_min,
+                global_eigen_max,n,symmetry,global_setup_seconds);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)coarse_p[m]);
+        free((void *)coarse_Ap[m]);
+        free((void *)fine_p[m]);
+        free((void *)fine_Ap[m]);
+        free((void *)fine_velocity[m]);
+        free((void *)fine_velocity_rhs[m]);
+        free((void *)fine_velocity_Ax[m]);
+        free((void *)fine_velocity_direction[m]);
+    }
+    free((void *)aggregate);
+    free((void *)active_map);
+    free((void *)normalized);
+    free((void *)vectors);
+    free((void *)eigenvalues);
+    free((void *)local_selected);
+    free((void *)mode_counts);
+    free((void *)mode_offsets);
+    free((void *)local_column);
+    free((void *)global_column);
+}
+
+
 /* Calibrate the Jacobi-scaled velocity operator used by the fixed polynomial
    inverse.  The similarity transform sqrt(B) K sqrt(B) is symmetric; a fixed
    Chebyshev polynomial of it therefore yields an SPD approximation to K^-1. */
@@ -1824,6 +2426,9 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 free((void *)ghost_work[m][face]);
             }
     }
+
+    if(E->control.ala_geneo_preconditioner)
+        apply_ala_geneo_correction(E,r,z,lev,iteration,cache);
 
     if(!E->control.ala_two_level_preconditioner)
         return;
@@ -2891,6 +3496,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int local_invalid_bpi, global_invalid_bpi;
     int local_invalid_velocity_bi, global_invalid_velocity_bi;
     int galerkin_diagnostic_applications, galerkin_applications;
+    const char *preconditioner_mode;
 
     double alpha, beta, rho, rho_old, curvature;
     double min_curvature, sq_vdotv;
@@ -2918,7 +3524,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     lev = E->mesh.levmax;
     memset(&preconditioner_cache,0,sizeof(preconditioner_cache));
 
-    if(E->control.ala_two_level_preconditioner) {
+    if(E->control.ala_two_level_preconditioner ||
+       E->control.ala_geneo_preconditioner) {
         coarse_lev=lev-E->control.ala_two_level_offset;
         if(coarse_lev<E->mesh.levmin)
             myerror(E,"ALA two-level offset is below the available mesh hierarchy");
@@ -2965,7 +3572,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     MPI_Allreduce(&local_invalid_bpi, &global_invalid_bpi, 1, MPI_INT, MPI_SUM,
                   E->parallel.world);
     local_invalid_velocity_bi=0;
-    if(E->control.ala_two_level_preconditioner)
+    if(E->control.ala_two_level_preconditioner ||
+       E->control.ala_geneo_preconditioner)
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=0;j<E->lmesh.NEQ[lev];j++)
                 if(!isfinite(E->ALA_velocity_BI[lev][m][j]) ||
@@ -2999,7 +3607,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fflush(stderr);
         }
     }
-    if(E->control.ala_two_level_preconditioner) {
+    if(E->control.ala_two_level_preconditioner ||
+       E->control.ala_geneo_preconditioner) {
         if(E->parallel.me==0) {
             fprintf(stderr,"ALA preconditioner startup stage=galerkin_diagonal_build_begin\n");
             fflush(stderr);
@@ -3021,7 +3630,19 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 fflush(stderr);
             }
         }
-        if(E->control.ala_global_coarse_preconditioner) {
+        if(E->control.ala_geneo_preconditioner) {
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=geneo_build_begin\n");
+                fflush(stderr);
+            }
+            build_ala_geneo_coarse_cache(E,&preconditioner_cache,lev);
+            if(E->parallel.me==0) {
+                fprintf(stderr,"ALA preconditioner startup stage=geneo_build_complete\n");
+                fflush(stderr);
+            }
+        }
+        if(E->control.ala_two_level_preconditioner &&
+           E->control.ala_global_coarse_preconditioner) {
             if(E->parallel.me==0) {
                 fprintf(stderr,"ALA preconditioner startup stage=global_coarse_build_begin\n");
                 fflush(stderr);
@@ -3033,7 +3654,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 fflush(stderr);
             }
         }
-        if(strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0) {
+        if(E->control.ala_two_level_preconditioner &&
+           strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0) {
             if(E->parallel.me==0) {
                 fprintf(stderr,"ALA preconditioner startup stage=galerkin_spectrum_begin\n");
                 fflush(stderr);
@@ -3049,28 +3671,30 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(E->control.ala_shallow_patch_preconditioner)
         audit_ala_shallow_patch_preconditioner(
             E,&preconditioner_cache,lev);
+    if(E->control.ala_geneo_preconditioner)
+        preconditioner_mode="mpi_overlap_schwarz_plus_geneo";
+    else if(E->control.ala_two_level_preconditioner)
+        preconditioner_mode=E->control.ala_shallow_patch_preconditioner
+            ? (strcmp(E->control.ala_two_level_velocity_solver,"chebyshev")==0
+               ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
+               : "mpi_overlap_schwarz_plus_galerkin_diagonal")
+            : (strcmp(E->control.ala_two_level_velocity_solver,"chebyshev")==0
+               ? "true_galerkin_kpoly" : "diagonal_plus_galerkin");
+    else if(E->control.ala_shallow_patch_preconditioner)
+        preconditioner_mode="mpi_overlap_schwarz";
+    else if(E->control.ala_radial_line_preconditioner)
+        preconditioner_mode="radial_line";
+    else
+        preconditioner_mode="diagonal";
     if(E->parallel.me == 0) {
         fprintf(E->fp,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e\n",
+                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
                 E->control.precondition ? "on" : "off",
-                E->control.ala_two_level_preconditioner
-                    ? (E->control.ala_shallow_patch_preconditioner
-                       ? (strcmp(E->control.ala_two_level_velocity_solver,
-                                 "chebyshev")==0
-                          ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
-                          : "mpi_overlap_schwarz_plus_galerkin_diagonal")
-                       : (strcmp(E->control.ala_two_level_velocity_solver,
-                                 "chebyshev")==0
-                          ? "true_galerkin_kpoly"
-                          : "diagonal_plus_galerkin"))
-                    : (E->control.ala_shallow_patch_preconditioner
-                       ? "mpi_overlap_schwarz"
-                       : (E->control.ala_radial_line_preconditioner
-                          ? "radial_line" : "diagonal")),
+                preconditioner_mode,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
@@ -3078,28 +3702,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_augmented_lagrangian_gamma,
                 E->control.ala_global_coarse_preconditioner ? "on" : "off",
                 preconditioner_cache.global_basis_count,
-                E->control.ala_global_coarse_weight);
+                E->control.ala_global_coarse_weight,
+                E->control.ala_geneo_preconditioner ? "on" : "off",
+                preconditioner_cache.geneo_basis_count,
+                E->control.ala_geneo_weight);
         fprintf(stderr,
                 "ALA PCG pressure preconditioner = %s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e\n",
+                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
                 E->control.precondition ? "on" : "off",
-                E->control.ala_two_level_preconditioner
-                    ? (E->control.ala_shallow_patch_preconditioner
-                       ? (strcmp(E->control.ala_two_level_velocity_solver,
-                                 "chebyshev")==0
-                          ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
-                          : "mpi_overlap_schwarz_plus_galerkin_diagonal")
-                       : (strcmp(E->control.ala_two_level_velocity_solver,
-                                 "chebyshev")==0
-                          ? "true_galerkin_kpoly"
-                          : "diagonal_plus_galerkin"))
-                    : (E->control.ala_shallow_patch_preconditioner
-                       ? "mpi_overlap_schwarz"
-                       : (E->control.ala_radial_line_preconditioner
-                          ? "radial_line" : "diagonal")),
+                preconditioner_mode,
                 global_bpi_min, global_bpi_max, global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
@@ -3107,7 +3721,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_augmented_lagrangian_gamma,
                 E->control.ala_global_coarse_preconditioner ? "on" : "off",
                 preconditioner_cache.global_basis_count,
-                E->control.ala_global_coarse_weight);
+                E->control.ala_global_coarse_weight,
+                E->control.ala_geneo_preconditioner ? "on" : "off",
+                preconditioner_cache.geneo_basis_count,
+                E->control.ala_geneo_weight);
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
@@ -3118,18 +3735,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     *steps_max,E->control.ala_pcg_restart_interval,
                     E->control.ala_feasibility_window,
                     E->control.ala_feasibility_min_reduction,
-                    E->control.ala_two_level_preconditioner
-                        ? (E->control.ala_shallow_patch_preconditioner
-                           ? (strcmp(E->control.ala_two_level_velocity_solver,
-                                     "chebyshev")==0
-                              ? "mpi_overlap_schwarz_plus_galerkin_kpoly"
-                              : "mpi_overlap_schwarz_plus_galerkin_diagonal")
-                           : (strcmp(E->control.ala_two_level_velocity_solver,
-                                     "chebyshev")==0
-                              ? "true_galerkin_kpoly"
-                              : "diagonal_plus_galerkin"))
-                        : (E->control.ala_shallow_patch_preconditioner
-                           ? "mpi_overlap_schwarz" : "diagonal"));
+                    preconditioner_mode);
             fprintf(stderr,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
                     "pressure_iterations=%d restart_interval=%d "
@@ -3495,6 +4101,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_two_level_coarse_iterations,
                     E->control.ala_two_level_velocity_iterations);
         }
+        if(E->control.ala_geneo_preconditioner) {
+            fprintf(E->fp,"ALA_GENEO_COST setup_galerkin_applications=%d "
+                    "pressure_iterations=%d dense_coarse_solves=%d "
+                    "global_modes=%d\n",
+                    preconditioner_cache.geneo_schur_applications,count,count,
+                    preconditioner_cache.geneo_basis_count);
+            fprintf(stderr,"ALA_GENEO_COST setup_galerkin_applications=%d "
+                    "pressure_iterations=%d dense_coarse_solves=%d "
+                    "global_modes=%d\n",
+                    preconditioner_cache.geneo_schur_applications,count,count,
+                    preconditioner_cache.geneo_basis_count);
+        }
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
@@ -3570,7 +4188,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         free((void *)preconditioner_work[m]);
     }
     if(E->control.ala_shallow_patch_preconditioner ||
-       E->control.ala_two_level_preconditioner)
+       E->control.ala_two_level_preconditioner ||
+       E->control.ala_geneo_preconditioner)
         free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
 
     *steps_max = count;

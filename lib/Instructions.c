@@ -594,6 +594,24 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_shallow_patch_regularization),"1.0e-3",m);
   input_int("ala_shallow_patch_mpi_overlap",
             &(E->control.ala_shallow_patch_mpi_overlap),"2",m);
+  input_boolean("ala_geneo_preconditioner",
+                &(E->control.ala_geneo_preconditioner),"off",m);
+  input_double("ala_geneo_eigenvalue_threshold",
+               &(E->control.ala_geneo_eigenvalue_threshold),"0.20",m);
+  input_int("ala_geneo_min_modes_per_rank",
+            &(E->control.ala_geneo_min_modes_per_rank),"1",m);
+  input_int("ala_geneo_max_modes_per_rank",
+            &(E->control.ala_geneo_max_modes_per_rank),"2",m);
+  input_int("ala_geneo_horizontal_bins",
+            &(E->control.ala_geneo_horizontal_bins),"4",m);
+  input_int("ala_geneo_radial_bins",
+            &(E->control.ala_geneo_radial_bins),"2",m);
+  input_int("ala_geneo_max_global_modes",
+            &(E->control.ala_geneo_max_global_modes),"400",m);
+  input_double("ala_geneo_weight",
+               &(E->control.ala_geneo_weight),"1.0",m);
+  input_double("ala_geneo_regularization",
+               &(E->control.ala_geneo_regularization),"1.0e-8",m);
   input_boolean("ala_radial_line_preconditioner",
                 &(E->control.ala_radial_line_preconditioner),"off",m);
   input_boolean("ala_element_vanka_smoother",
@@ -690,6 +708,27 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_shallow_patch_mpi_overlap < 1 ||
      E->control.ala_shallow_patch_mpi_overlap > 2)
       myerror(E, "ala_shallow_patch_mpi_overlap must be one or two");
+  if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
+      myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
+  if(E->control.ala_geneo_min_modes_per_rank < 1 ||
+     E->control.ala_geneo_max_modes_per_rank <
+       E->control.ala_geneo_min_modes_per_rank ||
+     E->control.ala_geneo_max_modes_per_rank > 8)
+      myerror(E, "ALA GenEO modes per rank must satisfy 1 <= min <= max <= 8");
+  if(E->control.ala_geneo_horizontal_bins < 2 ||
+     E->control.ala_geneo_horizontal_bins > 8 ||
+     E->control.ala_geneo_radial_bins < 1 ||
+     E->control.ala_geneo_radial_bins > 4)
+      myerror(E, "ALA GenEO bins require horizontal in [2,8] and radial in [1,4]");
+  if(E->control.ala_geneo_max_global_modes < 1 ||
+     E->control.ala_geneo_max_global_modes > 4096)
+      myerror(E, "ala_geneo_max_global_modes must be between 1 and 4096");
+  if(E->control.ala_geneo_weight <= 0.0 ||
+     E->control.ala_geneo_weight > 1.0)
+      myerror(E, "ala_geneo_weight must be in (0,1]");
+  if(E->control.ala_geneo_regularization < 0.0 ||
+     E->control.ala_geneo_regularization > 1.0e-3)
+      myerror(E, "ala_geneo_regularization must be in [0,1e-3]");
   if(E->control.ala_element_vanka_damping <= 0.0 ||
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
@@ -761,6 +800,17 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_shallow_patch_preconditioner &&
      E->control.ala_radial_line_preconditioner)
       myerror(E, "ALA shallow-patch and radial-line preconditioners are "
+              "mutually exclusive");
+  if(E->control.ala_geneo_preconditioner &&
+     (!E->control.precondition ||
+      !E->control.ala_pressure_buoyancy ||
+      strcmp(E->control.uzawa,"ala_cg") != 0 ||
+      !E->control.ala_shallow_patch_preconditioner))
+      myerror(E, "ala_geneo_preconditioner requires strict ALA PCG and "
+              "ala_shallow_patch_preconditioner=on");
+  if(E->control.ala_geneo_preconditioner &&
+     E->control.ala_two_level_preconditioner)
+      myerror(E, "ALA GenEO and geometric two-level preconditioners are "
               "mutually exclusive");
   if(E->control.ala_feasibility_audit &&
      (!E->control.ala_pressure_buoyancy ||
@@ -1287,6 +1337,15 @@ void global_default_values(E)
     E->control.ala_shallow_patch_weight = 0.25;
     E->control.ala_shallow_patch_regularization = 1.0e-3;
     E->control.ala_shallow_patch_mpi_overlap = 2;
+    E->control.ala_geneo_preconditioner = 0;
+    E->control.ala_geneo_eigenvalue_threshold = 0.20;
+    E->control.ala_geneo_min_modes_per_rank = 1;
+    E->control.ala_geneo_max_modes_per_rank = 2;
+    E->control.ala_geneo_horizontal_bins = 4;
+    E->control.ala_geneo_radial_bins = 2;
+    E->control.ala_geneo_max_global_modes = 400;
+    E->control.ala_geneo_weight = 1.0;
+    E->control.ala_geneo_regularization = 1.0e-8;
     E->control.ala_radial_line_preconditioner = 0;
     E->control.ala_element_vanka_smoother = 0;
     E->control.ala_element_vanka_damping = 0.8;

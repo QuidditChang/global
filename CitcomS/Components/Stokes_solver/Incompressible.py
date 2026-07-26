@@ -189,6 +189,23 @@ class Incompressible(CitcomComponent):
             "ala_shallow_patch_regularization", default=1.0e-3)
         ala_shallow_patch_mpi_overlap = prop.int(
             "ala_shallow_patch_mpi_overlap", default=2)
+        ala_geneo_preconditioner = prop.bool(
+            "ala_geneo_preconditioner", default=False)
+        ala_geneo_eigenvalue_threshold = prop.float(
+            "ala_geneo_eigenvalue_threshold", default=0.20)
+        ala_geneo_min_modes_per_rank = prop.int(
+            "ala_geneo_min_modes_per_rank", default=1)
+        ala_geneo_max_modes_per_rank = prop.int(
+            "ala_geneo_max_modes_per_rank", default=2)
+        ala_geneo_horizontal_bins = prop.int(
+            "ala_geneo_horizontal_bins", default=4)
+        ala_geneo_radial_bins = prop.int(
+            "ala_geneo_radial_bins", default=2)
+        ala_geneo_max_global_modes = prop.int(
+            "ala_geneo_max_global_modes", default=400)
+        ala_geneo_weight = prop.float("ala_geneo_weight", default=1.0)
+        ala_geneo_regularization = prop.float(
+            "ala_geneo_regularization", default=1.0e-8)
         ala_radial_line_preconditioner = prop.bool(
             "ala_radial_line_preconditioner", default=False)
         ala_element_vanka_smoother = prop.bool(

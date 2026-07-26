@@ -1726,6 +1726,24 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_shallow_patch_regularization);
     status = set_attribute_int(input, "ala_shallow_patch_mpi_overlap",
                                E->control.ala_shallow_patch_mpi_overlap);
+    status = set_attribute_int(input, "ala_geneo_preconditioner",
+                               E->control.ala_geneo_preconditioner);
+    status = set_attribute_double(input, "ala_geneo_eigenvalue_threshold",
+                                  E->control.ala_geneo_eigenvalue_threshold);
+    status = set_attribute_int(input, "ala_geneo_min_modes_per_rank",
+                               E->control.ala_geneo_min_modes_per_rank);
+    status = set_attribute_int(input, "ala_geneo_max_modes_per_rank",
+                               E->control.ala_geneo_max_modes_per_rank);
+    status = set_attribute_int(input, "ala_geneo_horizontal_bins",
+                               E->control.ala_geneo_horizontal_bins);
+    status = set_attribute_int(input, "ala_geneo_radial_bins",
+                               E->control.ala_geneo_radial_bins);
+    status = set_attribute_int(input, "ala_geneo_max_global_modes",
+                               E->control.ala_geneo_max_global_modes);
+    status = set_attribute_double(input, "ala_geneo_weight",
+                                  E->control.ala_geneo_weight);
+    status = set_attribute_double(input, "ala_geneo_regularization",
+                                  E->control.ala_geneo_regularization);
     status = set_attribute_string(input, "ala_beta_element_source",
                                   E->control.ala_beta_element_source);
     status = set_attribute_int(input, "ala_beta_causal_diagnostics",
