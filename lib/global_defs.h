@@ -520,6 +520,8 @@ struct CONTROL {
     int ala_geneo_max_modes_per_rank;
     int ala_geneo_horizontal_bins;
     int ala_geneo_radial_bins;
+    int ala_geneo_rank_group_x;
+    int ala_geneo_rank_group_y;
     int ala_geneo_max_global_modes;
     double ala_geneo_weight;
     double ala_geneo_regularization;

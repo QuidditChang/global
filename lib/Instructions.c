@@ -607,6 +607,10 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_geneo_horizontal_bins),"4",m);
   input_int("ala_geneo_radial_bins",
             &(E->control.ala_geneo_radial_bins),"2",m);
+  input_int("ala_geneo_rank_group_x",
+            &(E->control.ala_geneo_rank_group_x),"1",m);
+  input_int("ala_geneo_rank_group_y",
+            &(E->control.ala_geneo_rank_group_y),"1",m);
   input_int("ala_geneo_max_global_modes",
             &(E->control.ala_geneo_max_global_modes),"400",m);
   input_double("ala_geneo_weight",
@@ -724,6 +728,17 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_geneo_radial_bins < 1 ||
      E->control.ala_geneo_radial_bins > 4)
       myerror(E, "ALA GenEO bins require horizontal in [2,8] and radial in [1,4]");
+  if(E->control.ala_geneo_rank_group_x < 1 ||
+     E->control.ala_geneo_rank_group_x > E->parallel.nprocx ||
+     E->control.ala_geneo_rank_group_y < 1 ||
+     E->control.ala_geneo_rank_group_y > E->parallel.nprocy)
+      myerror(E, "ALA GenEO rank groups must fit the horizontal processor grid");
+  if(E->control.ala_geneo_horizontal_bins *
+       E->control.ala_geneo_rank_group_x *
+       E->control.ala_geneo_horizontal_bins *
+       E->control.ala_geneo_rank_group_y *
+       E->control.ala_geneo_radial_bins > 256)
+      myerror(E, "ALA GenEO cross-rank aggregate exceeds 256 spectral bins");
   if(E->control.ala_geneo_max_global_modes < 1 ||
      E->control.ala_geneo_max_global_modes > 4096)
       myerror(E, "ala_geneo_max_global_modes must be between 1 and 4096");
@@ -1351,6 +1366,8 @@ void global_default_values(E)
     E->control.ala_geneo_max_modes_per_rank = 2;
     E->control.ala_geneo_horizontal_bins = 4;
     E->control.ala_geneo_radial_bins = 2;
+    E->control.ala_geneo_rank_group_x = 1;
+    E->control.ala_geneo_rank_group_y = 1;
     E->control.ala_geneo_max_global_modes = 400;
     E->control.ala_geneo_weight = 1.0;
     E->control.ala_geneo_regularization = 1.0e-8;

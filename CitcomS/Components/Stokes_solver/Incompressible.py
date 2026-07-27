@@ -203,6 +203,10 @@ class Incompressible(CitcomComponent):
             "ala_geneo_horizontal_bins", default=4)
         ala_geneo_radial_bins = prop.int(
             "ala_geneo_radial_bins", default=2)
+        ala_geneo_rank_group_x = prop.int(
+            "ala_geneo_rank_group_x", default=1)
+        ala_geneo_rank_group_y = prop.int(
+            "ala_geneo_rank_group_y", default=1)
         ala_geneo_max_global_modes = prop.int(
             "ala_geneo_max_global_modes", default=400)
         ala_geneo_weight = prop.float("ala_geneo_weight", default=1.0)

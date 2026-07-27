@@ -1139,6 +1139,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_geneo_horizontal_bins, fp);
     getIntProperty(properties, "ala_geneo_radial_bins",
                    E->control.ala_geneo_radial_bins, fp);
+    getIntProperty(properties, "ala_geneo_rank_group_x",
+                   E->control.ala_geneo_rank_group_x, fp);
+    getIntProperty(properties, "ala_geneo_rank_group_y",
+                   E->control.ala_geneo_rank_group_y, fp);
     getIntProperty(properties, "ala_geneo_max_global_modes",
                    E->control.ala_geneo_max_global_modes, fp);
     getDoubleProperty(properties, "ala_geneo_weight",
@@ -1255,6 +1259,19 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_geneo_radial_bins < 1 ||
        E->control.ala_geneo_radial_bins > 4)
         myerror(E, "ALA GenEO bin counts are outside supported bounds");
+    if(E->control.ala_geneo_rank_group_x < 1 ||
+       E->control.ala_geneo_rank_group_x > E->parallel.nprocx ||
+       E->control.ala_geneo_rank_group_y < 1 ||
+       E->control.ala_geneo_rank_group_y > E->parallel.nprocy)
+        myerror(E,
+                "ALA GenEO rank groups must fit the horizontal processor grid");
+    if(E->control.ala_geneo_horizontal_bins *
+         E->control.ala_geneo_rank_group_x *
+         E->control.ala_geneo_horizontal_bins *
+         E->control.ala_geneo_rank_group_y *
+         E->control.ala_geneo_radial_bins > 256)
+        myerror(E,
+                "ALA GenEO cross-rank aggregate exceeds 256 spectral bins");
     if(E->control.ala_geneo_max_global_modes < 1 ||
        E->control.ala_geneo_max_global_modes > 4096)
         myerror(E, "ala_geneo_max_global_modes must be between 1 and 4096");

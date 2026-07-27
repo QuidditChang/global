@@ -478,6 +478,9 @@ static void build_ala_global_coarse_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void build_ala_geneo_coarse_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
+static void build_ala_cross_rank_geneo_coarse_cache(
+    struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
 static void apply_ala_geneo_correction(struct All_variables *E,
     double **r, double **z, int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache);
@@ -489,7 +492,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
 {
     int m,e,ex,ey,ez,cx,cy,cz,ce,i,j,n,clev,factor;
     int celx,celz,cnpno,stride;
-    double sum,correction,local_energy,global_energy;
+    double sum,correction,global_energy;
     double residual2,rhs2;
     double *coarse_rhs[NCS];
     double *local_rhs,*global_rhs,*solution;
@@ -525,8 +528,10 @@ static void apply_ala_geneo_correction(struct All_variables *E,
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
                     coarse_rhs[m][ce] += r[m][e];
                 }
-    for(i=cache->geneo_local_offset;
-        i<cache->geneo_local_offset+cache->geneo_local_modes;i++)
+    /* A cross-rank aggregate has the same coarse column on every rank in
+       its processor group.  Sum every locally supported column; columns
+       outside the group are stored as exact zeros. */
+    for(i=0;i<n;i++)
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(ce=1;ce<=cnpno;ce++)
                 local_rhs[i] += cache->geneo_basis[m][i*stride+ce]
@@ -545,12 +550,9 @@ static void apply_ala_geneo_correction(struct All_variables *E,
             sum -= cache->geneo_chol[j*n+i]*solution[j];
         solution[i]=sum/cache->geneo_chol[i*n+i];
     }
-    local_energy=0.0;
-    for(i=cache->geneo_local_offset;
-        i<cache->geneo_local_offset+cache->geneo_local_modes;i++)
-        local_energy += global_rhs[i]*solution[i];
-    MPI_Allreduce(&local_energy,&global_energy,1,MPI_DOUBLE,MPI_SUM,
-                  E->parallel.world);
+    global_energy=0.0;
+    for(i=0;i<n;i++)
+        global_energy += global_rhs[i]*solution[i];
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
             for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
@@ -562,9 +564,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
                     cz=(ez-1)/factor+1;
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
                     correction=0.0;
-                    for(i=cache->geneo_local_offset;
-                        i<cache->geneo_local_offset
-                          +cache->geneo_local_modes;i++)
+                    for(i=0;i<n;i++)
                         correction += cache->geneo_basis[m][i*stride+ce]
                             *solution[i];
                     z[m][e] += E->control.ala_geneo_weight*correction;
@@ -2360,6 +2360,662 @@ static void build_ala_geneo_coarse_cache(struct All_variables *E,
 }
 
 
+/* Build a pressure coarse space whose spectral aggregates span rectangular
+   groups of horizontal MPI ranks.  Each group owns a disjoint set of pressure
+   cells, so its indicator functions form an exact partition of unity.  The
+   selected group modes are present on every member rank and the final coarse
+   matrix is still assembled by the complete fixed strict-ALA Galerkin map.
+
+   The local aggregate operator contains the sum of every member rank's
+   principal contribution.  Cross-rank and cross-cap couplings enter the
+   coarse matrix through P^T S_f P; they are deliberately not approximated by
+   ad-hoc interface entries in the spectral selection problem. */
+static void build_ala_cross_rank_geneo_coarse_cache(
+    struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int m,i,j,k,p,col,row,e1,e2,ex1,ey1,ez1,ex2,ey2,ez2;
+    int dx,dy,dz,bin1,bin2,active1,active2,nactive;
+    int hbins,rbins,elx,ely,elz,shallow_min_ez,shallow_layers;
+    int rank_group_x,rank_group_y,groups_x,groups_y;
+    int group_ix,group_iy,group_start_x,group_start_y;
+    int group_size_x,group_size_y,rank_offset_x,rank_offset_y;
+    int group_hbins_x,group_hbins_y,nbins,color,group_rank,group_size;
+    int local_has_support,supported_members;
+    int clev,factor,celx,cely,celz,cnpno,stride,npno,neq;
+    int cx,cy,cz,ce,local_modes,n,iterations,global_iterations;
+    int desired_modes,candidate,accepted;
+    int owned_modes,owned_cursor,local_active,global_active;
+    int local_mode_min,local_mode_max,global_mode_min,global_mode_max;
+    int local_group_min,local_group_max,global_group_min,global_group_max;
+    int *active_map,*mode_counts,*mode_offsets;
+    int group_modes[NCS],group_offsets[NCS],group_nbins[NCS];
+    int group_hx[NCS],group_rank_offset_x[NCS];
+    int group_rank_offset_y[NCS];
+    MPI_Comm group_comm[NCS];
+    double depth,value,norm,group_norm,threshold;
+    double coefficient,denominator,rayleigh_numerator,rayleigh_denominator;
+    double local_eigen_min,local_eigen_max,global_eigen_min,global_eigen_max;
+    double local_second_min,local_second_max;
+    double global_second_min,global_second_max;
+    double *local_aggregate,*aggregate,*normalized,*vectors,*eigenvalues;
+    double *selected_values[NCS],*selected_shapes[NCS];
+    double *local_eigenvalues,*local_column,*global_column,*matrix;
+    double *coarse_p[NCS],*coarse_Ap[NCS];
+    double *fine_p[NCS],*fine_Ap[NCS],*fine_velocity[NCS];
+    double *fine_velocity_rhs[NCS],*fine_velocity_Ax[NCS];
+    double *fine_velocity_direction[NCS];
+    double anti2,total2,symmetry,diagonal_min,diagonal_max;
+    double shift,sum,pivot,min_pivot,setup_start,setup_seconds;
+    double global_setup_seconds;
+    double CPU_time0();
+
+    setup_start=CPU_time0();
+    hbins=E->control.ala_geneo_horizontal_bins;
+    rbins=E->control.ala_geneo_radial_bins;
+    rank_group_x=E->control.ala_geneo_rank_group_x;
+    rank_group_y=E->control.ala_geneo_rank_group_y;
+    groups_x=(E->parallel.nprocx+rank_group_x-1)/rank_group_x;
+    groups_y=(E->parallel.nprocy+rank_group_y-1)/rank_group_y;
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    shallow_min_ez=elz+1;
+    for(ez1=elz;ez1>=1;ez1--) {
+        depth=(1.0-0.5*(E->sx[1][3][ez1]+E->sx[1][3][ez1+1]))
+            *E->data.radius_km;
+        if(depth>E->control.ala_shallow_patch_depth_km)
+            break;
+        shallow_min_ez=ez1;
+    }
+    shallow_layers=(shallow_min_ez<=elz) ? elz-shallow_min_ez+1 : 0;
+    threshold=E->control.ala_geneo_eigenvalue_threshold;
+    owned_modes=0;
+    local_active=0;
+    local_mode_min=1000000000;
+    local_mode_max=0;
+    local_group_min=1000000000;
+    local_group_max=0;
+    local_eigen_min=1.0e300;
+    local_eigen_max=0.0;
+    local_second_min=1.0e300;
+    local_second_max=0.0;
+    global_iterations=0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        group_comm[m]=MPI_COMM_NULL;
+        group_modes[m]=0;
+        group_offsets[m]=0;
+        selected_values[m]=NULL;
+        selected_shapes[m]=NULL;
+        group_ix=E->parallel.me_loc[1]/rank_group_x;
+        group_iy=E->parallel.me_loc[2]/rank_group_y;
+        group_start_x=group_ix*rank_group_x;
+        group_start_y=group_iy*rank_group_y;
+        group_size_x=min(rank_group_x,E->parallel.nprocx-group_start_x);
+        group_size_y=min(rank_group_y,E->parallel.nprocy-group_start_y);
+        rank_offset_x=E->parallel.me_loc[1]-group_start_x;
+        rank_offset_y=E->parallel.me_loc[2]-group_start_y;
+        group_hbins_x=hbins*group_size_x;
+        group_hbins_y=hbins*group_size_y;
+        nbins=group_hbins_x*group_hbins_y*rbins;
+        if(nbins>ALA_GENEO_MAX_BINS)
+            myerror(E,"ALA cross-rank GenEO aggregate exceeds compiled maximum");
+        color=(((E->sphere.capid[m]-1)*E->parallel.nprocz
+               +E->parallel.me_loc[3])*groups_y+group_iy)
+               *groups_x+group_ix;
+        MPI_Comm_split(E->parallel.world,color,E->parallel.me,
+                       &group_comm[m]);
+        MPI_Comm_rank(group_comm[m],&group_rank);
+        MPI_Comm_size(group_comm[m],&group_size);
+        if(group_size!=group_size_x*group_size_y)
+            myerror(E,"ALA cross-rank GenEO processor group is incomplete");
+        group_nbins[m]=nbins;
+        group_hx[m]=group_hbins_x;
+        group_rank_offset_x[m]=rank_offset_x;
+        group_rank_offset_y[m]=rank_offset_y;
+        local_aggregate=(double *)calloc(nbins*nbins,sizeof(double));
+        aggregate=(double *)calloc(nbins*nbins,sizeof(double));
+        active_map=(int *)calloc(nbins,sizeof(int));
+        normalized=(double *)calloc(nbins*nbins,sizeof(double));
+        vectors=(double *)calloc(nbins*nbins,sizeof(double));
+        eigenvalues=(double *)calloc(nbins,sizeof(double));
+        selected_values[m]=(double *)calloc(
+            E->control.ala_geneo_max_modes_per_rank,sizeof(double));
+        selected_shapes[m]=(double *)calloc(
+            E->control.ala_geneo_max_modes_per_rank*nbins,sizeof(double));
+        if(local_aggregate==NULL || aggregate==NULL || active_map==NULL ||
+           normalized==NULL || vectors==NULL || eigenvalues==NULL ||
+           selected_values[m]==NULL || selected_shapes[m]==NULL)
+            myerror(E,"Unable to allocate cross-rank GenEO eigenproblem");
+        if(shallow_layers>0)
+            for(ey1=1;ey1<=ely;ey1++)
+                for(ex1=1;ex1<=elx;ex1++)
+                    for(ez1=shallow_min_ez;ez1<=elz;ez1++) {
+                        e1=ez1+(ex1-1)*elz+(ey1-1)*elz*elx;
+                        bin1=(ez1-shallow_min_ez)*rbins/shallow_layers
+                            +rbins*((rank_offset_x*hbins
+                            +min((ex1-1)*hbins/elx,hbins-1))
+                            +group_hbins_x*(rank_offset_y*hbins
+                            +min((ey1-1)*hbins/ely,hbins-1)));
+                        for(dy=-1;dy<=1;dy++) {
+                            ey2=ey1+dy;
+                            if(ey2<1 || ey2>ely)
+                                continue;
+                            for(dx=-1;dx<=1;dx++) {
+                                ex2=ex1+dx;
+                                if(ex2<1 || ex2>elx)
+                                    continue;
+                                for(dz=-1;dz<=1;dz++) {
+                                    ez2=ez1+dz;
+                                    if(ez2<shallow_min_ez || ez2>elz)
+                                        continue;
+                                    e2=ez2+(ex2-1)*elz
+                                        +(ey2-1)*elz*elx;
+                                    bin2=(ez2-shallow_min_ez)*rbins
+                                            /shallow_layers
+                                        +rbins*((rank_offset_x*hbins
+                                        +min((ex2-1)*hbins/elx,hbins-1))
+                                        +group_hbins_x*(rank_offset_y*hbins
+                                        +min((ey2-1)*hbins/ely,hbins-1)));
+                                    local_aggregate[bin1*nbins+bin2] +=
+                                        assemble_Ahatp_jacobi_entry(
+                                            E,e1,e2,lev,m);
+                                }
+                            }
+                        }
+                    }
+        MPI_Allreduce(local_aggregate,aggregate,nbins*nbins,MPI_DOUBLE,
+                      MPI_SUM,group_comm[m]);
+        iterations=0;
+        nactive=0;
+        if(group_rank==0) {
+            for(i=0;i<nbins;i++) {
+                active_map[i]=-1;
+                if(isfinite(aggregate[i*nbins+i]) &&
+                   aggregate[i*nbins+i]>0.0)
+                    active_map[i]=nactive++;
+            }
+            for(i=0;i<nbins;i++)
+                if(active_map[i]>=0)
+                    for(j=0;j<nbins;j++)
+                        if(active_map[j]>=0) {
+                            active1=active_map[i];
+                            active2=active_map[j];
+                            value=0.5*(aggregate[i*nbins+j]
+                                     +aggregate[j*nbins+i]);
+                            normalized[active1*nactive+active2]=value
+                                /sqrt(aggregate[i*nbins+i]
+                                      *aggregate[j*nbins+j]);
+                            if(!isfinite(
+                                normalized[active1*nactive+active2]))
+                                myerror(E,
+                                    "ALA cross-rank GenEO operator is not finite");
+                        }
+            if(nactive>0)
+                iterations=ala_geneo_jacobi_eigensolve(
+                    normalized,vectors,eigenvalues,nactive);
+            if(nactive>0 &&
+               iterations>=max(50*nactive*nactive,1))
+                myerror(E,
+                    "ALA cross-rank GenEO eigensolve did not converge");
+            for(i=0;i<nactive;i++)
+                if(!isfinite(eigenvalues[i]))
+                    myerror(E,
+                        "ALA cross-rank GenEO eigenvalue is not finite");
+            for(i=0;i<nactive;i++)
+                for(j=i+1;j<nactive;j++)
+                    if(eigenvalues[j]<eigenvalues[i]) {
+                        value=eigenvalues[i];
+                        eigenvalues[i]=eigenvalues[j];
+                        eigenvalues[j]=value;
+                        for(k=0;k<nactive;k++) {
+                            value=vectors[k*nactive+i];
+                            vectors[k*nactive+i]=vectors[k*nactive+j];
+                            vectors[k*nactive+j]=value;
+                        }
+                    }
+            desired_modes=0;
+            while(desired_modes<nactive &&
+                  desired_modes<E->control.ala_geneo_max_modes_per_rank &&
+                  eigenvalues[desired_modes]<=threshold)
+                desired_modes++;
+            if(nactive>0)
+                desired_modes=max(desired_modes,
+                    E->control.ala_geneo_min_modes_per_rank);
+            desired_modes=min(desired_modes,nactive);
+            desired_modes=min(desired_modes,
+                E->control.ala_geneo_max_modes_per_rank);
+
+            /* The first mode is the normalized indicator of the complete
+               processor aggregate.  These disjoint indicators are an exact
+               partition of unity and guarantee that the new path contains a
+               genuinely cross-rank component even when the summed principal
+               eigenproblem is block diagonal across rank interfaces. */
+            accepted=0;
+            if(desired_modes>0) {
+                denominator=0.0;
+                for(j=0;j<nbins;j++)
+                    if(active_map[j]>=0) {
+                        selected_shapes[m][j]=1.0;
+                        denominator += aggregate[j*nbins+j];
+                    }
+                if(!isfinite(denominator) || denominator<=1.0e-30)
+                    myerror(E,
+                        "ALA cross-rank GenEO partition mode has zero mass");
+                denominator=sqrt(denominator);
+                for(j=0;j<nbins;j++)
+                    selected_shapes[m][j] /= denominator;
+                rayleigh_numerator=0.0;
+                rayleigh_denominator=0.0;
+                for(i=0;i<nbins;i++)
+                    if(active_map[i]>=0) {
+                        rayleigh_denominator += aggregate[i*nbins+i]
+                            *selected_shapes[m][i]
+                            *selected_shapes[m][i];
+                        for(j=0;j<nbins;j++)
+                            if(active_map[j]>=0)
+                                rayleigh_numerator +=
+                                    selected_shapes[m][i]
+                                    *aggregate[i*nbins+j]
+                                    *selected_shapes[m][j];
+                    }
+                selected_values[m][0]=rayleigh_numerator
+                    /max(rayleigh_denominator,1.0e-300);
+                accepted=1;
+            }
+
+            /* Add low-energy spectral shapes after D-orthogonalizing them
+               against the partition mode and previously accepted shapes.
+               Near-dependent candidates are skipped instead of creating an
+               ill-conditioned global Galerkin matrix. */
+            candidate=0;
+            while(accepted<desired_modes && candidate<nactive) {
+                for(j=0;j<nbins;j++)
+                    selected_shapes[m][accepted*nbins+j]
+                        =(active_map[j]>=0)
+                        ? vectors[active_map[j]*nactive+candidate]
+                          /sqrt(aggregate[j*nbins+j])
+                        : 0.0;
+                for(p=0;p<accepted;p++) {
+                    coefficient=0.0;
+                    denominator=0.0;
+                    for(j=0;j<nbins;j++)
+                        if(active_map[j]>=0) {
+                            coefficient += aggregate[j*nbins+j]
+                                *selected_shapes[m][accepted*nbins+j]
+                                *selected_shapes[m][p*nbins+j];
+                            denominator += aggregate[j*nbins+j]
+                                *selected_shapes[m][p*nbins+j]
+                                *selected_shapes[m][p*nbins+j];
+                        }
+                    coefficient /= max(denominator,1.0e-300);
+                    for(j=0;j<nbins;j++)
+                        selected_shapes[m][accepted*nbins+j]
+                            -=coefficient
+                              *selected_shapes[m][p*nbins+j];
+                }
+                denominator=0.0;
+                for(j=0;j<nbins;j++)
+                    if(active_map[j]>=0)
+                        denominator += aggregate[j*nbins+j]
+                            *selected_shapes[m][accepted*nbins+j]
+                            *selected_shapes[m][accepted*nbins+j];
+                candidate++;
+                if(!isfinite(denominator) || denominator<=1.0e-20) {
+                    for(j=0;j<nbins;j++)
+                        selected_shapes[m][accepted*nbins+j]=0.0;
+                    continue;
+                }
+                denominator=sqrt(denominator);
+                for(j=0;j<nbins;j++)
+                    selected_shapes[m][accepted*nbins+j] /= denominator;
+                rayleigh_numerator=0.0;
+                rayleigh_denominator=0.0;
+                for(i=0;i<nbins;i++)
+                    if(active_map[i]>=0) {
+                        rayleigh_denominator += aggregate[i*nbins+i]
+                            *selected_shapes[m][accepted*nbins+i]
+                            *selected_shapes[m][accepted*nbins+i];
+                        for(j=0;j<nbins;j++)
+                            if(active_map[j]>=0)
+                                rayleigh_numerator +=
+                                    selected_shapes[m][accepted*nbins+i]
+                                    *aggregate[i*nbins+j]
+                                    *selected_shapes[m][accepted*nbins+j];
+                    }
+                selected_values[m][accepted]=rayleigh_numerator
+                    /max(rayleigh_denominator,1.0e-300);
+                accepted++;
+            }
+            if(accepted<desired_modes)
+                myerror(E,
+                    "ALA cross-rank GenEO could not build independent modes");
+            local_modes=accepted;
+            group_modes[m]=local_modes;
+            if(local_modes>0) {
+                owned_modes += local_modes;
+                local_active++;
+                local_mode_min=min(local_mode_min,local_modes);
+                local_mode_max=max(local_mode_max,local_modes);
+                local_group_min=min(local_group_min,group_size);
+                local_group_max=max(local_group_max,group_size);
+                local_eigen_min=min(local_eigen_min,
+                                    selected_values[m][0]);
+                local_eigen_max=max(local_eigen_max,
+                                    selected_values[m][local_modes-1]);
+            }
+            if(local_modes>1) {
+                local_second_min=min(local_second_min,
+                                     selected_values[m][1]);
+                local_second_max=max(local_second_max,
+                                     selected_values[m][1]);
+            }
+        }
+        MPI_Bcast(&group_modes[m],1,MPI_INT,0,group_comm[m]);
+        MPI_Bcast(selected_values[m],
+                  E->control.ala_geneo_max_modes_per_rank,
+                  MPI_DOUBLE,0,group_comm[m]);
+        MPI_Bcast(selected_shapes[m],
+                  E->control.ala_geneo_max_modes_per_rank*nbins,
+                  MPI_DOUBLE,0,group_comm[m]);
+        MPI_Allreduce(&iterations,&i,1,MPI_INT,MPI_MAX,group_comm[m]);
+        if(group_rank==0)
+            global_iterations=max(global_iterations,i);
+        free((void *)local_aggregate);
+        free((void *)aggregate);
+        free((void *)active_map);
+        free((void *)normalized);
+        free((void *)vectors);
+        free((void *)eigenvalues);
+    }
+
+    mode_counts=(int *)calloc(E->parallel.nproc,sizeof(int));
+    mode_offsets=(int *)calloc(E->parallel.nproc,sizeof(int));
+    if(mode_counts==NULL || mode_offsets==NULL)
+        myerror(E,"Unable to allocate cross-rank GenEO mode ownership");
+    MPI_Allgather(&owned_modes,1,MPI_INT,mode_counts,1,MPI_INT,
+                  E->parallel.world);
+    n=0;
+    for(i=0;i<E->parallel.nproc;i++) {
+        mode_offsets[i]=n;
+        n += mode_counts[i];
+    }
+    if(n<1)
+        myerror(E,"ALA cross-rank GenEO selected no global coarse modes");
+    if(n>E->control.ala_geneo_max_global_modes)
+        myerror(E,
+            "ALA cross-rank GenEO global mode count exceeds configured maximum");
+    cache->geneo_basis_count=n;
+    cache->geneo_local_modes=owned_modes;
+    cache->geneo_local_offset=mode_offsets[E->parallel.me];
+    owned_cursor=mode_offsets[E->parallel.me];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        MPI_Comm_rank(group_comm[m],&group_rank);
+        if(group_rank==0) {
+            group_offsets[m]=owned_cursor;
+            owned_cursor += group_modes[m];
+        }
+        MPI_Bcast(&group_offsets[m],1,MPI_INT,0,group_comm[m]);
+    }
+    cache->geneo_eigenvalues=(double *)calloc(n,sizeof(double));
+    local_eigenvalues=(double *)calloc(n,sizeof(double));
+    if(cache->geneo_eigenvalues==NULL || local_eigenvalues==NULL)
+        myerror(E,
+            "Unable to allocate cross-rank GenEO eigenvalue diagnostics");
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        MPI_Comm_rank(group_comm[m],&group_rank);
+        if(group_rank==0)
+            for(i=0;i<group_modes[m];i++)
+                local_eigenvalues[group_offsets[m]+i]
+                    =selected_values[m][i];
+    }
+    MPI_Allreduce(local_eigenvalues,cache->geneo_eigenvalues,n,MPI_DOUBLE,
+                  MPI_SUM,E->parallel.world);
+
+    clev=lev-E->control.ala_two_level_offset;
+    factor=1 << E->control.ala_two_level_offset;
+    celx=E->lmesh.ELX[clev];
+    cely=E->lmesh.ELY[clev];
+    celz=E->lmesh.ELZ[clev];
+    cnpno=E->lmesh.NPNO[clev];
+    stride=cnpno+1;
+    npno=E->lmesh.NPNO[lev];
+    neq=E->lmesh.NEQ[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        cache->geneo_basis[m]=(double *)calloc(n*stride,sizeof(double));
+        if(cache->geneo_basis[m]==NULL)
+            myerror(E,"Unable to allocate cross-rank GenEO basis");
+        rank_offset_x=group_rank_offset_x[m];
+        rank_offset_y=group_rank_offset_y[m];
+        group_hbins_x=group_hx[m];
+        nbins=group_nbins[m];
+        for(i=0;i<group_modes[m];i++) {
+            col=group_offsets[m]+i;
+            norm=0.0;
+            for(cy=1;cy<=cely;cy++)
+                for(cx=1;cx<=celx;cx++)
+                    for(cz=1;cz<=celz;cz++) {
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        depth=(1.0-E->ECO[clev][m][ce].centre[3])
+                            *E->data.radius_km;
+                        if(depth>E->control.ala_shallow_patch_depth_km)
+                            continue;
+                        ex1=min((cx-1)*factor+1,elx);
+                        ey1=min((cy-1)*factor+1,ely);
+                        ez1=min(cz*factor,elz);
+                        if(ez1<shallow_min_ez)
+                            continue;
+                        bin1=(ez1-shallow_min_ez)*rbins/shallow_layers
+                            +rbins*((rank_offset_x*hbins
+                            +min((ex1-1)*hbins/elx,hbins-1))
+                            +group_hbins_x*(rank_offset_y*hbins
+                            +min((ey1-1)*hbins/ely,hbins-1)));
+                        value=selected_shapes[m][i*nbins+bin1];
+                        cache->geneo_basis[m][col*stride+ce]=value;
+                        norm += value*value;
+                    }
+            MPI_Allreduce(&norm,&group_norm,1,MPI_DOUBLE,MPI_SUM,
+                          group_comm[m]);
+            local_has_support=(norm>1.0e-30) ? 1 : 0;
+            MPI_Allreduce(&local_has_support,&supported_members,1,MPI_INT,
+                          MPI_SUM,group_comm[m]);
+            if(i==0 && supported_members!=group_size)
+                myerror(E,
+                    "ALA cross-rank GenEO partition mode misses a member rank");
+            if(!isfinite(group_norm) || group_norm<=1.0e-30)
+                myerror(E,
+                    "ALA cross-rank GenEO selected basis has zero norm");
+            group_norm=sqrt(group_norm);
+            for(ce=1;ce<=cnpno;ce++)
+                cache->geneo_basis[m][col*stride+ce] /= group_norm;
+        }
+    }
+
+    cache->geneo_matrix=(double *)calloc(n*n,sizeof(double));
+    cache->geneo_chol=(double *)calloc(n*n,sizeof(double));
+    local_column=(double *)calloc(n,sizeof(double));
+    global_column=(double *)calloc(n,sizeof(double));
+    if(cache->geneo_matrix==NULL || cache->geneo_chol==NULL ||
+       local_column==NULL || global_column==NULL)
+        myerror(E,"Unable to allocate cross-rank GenEO global matrix");
+    matrix=cache->geneo_matrix;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        coarse_p[m]=(double *)calloc(cnpno+1,sizeof(double));
+        coarse_Ap[m]=(double *)calloc(cnpno+1,sizeof(double));
+        fine_p[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_Ap[m]=(double *)calloc(npno+1,sizeof(double));
+        fine_velocity[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_rhs[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_Ax[m]=(double *)calloc(neq+1,sizeof(double));
+        fine_velocity_direction[m]=(double *)calloc(neq+1,sizeof(double));
+        if(coarse_p[m]==NULL || coarse_Ap[m]==NULL || fine_p[m]==NULL ||
+           fine_Ap[m]==NULL || fine_velocity[m]==NULL ||
+           fine_velocity_rhs[m]==NULL || fine_velocity_Ax[m]==NULL ||
+           fine_velocity_direction[m]==NULL)
+            myerror(E,
+                "Unable to allocate cross-rank GenEO Galerkin workspace");
+    }
+    for(col=0;col<n;col++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                coarse_p[m][ce]=cache->geneo_basis[m][col*stride+ce];
+        apply_ala_galerkin_fixed_schur(
+            E,coarse_p,coarse_Ap,fine_p,fine_Ap,fine_velocity,
+            fine_velocity_rhs,fine_velocity_Ax,fine_velocity_direction,
+            cache,clev,lev,factor,NULL);
+        for(row=0;row<n;row++)
+            local_column[row]=0.0;
+        for(row=0;row<n;row++)
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(ce=1;ce<=cnpno;ce++)
+                    local_column[row] +=
+                        cache->geneo_basis[m][row*stride+ce]
+                        *coarse_Ap[m][ce];
+        MPI_Allreduce(local_column,global_column,n,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        for(row=0;row<n;row++)
+            matrix[row*n+col]=global_column[row];
+        if(col==0 || (col+1)%25==0 || col+1==n) {
+            setup_seconds=CPU_time0()-setup_start;
+            MPI_Allreduce(&setup_seconds,&global_setup_seconds,1,MPI_DOUBLE,
+                          MPI_MAX,E->parallel.world);
+            if(E->parallel.me==0) {
+                fprintf(E->fp,
+                    "ALA_CROSS_RANK_GENEO_SETUP_PROGRESS column=%d/%d "
+                    "elapsed_seconds_max=%e\n",
+                    col+1,n,global_setup_seconds);
+                fprintf(stderr,
+                    "ALA_CROSS_RANK_GENEO_SETUP_PROGRESS column=%d/%d "
+                    "elapsed_seconds_max=%e\n",
+                    col+1,n,global_setup_seconds);
+                fflush(E->fp);
+                fflush(stderr);
+            }
+        }
+    }
+    cache->geneo_schur_applications=n;
+    anti2=0.0;
+    total2=0.0;
+    diagonal_min=1.0e300;
+    diagonal_max=0.0;
+    for(i=0;i<n;i++) {
+        diagonal_min=min(diagonal_min,matrix[i*n+i]);
+        diagonal_max=max(diagonal_max,matrix[i*n+i]);
+        for(j=0;j<n;j++) {
+            anti2 += (matrix[i*n+j]-matrix[j*n+i])
+                *(matrix[i*n+j]-matrix[j*n+i]);
+            total2 += matrix[i*n+j]*matrix[i*n+j];
+            cache->geneo_chol[i*n+j]
+                =0.5*(matrix[i*n+j]+matrix[j*n+i]);
+        }
+    }
+    symmetry=sqrt(anti2/max(total2,1.0e-300));
+    if(!isfinite(symmetry) || symmetry>1.0e-8)
+        myerror(E,"ALA cross-rank GenEO Galerkin matrix is not symmetric");
+    if(!isfinite(diagonal_min) || diagonal_min<=0.0)
+        myerror(E,"ALA cross-rank GenEO Galerkin diagonal is not positive");
+    shift=E->control.ala_geneo_regularization*diagonal_max;
+    for(i=0;i<n;i++)
+        cache->geneo_chol[i*n+i] += shift;
+    min_pivot=1.0e300;
+    for(i=0;i<n;i++) {
+        for(j=0;j<=i;j++) {
+            sum=cache->geneo_chol[i*n+j];
+            for(k=0;k<j;k++)
+                sum -= cache->geneo_chol[i*n+k]
+                    *cache->geneo_chol[j*n+k];
+            if(i==j) {
+                pivot=sum;
+                if(!isfinite(pivot) ||
+                   pivot<=1.0e-14*max(diagonal_max,1.0e-300))
+                    myerror(E,"ALA cross-rank GenEO Cholesky failed");
+                cache->geneo_chol[i*n+j]=sqrt(pivot);
+                min_pivot=min(min_pivot,pivot);
+            }
+            else
+                cache->geneo_chol[i*n+j]
+                    =sum/cache->geneo_chol[j*n+j];
+        }
+        for(j=i+1;j<n;j++)
+            cache->geneo_chol[i*n+j]=0.0;
+    }
+
+    MPI_Allreduce(&local_active,&global_active,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_mode_min,&global_mode_min,1,MPI_INT,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_mode_max,&global_mode_max,1,MPI_INT,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&local_group_min,&global_group_min,1,MPI_INT,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_group_max,&global_group_max,1,MPI_INT,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&local_eigen_min,&global_eigen_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_eigen_max,&global_eigen_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&local_second_min,&global_second_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_second_max,&global_second_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    MPI_Allreduce(&global_iterations,&iterations,1,MPI_INT,MPI_MAX,
+                  E->parallel.world);
+    setup_seconds=CPU_time0()-setup_start;
+    MPI_Allreduce(&setup_seconds,&global_setup_seconds,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,
+            "ALA cross-rank GenEO coarse space global_modes=%d "
+            "active_aggregates=%d modes_per_aggregate_range=(%d,%d) "
+            "rank_group=%dx%d group_member_range=(%d,%d) "
+            "aggregate_bins_max=%dx%dx%d partition_of_unity=disjoint_exact "
+            "threshold=%e selected_rayleigh_range=(%e,%e) "
+            "second_mode_rayleigh_range=(%e,%e) "
+            "local_jacobi_iterations=%d Galerkin_applications=%d "
+            "symmetry_defect=%e diagonal_range=(%e,%e) "
+            "regularization=%e shift=%e min_pivot=%e "
+            "setup_seconds_max=%e status=pass\n",
+            n,global_active,global_mode_min,global_mode_max,
+            rank_group_x,rank_group_y,global_group_min,global_group_max,
+            hbins*rank_group_x,hbins*rank_group_y,rbins,threshold,
+            global_eigen_min,global_eigen_max,
+            global_second_min,global_second_max,iterations,n,
+            symmetry,diagonal_min,diagonal_max,
+            E->control.ala_geneo_regularization,shift,min_pivot,
+            global_setup_seconds);
+        fprintf(stderr,
+            "ALA cross-rank GenEO coarse space global_modes=%d "
+            "active_aggregates=%d rank_group=%dx%d "
+            "aggregate_bins_max=%dx%dx%d "
+            "partition_of_unity=disjoint_exact "
+            "symmetry_defect=%e setup_seconds_max=%e status=pass\n",
+            n,global_active,rank_group_x,rank_group_y,
+            hbins*rank_group_x,hbins*rank_group_y,rbins,
+            symmetry,global_setup_seconds);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        free((void *)coarse_p[m]);
+        free((void *)coarse_Ap[m]);
+        free((void *)fine_p[m]);
+        free((void *)fine_Ap[m]);
+        free((void *)fine_velocity[m]);
+        free((void *)fine_velocity_rhs[m]);
+        free((void *)fine_velocity_Ax[m]);
+        free((void *)fine_velocity_direction[m]);
+        free((void *)selected_values[m]);
+        free((void *)selected_shapes[m]);
+        MPI_Comm_free(&group_comm[m]);
+    }
+    free((void *)mode_counts);
+    free((void *)mode_offsets);
+    free((void *)local_eigenvalues);
+    free((void *)local_column);
+    free((void *)global_column);
+}
+
+
 /* Calibrate the Jacobi-scaled velocity operator used by the fixed polynomial
    inverse.  The similarity transform sqrt(B) K sqrt(B) is symmetric; a fixed
    Chebyshev polynomial of it therefore yields an SPD approximation to K^-1. */
@@ -4049,7 +4705,13 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 fprintf(stderr,"ALA preconditioner startup stage=geneo_build_begin\n");
                 fflush(stderr);
             }
-            build_ala_geneo_coarse_cache(E,&preconditioner_cache,lev);
+            if(E->control.ala_geneo_rank_group_x>1 ||
+               E->control.ala_geneo_rank_group_y>1)
+                build_ala_cross_rank_geneo_coarse_cache(
+                    E,&preconditioner_cache,lev);
+            else
+                build_ala_geneo_coarse_cache(
+                    E,&preconditioner_cache,lev);
             if(E->parallel.me==0) {
                 fprintf(stderr,"ALA preconditioner startup stage=geneo_build_complete\n");
                 fflush(stderr);
@@ -4086,7 +4748,11 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         audit_ala_shallow_patch_preconditioner(
             E,&preconditioner_cache,lev);
     if(E->control.ala_geneo_preconditioner)
-        preconditioner_mode="mpi_overlap_schwarz_plus_geneo";
+        preconditioner_mode=
+            (E->control.ala_geneo_rank_group_x>1 ||
+             E->control.ala_geneo_rank_group_y>1)
+            ? "mpi_overlap_schwarz_plus_cross_rank_geneo"
+            : "mpi_overlap_schwarz_plus_geneo";
     else if(E->control.ala_two_level_preconditioner)
         preconditioner_mode=E->control.ala_shallow_patch_preconditioner
             ? (strcmp(E->control.ala_two_level_velocity_solver,"chebyshev")==0
@@ -4106,7 +4772,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
+                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e "
+                "geneo_rank_group=%dx%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
@@ -4120,13 +4787,16 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_global_coarse_weight,
                 E->control.ala_geneo_preconditioner ? "on" : "off",
                 preconditioner_cache.geneo_basis_count,
-                E->control.ala_geneo_weight);
+                E->control.ala_geneo_weight,
+                E->control.ala_geneo_rank_group_x,
+                E->control.ala_geneo_rank_group_y);
         fprintf(stderr,
                 "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e\n",
+                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e "
+                "geneo_rank_group=%dx%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
@@ -4140,7 +4810,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.ala_global_coarse_weight,
                 E->control.ala_geneo_preconditioner ? "on" : "off",
                 preconditioner_cache.geneo_basis_count,
-                E->control.ala_geneo_weight);
+                E->control.ala_geneo_weight,
+                E->control.ala_geneo_rank_group_x,
+                E->control.ala_geneo_rank_group_y);
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "

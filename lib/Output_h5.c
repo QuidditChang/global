@@ -1738,6 +1738,10 @@ void h5output_meta(struct All_variables *E)
                                E->control.ala_geneo_horizontal_bins);
     status = set_attribute_int(input, "ala_geneo_radial_bins",
                                E->control.ala_geneo_radial_bins);
+    status = set_attribute_int(input, "ala_geneo_rank_group_x",
+                               E->control.ala_geneo_rank_group_x);
+    status = set_attribute_int(input, "ala_geneo_rank_group_y",
+                               E->control.ala_geneo_rank_group_y);
     status = set_attribute_int(input, "ala_geneo_max_global_modes",
                                E->control.ala_geneo_max_global_modes);
     status = set_attribute_double(input, "ala_geneo_weight",
