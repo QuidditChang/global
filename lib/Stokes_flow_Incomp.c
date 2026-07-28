@@ -412,11 +412,11 @@ static double strict_ala_inner_relative_accuracy(struct All_variables *E,
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
-#define ALA_PATCH_HORIZONTAL_ELEMENTS 4
 #define ALA_PATCH_RADIAL_ELEMENTS 2
-#define ALA_PATCH_HORIZONTAL_STRIDE 2
 #define ALA_PATCH_RADIAL_STRIDE 1
 #define ALA_PATCH_MPI_FACES 4
+#define ALA_PATCH_MAX_HORIZONTAL_ELEMENTS 8
+#define ALA_PATCH_MAX_MPI_OVERLAP 4
 #define ALA_HALO_ELEMENT_RECORD_DOUBLES 74
 #define ALA_COARSE_POWER_ITERATIONS 6
 #define ALA_VELOCITY_POWER_ITERATIONS 6
@@ -426,9 +426,12 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
     (ALA_GLOBAL_ANGULAR_BASIS*ALA_GLOBAL_RADIAL_BASIS)
 #define ALA_GENEO_MAX_BINS 256
 #define ALA_PATCH_MAX_ELEMENTS \
-    (4*ALA_PATCH_HORIZONTAL_ELEMENTS \
+    (ALA_PATCH_MAX_HORIZONTAL_ELEMENTS \
+     *ALA_PATCH_MAX_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
 struct ala_pressure_preconditioner_cache {
+    int patch_capacity;
+    int interface_capacity;
     int blocks[NCS];
     unsigned char *size[NCS];
     unsigned short *multiplicity[NCS];
@@ -695,7 +698,7 @@ static void ala_halo_record_center(const double *record, double center[3])
 
 static int ala_factor_pressure_patch(struct All_variables *E,
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS],
-    int n, double *L, double *minimum_pivot_ratio)
+    int n, double *L, int ld, double *minimum_pivot_ratio)
 {
     int i,j,k;
     double maxdiag,sum,pivot,ratio;
@@ -713,19 +716,17 @@ static int ala_factor_pressure_patch(struct All_variables *E,
         for(j=0;j<=i;j++) {
             sum=matrix[i][j];
             for(k=0;k<j;k++)
-                sum -= L[i*ALA_PATCH_MAX_ELEMENTS+k]
-                    *L[j*ALA_PATCH_MAX_ELEMENTS+k];
+                sum -= L[i*ld+k]*L[j*ld+k];
             if(i==j) {
                 pivot=sum;
                 if(!isfinite(pivot) || pivot<=pivot_tolerance*maxdiag)
                     return(0);
                 ratio=pivot/maxdiag;
                 *minimum_pivot_ratio=min(*minimum_pivot_ratio,ratio);
-                L[i*ALA_PATCH_MAX_ELEMENTS+j]=sqrt(pivot);
+                L[i*ld+j]=sqrt(pivot);
             }
             else
-                L[i*ALA_PATCH_MAX_ELEMENTS+j]=
-                    sum/L[j*ALA_PATCH_MAX_ELEMENTS+j];
+                L[i*ld+j]=sum/L[j*ld+j];
         }
     }
     return(1);
@@ -825,6 +826,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
 {
     int m,ex,ey,ez,dx,dy,dz,b,i,j,n,block_count;
     int elx,ely,elz,shallow_min_ez,shallow_layers,e,npno;
+    int horizontal_elements,horizontal_stride;
+    int patch_capacity,interface_capacity;
     int local_blocks,global_blocks,local_fallback,global_fallback;
     int local_elements,global_elements,local_unique,global_unique;
     int local_overlap_min,global_overlap_min;
@@ -841,6 +844,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     unsigned short *final_count[ALA_PATCH_MPI_FACES];
     double depth_km;
     double build_start,build_seconds,global_build_seconds;
+    double local_cache_bytes,global_cache_bytes;
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS];
     double patch_records[ALA_PATCH_MAX_ELEMENTS]
                         [ALA_HALO_ELEMENT_RECORD_DOUBLES];
@@ -860,6 +864,24 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     ely=E->lmesh.ELY[lev];
     elz=E->lmesh.ELZ[lev];
     npno=E->lmesh.NPNO[lev];
+    horizontal_elements=E->control.ala_shallow_patch_horizontal_elements;
+    horizontal_stride=E->control.ala_shallow_patch_horizontal_stride;
+    overlap=E->control.ala_shallow_patch_mpi_overlap;
+    if(horizontal_elements>elx || horizontal_elements>ely)
+        myerror(E,"ALA shallow-patch width exceeds the local horizontal mesh");
+    if(overlap>ALA_PATCH_MAX_MPI_OVERLAP)
+        myerror(E,"ALA shallow-patch MPI overlap exceeds the compiled maximum");
+    if(overlap>elx || overlap>ely)
+        myerror(E,"ALA shallow-patch MPI overlap exceeds the local mesh");
+    patch_capacity=horizontal_elements*horizontal_elements
+        *ALA_PATCH_RADIAL_ELEMENTS;
+    interface_capacity=2*overlap*horizontal_elements
+        *ALA_PATCH_RADIAL_ELEMENTS;
+    if(patch_capacity>ALA_PATCH_MAX_ELEMENTS ||
+       interface_capacity>ALA_PATCH_MAX_ELEMENTS)
+        myerror(E,"ALA shallow-patch capacity exceeds the compiled maximum");
+    cache->patch_capacity=patch_capacity;
+    cache->interface_capacity=interface_capacity;
     shallow_min_ez=elz+1;
     for(ez=elz;ez>=1;ez--) {
         depth_km=(1.0-0.5*(E->sx[1][3][ez]+E->sx[1][3][ez+1]))
@@ -870,10 +892,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     shallow_layers=(shallow_min_ez<=elz)
         ? elz-shallow_min_ez+1 : 0;
-    block_count=((elx+ALA_PATCH_HORIZONTAL_STRIDE-1)
-                 /ALA_PATCH_HORIZONTAL_STRIDE)
-        *((ely+ALA_PATCH_HORIZONTAL_STRIDE-1)
-          /ALA_PATCH_HORIZONTAL_STRIDE)
+    block_count=((elx+horizontal_stride-1)/horizontal_stride)
+        *((ely+horizontal_stride-1)/horizontal_stride)
         *((shallow_layers+ALA_PATCH_RADIAL_STRIDE-1)
           /ALA_PATCH_RADIAL_STRIDE);
     local_blocks=0;
@@ -886,7 +906,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     local_interface_entries=0;
     local_ghost_elements=0;
     local_min_pivot_ratio=1.0e300;
-    overlap=E->control.ala_shallow_patch_mpi_overlap;
+    local_cache_bytes=0.0;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         cache->blocks[m]=block_count;
@@ -895,34 +915,38 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
            multiplicity must exist even when this rank has zero patch blocks. */
         cache->multiplicity[m]=(unsigned short *)calloc(npno+1,
                                                        sizeof(unsigned short));
+        local_cache_bytes += (npno+1)*sizeof(unsigned short);
         if(cache->multiplicity[m]==NULL)
             myerror(E,"Unable to allocate ALA shallow-patch multiplicity");
         if(block_count==0)
             continue;
         cache->size[m]=(unsigned char *)calloc(block_count,
                                                 sizeof(unsigned char));
-        cache->elements[m]=(int *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS,
-                                         sizeof(int));
-        cache->chol[m]=(double *)calloc(block_count*ALA_PATCH_MAX_ELEMENTS
-                                       *ALA_PATCH_MAX_ELEMENTS,sizeof(double));
+        cache->elements[m]=(int *)calloc(
+            (size_t)block_count*patch_capacity,sizeof(int));
+        cache->chol[m]=(double *)calloc(
+            (size_t)block_count*patch_capacity*patch_capacity,sizeof(double));
+        local_cache_bytes += block_count*sizeof(unsigned char)
+            +(double)block_count*patch_capacity*sizeof(int)
+            +(double)block_count*patch_capacity*patch_capacity*sizeof(double);
         if(cache->size[m]==NULL || cache->elements[m]==NULL ||
            cache->chol[m]==NULL)
             myerror(E,"Unable to allocate ALA shallow-patch cache");
         b=0;
-        for(ey=1;ey<=ely;ey+=ALA_PATCH_HORIZONTAL_STRIDE)
-            for(ex=1;ex<=elx;ex+=ALA_PATCH_HORIZONTAL_STRIDE)
+        for(ey=1;ey<=ely;ey+=horizontal_stride)
+            for(ex=1;ex<=elx;ex+=horizontal_stride)
                 for(ez=elz;ez>=shallow_min_ez;
                     ez-=ALA_PATCH_RADIAL_STRIDE) {
                     n=0;
-                    for(dy=0;dy<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                    for(dy=0;dy<horizontal_elements &&
                         ey+dy<=ely;dy++)
-                        for(dx=0;dx<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                        for(dx=0;dx<horizontal_elements &&
                             ex+dx<=elx;dx++)
                             for(dz=0;dz<ALA_PATCH_RADIAL_ELEMENTS &&
                                 ez-dz>=shallow_min_ez;dz++) {
                                 e=(ez-dz)+(ex+dx-1)*elz
                                     +(ey+dy-1)*elz*elx;
-                                cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+n]
+                                cache->elements[m][b*patch_capacity+n]
                                     =e;
                                 n++;
                             }
@@ -931,11 +955,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         for(j=0;j<n;j++)
                             matrix[i][j]=0.0;
                     ala_build_pressure_patch_schur(
-                        E,cache->elements[m]+b*ALA_PATCH_MAX_ELEMENTS,
+                        E,cache->elements[m]+b*patch_capacity,
                         n,lev,m,&matrix[0][0]);
-                    L=cache->chol[m]+b*ALA_PATCH_MAX_ELEMENTS
-                        *ALA_PATCH_MAX_ELEMENTS;
-                    if(!ala_factor_pressure_patch(E,matrix,n,L,
+                    L=cache->chol[m]+(size_t)b*patch_capacity*patch_capacity;
+                    if(!ala_factor_pressure_patch(E,matrix,n,L,patch_capacity,
                                                   &local_min_pivot_ratio)) {
                         cache->size[m][b]=0;
                         local_fallback++;
@@ -948,7 +971,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         for(b=0;b<block_count;b++) {
             n=cache->size[m][b];
             for(i=0;i<n;i++) {
-                e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
+                e=cache->elements[m][b*patch_capacity+i];
                 if(cache->multiplicity[m][e]==65535)
                     myerror(E,"ALA shallow-patch overlap count overflow");
                 cache->multiplicity[m][e]++;
@@ -972,6 +995,14 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             cache->halo_multiplicity[m][face]=(unsigned short *)calloc(
                 max(cache->halo_recv_count[m][face],1),
                 sizeof(unsigned short));
+            local_cache_bytes +=
+                (double)max(cache->halo_send_count[m][face],1)*sizeof(int)
+                +(double)max(cache->halo_send_count[m][face],1)
+                    *ALA_HALO_ELEMENT_RECORD_DOUBLES*sizeof(double)
+                +(double)max(cache->halo_recv_count[m][face],1)
+                    *ALA_HALO_ELEMENT_RECORD_DOUBLES*sizeof(double)
+                +(double)max(cache->halo_recv_count[m][face],1)
+                    *sizeof(unsigned short);
             if(cache->halo_send_elements[m][face]==NULL ||
                cache->halo_send_records[m][face]==NULL ||
                cache->halo_recv_records[m][face]==NULL ||
@@ -1032,8 +1063,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
             tangent_count=(face<2) ? ely : elx;
             interface_count +=
-                ((tangent_count+ALA_PATCH_HORIZONTAL_STRIDE-1)
-                 /ALA_PATCH_HORIZONTAL_STRIDE)
+                ((tangent_count+horizontal_stride-1)/horizontal_stride)
                 *((shallow_layers+ALA_PATCH_RADIAL_STRIDE-1)
                   /ALA_PATCH_RADIAL_STRIDE);
         }
@@ -1043,10 +1073,15 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         cache->interface_face[m]=(unsigned char *)calloc(
             max(interface_count,1),sizeof(unsigned char));
         cache->interface_elements[m]=(int *)calloc(
-            max(interface_count,1)*ALA_PATCH_MAX_ELEMENTS,sizeof(int));
+            (size_t)max(interface_count,1)*interface_capacity,sizeof(int));
         cache->interface_chol[m]=(double *)calloc(
-            max(interface_count,1)*ALA_PATCH_MAX_ELEMENTS
-                *ALA_PATCH_MAX_ELEMENTS,sizeof(double));
+            (size_t)max(interface_count,1)*interface_capacity
+                *interface_capacity,sizeof(double));
+        local_cache_bytes +=
+            2.0*max(interface_count,1)*sizeof(unsigned char)
+            +(double)max(interface_count,1)*interface_capacity*sizeof(int)
+            +(double)max(interface_count,1)*interface_capacity
+                *interface_capacity*sizeof(double);
         if(cache->interface_size[m]==NULL ||
            cache->interface_face[m]==NULL ||
            cache->interface_elements[m]==NULL ||
@@ -1071,12 +1106,12 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
             tangent_count=(face<2) ? ely : elx;
             for(tangent=1;tangent<=tangent_count;
-                tangent+=ALA_PATCH_HORIZONTAL_STRIDE)
+                tangent+=horizontal_stride)
                 for(ez=elz;ez>=shallow_min_ez;
                     ez-=ALA_PATCH_RADIAL_STRIDE) {
                     n=0;
                     for(q=0;q<overlap;q++)
-                        for(t=0;t<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                        for(t=0;t<horizontal_elements &&
                             tangent+t<=tangent_count;t++)
                             for(dz=0;dz<ALA_PATCH_RADIAL_ELEMENTS &&
                                 ez-dz>=shallow_min_ez;dz++) {
@@ -1103,13 +1138,13 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 e=(ez-dz)+(ex-1)*elz
                                     +(ey-1)*elz*elx;
                                 cache->interface_elements[m]
-                                    [b*ALA_PATCH_MAX_ELEMENTS+n]=e;
+                                    [b*interface_capacity+n]=e;
                                 ala_fill_halo_element_record(E,e,lev,m,q,
                                     patch_records[n]);
                                 n++;
                             }
                     for(q=0;q<overlap;q++)
-                        for(t=0;t<ALA_PATCH_HORIZONTAL_ELEMENTS &&
+                        for(t=0;t<horizontal_elements &&
                             tangent+t<=tangent_count;t++)
                             for(dz=0;dz<ALA_PATCH_RADIAL_ELEMENTS &&
                                 ez-dz>=shallow_min_ez;dz++) {
@@ -1142,7 +1177,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                     myerror(E,"Unable to match ALA halo element");
                                 }
                                 cache->interface_elements[m]
-                                    [b*ALA_PATCH_MAX_ELEMENTS+n]
+                                    [b*interface_capacity+n]
                                     =-(ghost_index+1);
                                 memcpy(patch_records[n],
                                     cache->halo_recv_records[m][face]
@@ -1162,8 +1197,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                             matrix[j][i]=matrix[i][j];
                         }
                     L=cache->interface_chol[m]
-                        +b*ALA_PATCH_MAX_ELEMENTS*ALA_PATCH_MAX_ELEMENTS;
+                        +(size_t)b*interface_capacity*interface_capacity;
                     if(!ala_factor_pressure_patch(E,matrix,n,L,
+                                                  interface_capacity,
                                                   &local_min_pivot_ratio)) {
                         cache->interface_size[m][b]=0;
                         local_fallback++;
@@ -1173,7 +1209,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         local_interface_entries += n;
                         for(i=0;i<n;i++) {
                             ref=cache->interface_elements[m]
-                                [b*ALA_PATCH_MAX_ELEMENTS+i];
+                                [b*interface_capacity+i];
                             if(ref>0) {
                                 if(cache->multiplicity[m][ref]==65535)
                                     myerror(E,"ALA MPI overlap count overflow");
@@ -1260,6 +1296,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   MPI_SUM,E->parallel.world);
     MPI_Allreduce(&local_min_pivot_ratio,&global_min_pivot_ratio,1,MPI_DOUBLE,
                   MPI_MIN,E->parallel.world);
+    MPI_Allreduce(&local_cache_bytes,&global_cache_bytes,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
     build_seconds=CPU_time0()-build_start;
     MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
@@ -1273,8 +1311,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=4x4x2 stride=2x2x1 mpi_halo_overlap=%d "
-                "interface_block=2x%dx4x2 partition_of_unity=global "
+                "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
+                "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "operator=principal((D+C)diag(K)^-1(D+C)^T) "
                 "patch_entries=%d "
@@ -1282,18 +1320,22 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "valid_blocks=%d interface_blocks=%d "
                 "interface_entries=%d ghost_elements=%d "
                 "fallback_blocks=%d min_pivot_ratio=%e "
+                "cache_megabytes_max=%e "
                 "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
-                overlap,overlap,
+                horizontal_elements,horizontal_elements,
+                horizontal_stride,horizontal_stride,overlap,
+                2*overlap,horizontal_elements,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
                 global_interface_entries,global_ghost_elements,
-                global_fallback,global_min_pivot_ratio,global_build_seconds);
+                global_fallback,global_min_pivot_ratio,
+                global_cache_bytes/(1024.0*1024.0),global_build_seconds);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=4x4x2 stride=2x2x1 mpi_halo_overlap=%d "
-                "interface_block=2x%dx4x2 partition_of_unity=global "
+                "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
+                "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "operator=principal((D+C)diag(K)^-1(D+C)^T) "
                 "patch_entries=%d "
@@ -1301,15 +1343,19 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "valid_blocks=%d interface_blocks=%d "
                 "interface_entries=%d ghost_elements=%d "
                 "fallback_blocks=%d min_pivot_ratio=%e "
+                "cache_megabytes_max=%e "
                 "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
-                overlap,overlap,
+                horizontal_elements,horizontal_elements,
+                horizontal_stride,horizontal_stride,overlap,
+                2*overlap,horizontal_elements,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
                 global_interface_entries,global_ghost_elements,
-                global_fallback,global_min_pivot_ratio,global_build_seconds);
+                global_fallback,global_min_pivot_ratio,
+                global_cache_bytes/(1024.0*1024.0),global_build_seconds);
     }
 }
 
@@ -3490,25 +3536,25 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 n=cache->size[m][b];
                 if(n==0)
                     continue;
-                L=cache->chol[m]+b*ALA_PATCH_MAX_ELEMENTS
-                    *ALA_PATCH_MAX_ELEMENTS;
+                L=cache->chol[m]+(size_t)b*cache->patch_capacity
+                    *cache->patch_capacity;
                 for(i=0;i<n;i++) {
-                    e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
+                    e=cache->elements[m][b*cache->patch_capacity+i];
                     rhs[i]=r[m][e]
                         /sqrt((double)cache->multiplicity[m][e]);
                     sum=rhs[i];
                     for(j=0;j<i;j++)
-                        sum -= L[i*ALA_PATCH_MAX_ELEMENTS+j]*solution[j];
-                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                        sum -= L[i*cache->patch_capacity+j]*solution[j];
+                    solution[i]=sum/L[i*cache->patch_capacity+i];
                 }
                 for(i=n-1;i>=0;i--) {
                     sum=solution[i];
                     for(j=i+1;j<n;j++)
-                        sum -= L[j*ALA_PATCH_MAX_ELEMENTS+i]*solution[j];
-                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                        sum -= L[j*cache->patch_capacity+i]*solution[j];
+                    solution[i]=sum/L[i*cache->patch_capacity+i];
                 }
                 for(i=0;i<n;i++) {
-                    e=cache->elements[m][b*ALA_PATCH_MAX_ELEMENTS+i];
+                    e=cache->elements[m][b*cache->patch_capacity+i];
                     work[m][e] += solution[i]
                         /sqrt((double)cache->multiplicity[m][e]);
                 }
@@ -3520,10 +3566,11 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     continue;
                 face=cache->interface_face[m][b];
                 L=cache->interface_chol[m]
-                    +b*ALA_PATCH_MAX_ELEMENTS*ALA_PATCH_MAX_ELEMENTS;
+                    +(size_t)b*cache->interface_capacity
+                        *cache->interface_capacity;
                 for(i=0;i<n;i++) {
                     ref=cache->interface_elements[m]
-                        [b*ALA_PATCH_MAX_ELEMENTS+i];
+                        [b*cache->interface_capacity+i];
                     if(ref>0) {
                         if(cache->multiplicity[m][ref]==0)
                             myerror(E,"ALA local partition weight is zero");
@@ -3540,18 +3587,18 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     }
                     sum=rhs[i];
                     for(j=0;j<i;j++)
-                        sum -= L[i*ALA_PATCH_MAX_ELEMENTS+j]*solution[j];
-                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                        sum -= L[i*cache->interface_capacity+j]*solution[j];
+                    solution[i]=sum/L[i*cache->interface_capacity+i];
                 }
                 for(i=n-1;i>=0;i--) {
                     sum=solution[i];
                     for(j=i+1;j<n;j++)
-                        sum -= L[j*ALA_PATCH_MAX_ELEMENTS+i]*solution[j];
-                    solution[i]=sum/L[i*ALA_PATCH_MAX_ELEMENTS+i];
+                        sum -= L[j*cache->interface_capacity+i]*solution[j];
+                    solution[i]=sum/L[i*cache->interface_capacity+i];
                 }
                 for(i=0;i<n;i++) {
                     ref=cache->interface_elements[m]
-                        [b*ALA_PATCH_MAX_ELEMENTS+i];
+                        [b*cache->interface_capacity+i];
                     if(ref>0)
                         work[m][ref] += solution[i]
                             /sqrt((double)cache->multiplicity[m][ref]);

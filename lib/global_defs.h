@@ -513,6 +513,8 @@ struct CONTROL {
     double ala_shallow_patch_depth_km;
     double ala_shallow_patch_weight;
     double ala_shallow_patch_regularization;
+    int ala_shallow_patch_horizontal_elements;
+    int ala_shallow_patch_horizontal_stride;
     int ala_shallow_patch_mpi_overlap;
     int ala_geneo_preconditioner;
     double ala_geneo_eigenvalue_threshold;
