@@ -2366,10 +2366,13 @@ static void build_ala_geneo_coarse_cache(struct All_variables *E,
    selected group modes are present on every member rank and the final coarse
    matrix is still assembled by the complete fixed strict-ALA Galerkin map.
 
-   The local aggregate operator contains the sum of every member rank's
-   principal contribution.  Cross-rank and cross-cap couplings enter the
-   coarse matrix through P^T S_f P; they are deliberately not approximated by
-   ad-hoc interface entries in the spectral selection problem. */
+   The group spectral operator is the principal restriction of the complete
+   diagonal-velocity Schur approximation G diag(K)^-1 G^T.  Its rank-local
+   terms use assemble_Ahatp_jacobi_entry(); its cross-rank terms use the exact
+   G rows and diagonal velocity inverse weights already exchanged for
+   MPI-overlap Schwarz.  Thus mode selection sees the real
+   processor-interface coupling instead of a block-diagonal sum of rank-local
+   principal matrices. */
 static void build_ala_cross_rank_geneo_coarse_cache(
     struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev)
@@ -2381,7 +2384,11 @@ static void build_ala_cross_rank_geneo_coarse_cache(
     int group_ix,group_iy,group_start_x,group_start_y;
     int group_size_x,group_size_y,rank_offset_x,rank_offset_y;
     int group_hbins_x,group_hbins_y,nbins,color,group_rank,group_size;
-    int local_has_support,supported_members;
+    int local_has_support,supported_members,face,ghost_index;
+    int tangent_count,ghost_q,ghost_t,ghost_ez;
+    int ghost_ex,ghost_ey,ghost_rank_offset_x,ghost_rank_offset_y;
+    int face_is_internal,local_boundary;
+    int local_interface_entries,global_interface_entries;
     int clev,factor,celx,cely,celz,cnpno,stride,npno,neq;
     int cx,cy,cz,ce,local_modes,n,iterations,global_iterations;
     int desired_modes,candidate,accepted;
@@ -2394,10 +2401,14 @@ static void build_ala_cross_rank_geneo_coarse_cache(
     int group_rank_offset_y[NCS];
     MPI_Comm group_comm[NCS];
     double depth,value,norm,group_norm,threshold;
+    double interface_value;
+    const double *ghost_record;
     double coefficient,denominator,rayleigh_numerator,rayleigh_denominator;
     double local_eigen_min,local_eigen_max,global_eigen_min,global_eigen_max;
     double local_second_min,local_second_max;
     double global_second_min,global_second_max;
+    double selection_anti2,selection_total2,group_selection_symmetry;
+    double local_selection_symmetry_max,global_selection_symmetry_max;
     double *local_aggregate,*aggregate,*normalized,*vectors,*eigenvalues;
     double *selected_values[NCS],*selected_shapes[NCS];
     double *local_eigenvalues,*local_column,*global_column,*matrix;
@@ -2441,6 +2452,8 @@ static void build_ala_cross_rank_geneo_coarse_cache(
     local_second_min=1.0e300;
     local_second_max=0.0;
     global_iterations=0;
+    local_interface_entries=0;
+    local_selection_symmetry_max=0.0;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         group_comm[m]=MPI_COMM_NULL;
         group_modes[m]=0;
@@ -2524,11 +2537,141 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                             }
                         }
                     }
+
+        /* Complete the group principal matrix across MPI interfaces.  Halo
+           records contain the full strict-ALA G=D+C element row and the
+           diagonal velocity inverse weights at every element node.  A local
+           boundary row contributes A(local,ghost); the neighboring rank
+           contributes the transpose entry, and the group reduction below
+           combines both.  Only the first ghost layer can share velocity nodes
+           with a local pressure element, but all tangential and radial
+           neighbors are tested geometrically to preserve the element stencil
+           exactly. */
+        if(shallow_layers>0)
+            for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
+                face_is_internal=
+                    (face==0 && rank_offset_x>0)
+                    || (face==1 && rank_offset_x<group_size_x-1)
+                    || (face==2 && rank_offset_y>0)
+                    || (face==3 && rank_offset_y<group_size_y-1);
+                if(!face_is_internal)
+                    continue;
+                tangent_count=(face<2) ? ely : elx;
+                local_boundary=(face==0 || face==2) ? 1
+                                                     : ((face==1) ? elx
+                                                                  : ely);
+                for(ghost_index=0;
+                    ghost_index<cache->halo_recv_count[m][face];
+                    ghost_index++) {
+                    ghost_record=cache->halo_recv_records[m][face]
+                        +ghost_index*ALA_HALO_ELEMENT_RECORD_DOUBLES;
+                    ghost_q=(int)(ghost_record[0]+0.5);
+                    if(ghost_q!=0)
+                        continue;
+                    ghost_t=(ghost_index/shallow_layers)%tangent_count+1;
+                    ghost_ez=shallow_min_ez
+                        +ghost_index%shallow_layers;
+                    ghost_rank_offset_x=rank_offset_x;
+                    ghost_rank_offset_y=rank_offset_y;
+                    if(face==0) {
+                        ghost_rank_offset_x--;
+                        ghost_ex=elx;
+                        ghost_ey=ghost_t;
+                    }
+                    else if(face==1) {
+                        ghost_rank_offset_x++;
+                        ghost_ex=1;
+                        ghost_ey=ghost_t;
+                    }
+                    else if(face==2) {
+                        ghost_rank_offset_y--;
+                        ghost_ex=ghost_t;
+                        ghost_ey=ely;
+                    }
+                    else {
+                        ghost_rank_offset_y++;
+                        ghost_ex=ghost_t;
+                        ghost_ey=1;
+                    }
+                    bin2=(ghost_ez-shallow_min_ez)*rbins/shallow_layers
+                        +rbins*((ghost_rank_offset_x*hbins
+                        +min((ghost_ex-1)*hbins/elx,hbins-1))
+                        +group_hbins_x*(ghost_rank_offset_y*hbins
+                        +min((ghost_ey-1)*hbins/ely,hbins-1)));
+                    if(face<2) {
+                        ex1=local_boundary;
+                        for(ey1=max(1,ghost_t-1);
+                            ey1<=min(ely,ghost_t+1);ey1++)
+                            for(ez1=max(shallow_min_ez,ghost_ez-1);
+                                ez1<=min(elz,ghost_ez+1);ez1++) {
+                                bin1=(ez1-shallow_min_ez)*rbins
+                                        /shallow_layers
+                                    +rbins*((rank_offset_x*hbins
+                                    +min((ex1-1)*hbins/elx,hbins-1))
+                                    +group_hbins_x*(rank_offset_y*hbins
+                                    +min((ey1-1)*hbins/ely,hbins-1)));
+                                interface_value=ala_halo_record_coupling(
+                                    cache->halo_send_records[m][face]
+                                      +(ez1-shallow_min_ez
+                                        +(ey1-1)*shallow_layers)
+                                       *ALA_HALO_ELEMENT_RECORD_DOUBLES,
+                                    ghost_record);
+                                if(interface_value!=0.0) {
+                                    local_aggregate[bin1*nbins+bin2]
+                                        +=interface_value;
+                                    local_interface_entries++;
+                                }
+                            }
+                    }
+                    else {
+                        ey1=local_boundary;
+                        for(ex1=max(1,ghost_t-1);
+                            ex1<=min(elx,ghost_t+1);ex1++)
+                            for(ez1=max(shallow_min_ez,ghost_ez-1);
+                                ez1<=min(elz,ghost_ez+1);ez1++) {
+                                bin1=(ez1-shallow_min_ez)*rbins
+                                        /shallow_layers
+                                    +rbins*((rank_offset_x*hbins
+                                    +min((ex1-1)*hbins/elx,hbins-1))
+                                    +group_hbins_x*(rank_offset_y*hbins
+                                    +min((ey1-1)*hbins/ely,hbins-1)));
+                                interface_value=ala_halo_record_coupling(
+                                    cache->halo_send_records[m][face]
+                                      +(ez1-shallow_min_ez
+                                        +(ex1-1)*shallow_layers)
+                                       *ALA_HALO_ELEMENT_RECORD_DOUBLES,
+                                    ghost_record);
+                                if(interface_value!=0.0) {
+                                    local_aggregate[bin1*nbins+bin2]
+                                        +=interface_value;
+                                    local_interface_entries++;
+                                }
+                            }
+                    }
+                }
+            }
         MPI_Allreduce(local_aggregate,aggregate,nbins*nbins,MPI_DOUBLE,
                       MPI_SUM,group_comm[m]);
         iterations=0;
         nactive=0;
         if(group_rank==0) {
+            selection_anti2=0.0;
+            selection_total2=0.0;
+            for(i=0;i<nbins;i++)
+                for(j=0;j<nbins;j++) {
+                    selection_anti2 +=
+                        (aggregate[i*nbins+j]-aggregate[j*nbins+i])
+                        *(aggregate[i*nbins+j]-aggregate[j*nbins+i]);
+                    selection_total2 += aggregate[i*nbins+j]
+                        *aggregate[i*nbins+j];
+                }
+            group_selection_symmetry=sqrt(
+                selection_anti2/max(selection_total2,1.0e-300));
+            if(!isfinite(group_selection_symmetry))
+                myerror(E,
+                    "ALA cross-rank GenEO selection symmetry is not finite");
+            local_selection_symmetry_max=max(local_selection_symmetry_max,
+                                               group_selection_symmetry);
             for(i=0;i<nbins;i++) {
                 active_map[i]=-1;
                 if(isfinite(aggregate[i*nbins+i]) &&
@@ -2693,16 +2836,18 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             local_modes=accepted;
             group_modes[m]=local_modes;
             if(local_modes>0) {
+                for(i=0;i<local_modes;i++) {
+                    local_eigen_min=min(local_eigen_min,
+                                        selected_values[m][i]);
+                    local_eigen_max=max(local_eigen_max,
+                                        selected_values[m][i]);
+                }
                 owned_modes += local_modes;
                 local_active++;
                 local_mode_min=min(local_mode_min,local_modes);
                 local_mode_max=max(local_mode_max,local_modes);
                 local_group_min=min(local_group_min,group_size);
                 local_group_max=max(local_group_max,group_size);
-                local_eigen_min=min(local_eigen_min,
-                                    selected_values[m][0]);
-                local_eigen_max=max(local_eigen_max,
-                                    selected_values[m][local_modes-1]);
             }
             if(local_modes>1) {
                 local_second_min=min(local_second_min,
@@ -2728,6 +2873,19 @@ static void build_ala_cross_rank_geneo_coarse_cache(
         free((void *)vectors);
         free((void *)eigenvalues);
     }
+
+    MPI_Allreduce(&local_interface_entries,&global_interface_entries,1,
+                  MPI_INT,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_selection_symmetry_max,
+                  &global_selection_symmetry_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(global_interface_entries<=0)
+        myerror(E,
+            "ALA cross-rank GenEO selection found no MPI interface coupling");
+    if(!isfinite(global_selection_symmetry_max) ||
+       global_selection_symmetry_max>1.0e-8)
+        myerror(E,
+            "ALA cross-rank GenEO selection operator is not symmetric");
 
     mode_counts=(int *)calloc(E->parallel.nproc,sizeof(int));
     mode_offsets=(int *)calloc(E->parallel.nproc,sizeof(int));
@@ -2969,6 +3127,8 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             "active_aggregates=%d modes_per_aggregate_range=(%d,%d) "
             "rank_group=%dx%d group_member_range=(%d,%d) "
             "aggregate_bins_max=%dx%dx%d partition_of_unity=disjoint_exact "
+            "selection_operator=interface_coupled_jacobi "
+            "interface_entries=%d selection_symmetry_defect=%e "
             "threshold=%e selected_rayleigh_range=(%e,%e) "
             "second_mode_rayleigh_range=(%e,%e) "
             "local_jacobi_iterations=%d Galerkin_applications=%d "
@@ -2977,7 +3137,8 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             "setup_seconds_max=%e status=pass\n",
             n,global_active,global_mode_min,global_mode_max,
             rank_group_x,rank_group_y,global_group_min,global_group_max,
-            hbins*rank_group_x,hbins*rank_group_y,rbins,threshold,
+            hbins*rank_group_x,hbins*rank_group_y,rbins,
+            global_interface_entries,global_selection_symmetry_max,threshold,
             global_eigen_min,global_eigen_max,
             global_second_min,global_second_max,iterations,n,
             symmetry,diagonal_min,diagonal_max,
@@ -2988,9 +3149,12 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             "active_aggregates=%d rank_group=%dx%d "
             "aggregate_bins_max=%dx%dx%d "
             "partition_of_unity=disjoint_exact "
+            "selection_operator=interface_coupled_jacobi "
+            "interface_entries=%d selection_symmetry_defect=%e "
             "symmetry_defect=%e setup_seconds_max=%e status=pass\n",
             n,global_active,rank_group_x,rank_group_y,
             hbins*rank_group_x,hbins*rank_group_y,rbins,
+            global_interface_entries,global_selection_symmetry_max,
             symmetry,global_setup_seconds);
         fflush(E->fp);
         fflush(stderr);
