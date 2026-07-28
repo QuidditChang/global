@@ -141,14 +141,14 @@ void lith_age_construct_tic(struct All_variables *E)
   if(!E->refstate.has_temperature) {
     fprintf(stderr,
             "lith_age_construct_tic requires an initial background geotherm "
-            "(strict ALA column 3; legacy extended column 7)\n");
+            "(ALA/EBA column 3; legacy extended column 7)\n");
     parallel_process_termination();
   }
-  if(E->control.ala_pressure_buoyancy &&
+  if((E->control.ala_pressure_buoyancy || E->control.eba_formulation) &&
      (fabs(E->control.TBCtopval) > 1.0e-6 ||
       fabs(E->control.TBCbotval-1.0) > 1.0e-6)) {
     fprintf(stderr,
-            "Strict ALA Ttop/Tbottom scaling requires toptbcval=0 and "
+            "ALA/EBA Ttop/Tbottom scaling requires toptbcval=0 and "
             "bottbcval=1; found %e and %e\n",
             E->control.TBCtopval, E->control.TBCbotval);
     parallel_process_termination();
@@ -161,7 +161,7 @@ void lith_age_construct_tic(struct All_variables *E)
                            *E->data.ref_temperature;
   surface_hsc_delta = (background_surface_k-E->data.Ttop)
                       / E->data.ref_temperature;
-  if(E->control.ala_pressure_buoyancy &&
+  if((E->control.ala_pressure_buoyancy || E->control.eba_formulation) &&
      (!isfinite(background_cmb_k) || !isfinite(background_surface_k) ||
       background_cmb_k >= E->data.Tbottom ||
       background_surface_k <= E->data.Ttop)) {
@@ -175,7 +175,7 @@ void lith_age_construct_tic(struct All_variables *E)
 
   /* Establish the complete initial Katsura background geotherm first. This is
      initialization data, not an active thermodynamic ALA reference profile.
-     Interior samples are copied directly; only the endpoint-closed strict-ALA
+     Interior samples are copied directly; only the endpoint-closed ALA/EBA
      rows use the unclosed values recovered by read_refstate(). */
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=noy;i++)
@@ -184,9 +184,11 @@ void lith_age_construct_tic(struct All_variables *E)
 	  node=k+(j-1)*noz+(i-1)*nox*noz;
 	  radial_index = k+E->lmesh.nzs-1;
 	  background_temperature = E->refstate.temperature[k];
-	  if(E->control.ala_pressure_buoyancy && radial_index == 1)
+	  if((E->control.ala_pressure_buoyancy ||
+	      E->control.eba_formulation) && radial_index == 1)
 	    background_temperature = E->refstate.temperature_cmb;
-	  else if(E->control.ala_pressure_buoyancy &&
+	  else if((E->control.ala_pressure_buoyancy ||
+	           E->control.eba_formulation) &&
 	          radial_index == E->mesh.noz)
 	    background_temperature = E->refstate.temperature_surface;
 	  E->T[m][node] = background_temperature;
@@ -269,7 +271,8 @@ void lith_age_construct_tic(struct All_variables *E)
                     temp = (E->sphere.ro-r1) *0.5 /sqrt(age1);
                 else
                     temp = 10.0;
-	      if(E->control.ala_pressure_buoyancy) {
+	      if(E->control.ala_pressure_buoyancy ||
+	         E->control.eba_formulation) {
 	        /* Surface HSC is an anomaly superposed on the local K background.
 	           The dimensional operation T_K-A_surface is algebraically
 	           equivalent to subtracting its normalized amplitude here. */
