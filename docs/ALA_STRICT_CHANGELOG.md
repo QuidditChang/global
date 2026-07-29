@@ -54,3 +54,21 @@ Numerical changes: **NONE**
 Runtime configuration changes: **NONE**
 
 Reference-data changes: **NONE**
+
+## Thermal, density, and assimilation architecture audit
+
+Changes:
+
+- documented complete Tref provenance and runtime use classification;
+- audited initial-temperature, phase-density, thermal-buoyancy, restart, and
+  assimilation data flows;
+- recorded the active cfg/reference-file mismatch and the diagnostic-only
+  lifecycle of `DataT`.
+
+Physics changes: **NONE**
+
+Numerical changes: **NONE**
+
+Runtime configuration changes: **NONE**
+
+Reference-data changes: **NONE**
