@@ -1083,8 +1083,10 @@ void get_elt_c(struct All_variables *E, int el,
     temp = p_point[1].weight[dims-1] * dOmega.ppt[1];
 
     if(E->control.ala_pressure_buoyancy) {
-        /* Strict ALA: restrict the single finest-grid element beta by radial
-         * length.  On levmax this is identical to pressure buoyancy. */
+        /* Strict ALA: restrict the single selected finest-grid element beta
+         * by radial length.  For source=interval, these are the exact
+         * serialized-density log secants.  On levmax this is identical to
+         * the beta used by pressure buoyancy. */
         nz = ((el-1) % E->lmesh.ELZ[lev]) + 1;
         fine_first = ((nz-1) * E->lmesh.elz) / E->lmesh.ELZ[lev] + 1;
         fine_last = (nz * E->lmesh.elz) / E->lmesh.ELZ[lev];

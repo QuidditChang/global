@@ -23,24 +23,47 @@ def _active_cfg_lines(path: Path) -> list[str]:
     ]
 
 
+def _without_cfg_keys(lines: list[str], keys: tuple[str, ...]) -> list[str]:
+    pattern = re.compile(
+        r"^\s*(?:" + "|".join(map(re.escape, keys)) + r")\s*="
+    )
+    return [line for line in lines if not pattern.match(line)]
+
+
+def _cfg_scalar(path: Path, name: str) -> float:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(rf"^\s*{re.escape(name)}\s*=\s*(.*?)\s*$", text, re.M)
+    if match is None:
+        raise AssertionError(f"Missing {name} in {path.name}")
+    return float(match.group(1))
+
+
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_reference_state_input(self) -> None:
+    def test_cfg_changes_only_strict_reference_inputs(self) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
-        self.assertEqual(len(legacy), len(strict))
-        differences = [
-            (old, new)
-            for old, new in zip(legacy, strict)
-            if old != new
-        ]
+        strict_keys = (
+            "refstate_file",
+            "ala_beta_element_source",
+            "ala_beta_interval_file",
+        )
         self.assertEqual(
-            differences,
-            [
-                (
-                    "refstate_file                = refstate_ALA.txt",
-                    "refstate_file                = refstate_ALA_strict.txt",
-                )
-            ],
+            _without_cfg_keys(legacy, strict_keys),
+            _without_cfg_keys(strict, strict_keys),
+        )
+        strict_text = "\n".join(strict)
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*refstate_file\s*=\s*refstate_ALA_strict\.txt\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_beta_element_source\s*=\s*interval\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_beta_interval_file\s*="
+            r"\s*interval_ALA_strict\.txt\s*$",
         )
 
     def test_strict_reference_schema_and_tref_endpoints(self) -> None:
@@ -60,6 +83,51 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertGreater(abs(float(table[0, 2]) - 1.0), 1.0e-6)
         self.assertGreater(abs(float(table[-1, 2])), 1.0e-6)
 
+    def test_gamma_effective_closes_with_cfg_di(self) -> None:
+        table = np.loadtxt(
+            RUNS_ROOT / "refstate_ALA_strict.txt", comments="#"
+        )
+        di = _cfg_scalar(
+            RUNS_ROOT / "cmbhf_ALA_strict.cfg", "dissipation_number"
+        )
+        beta_check = (
+            di * table[:, 3] * table[:, 1] / (table[:, 4] * table[:, 6])
+        )
+        relative = np.abs(beta_check - table[:, 5]) / np.abs(table[:, 5])
+        self.assertLessEqual(float(np.max(relative)), 8.0 * np.finfo(float).eps)
+
+    def test_interval_beta_is_serialized_density_log_secant(self) -> None:
+        interval_path = RUNS_ROOT / "interval_ALA_strict.txt"
+        comments = [
+            line[1:].strip()
+            for line in interval_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("#")
+        ]
+        self.assertEqual(
+            tuple(comments[1].split()),
+            ("element_index", "r_inner", "r_outer", "beta_interval"),
+        )
+        intervals = np.loadtxt(interval_path, comments="#")
+        refstate = np.loadtxt(
+            RUNS_ROOT / "refstate_ALA_strict.txt", comments="#"
+        )
+        radii = np.loadtxt(
+            RUNS_ROOT / "GLB.coor.global.dat", skiprows=1, usecols=1
+        )
+        expected = -np.diff(np.log(refstate[:, 0])) / np.diff(radii)
+        residual = (
+            intervals[:, 3] * np.diff(radii)
+            + np.diff(np.log(refstate[:, 0]))
+        )
+        self.assertEqual(intervals.shape, (len(refstate) - 1, 4))
+        self.assertTrue(
+            np.array_equal(intervals[:, 0], np.arange(1, len(refstate)))
+        )
+        self.assertTrue(np.array_equal(intervals[:, 1], radii[:-1]))
+        self.assertTrue(np.array_equal(intervals[:, 2], radii[1:]))
+        self.assertTrue(np.array_equal(intervals[:, 3], expected))
+        self.assertLessEqual(float(np.max(np.abs(residual))), 1.0e-14)
+
     def test_reader_retains_legacy_seven_column_compatibility(self) -> None:
         legacy = np.loadtxt(RUNS_ROOT / "refstate_ALA.txt", comments="#")
         material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()
@@ -69,6 +137,18 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "E->refstate.Ks[i] = columns == 8 ? values[7] : 0.0;",
             material,
         )
+
+    def test_interval_reader_feeds_single_element_beta_authority(self) -> None:
+        material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()
+        element = (GLOBAL_ROOT / "lib" / "Element_calculations.c").read_text()
+        instructions = (GLOBAL_ROOT / "lib" / "Instructions.c").read_text()
+        self.assertIn("read_ala_beta_intervals(E);", material)
+        self.assertIn(
+            "beta = E->refstate.ala_beta_interval[nz];", material
+        )
+        self.assertIn("E->refstate.ala_beta[nz] = beta;", material)
+        self.assertIn("E->refstate.ala_beta[fine_nz] * dr", element)
+        self.assertIn('"interval") != 0', instructions)
 
     def test_total_temperature_is_the_only_temperature_state(self) -> None:
         definitions = (GLOBAL_ROOT / "lib" / "global_defs.h").read_text()

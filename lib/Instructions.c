@@ -441,6 +441,9 @@ void read_initial_settings(struct All_variables *E)
   input_int("reference_state",&(E->refstate.choice),"1",m);
   if(E->refstate.choice == 0) {
       input_string("refstate_file",E->refstate.filename,"refstate.dat",m);
+      input_string("ala_beta_interval_file",
+                   E->refstate.beta_interval_filename,
+                   "interval_ALA_strict.txt",m);
   }
 
   input_int("mat_control",&(E->control.mat_control),"0",m);
@@ -643,9 +646,14 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
               "mutually exclusive");
   if(strcmp(E->control.ala_beta_element_source,"supplied_average") != 0 &&
-     strcmp(E->control.ala_beta_element_source,"density_log_secant") != 0)
-      myerror(E, "ala_beta_element_source must be supplied_average or "
-              "density_log_secant");
+     strcmp(E->control.ala_beta_element_source,"density_log_secant") != 0 &&
+     strcmp(E->control.ala_beta_element_source,"interval") != 0)
+      myerror(E, "ala_beta_element_source must be supplied_average, "
+              "density_log_secant, or interval");
+  if(strcmp(E->control.ala_beta_element_source,"interval") == 0 &&
+     (!E->control.ala_pressure_buoyancy || E->refstate.choice != 0))
+      myerror(E, "ala_beta_element_source=interval requires "
+              "compressible_formulation=ala and reference_state=0");
   if(E->control.ala_inner_accuracy_max <= 0.0)
       myerror(E, "ala_inner_accuracy_max must be positive");
   if(E->control.ala_inner_accuracy_factor <= 0.0)

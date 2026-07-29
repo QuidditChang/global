@@ -39,6 +39,7 @@
 #include "parallel_related.h"
 
 static void read_refstate(struct All_variables *E);
+static void read_ala_beta_intervals(struct All_variables *E);
 static int read_refstate_data_line(FILE *fp, char *buffer, int length);
 static void adams_williamson_eos(struct All_variables *E);
 static void initialize_ala_beta(struct All_variables *E);
@@ -61,16 +62,20 @@ void mat_prop_allocate(struct All_variables *E)
         (double *) malloc((E->lmesh.elz+1)*sizeof(double));
     E->refstate.ala_beta_density =
         (double *) malloc((E->lmesh.elz+1)*sizeof(double));
+    E->refstate.ala_beta_interval =
+        (double *) calloc(E->lmesh.elz+1, sizeof(double));
     E->refstate.beta_ala = (double *) calloc(noz+1, sizeof(double));
     if(E->refstate.rho == NULL || E->refstate.ala_beta == NULL ||
        E->refstate.ala_beta_supplied == NULL ||
        E->refstate.ala_beta_density == NULL ||
+       E->refstate.ala_beta_interval == NULL ||
        E->refstate.beta_ala == NULL) {
         fprintf(stderr, "Unable to allocate reference density/ALA beta storage\n");
         parallel_process_termination();
     }
     E->refstate.has_beta_ala = 0;
     E->refstate.has_Ks = 0;
+    E->refstate.has_beta_interval = 0;
 
     /* reference profile of gravity */
     E->refstate.gravity = (double *) malloc((noz+1)*sizeof(double));
@@ -119,6 +124,8 @@ void mat_prop_free(struct All_variables *E)
     E->refstate.ala_beta_supplied = NULL;
     free(E->refstate.ala_beta_density);
     E->refstate.ala_beta_density = NULL;
+    free(E->refstate.ala_beta_interval);
+    E->refstate.ala_beta_interval = NULL;
     free(E->refstate.beta_ala);
     E->refstate.beta_ala = NULL;
     free(E->refstate.Ks);
@@ -138,6 +145,8 @@ void reference_state(struct All_variables *E)
     case 0:
         /* read from a file */
         read_refstate(E);
+        if(strcmp(E->control.ala_beta_element_source,"interval") == 0)
+            read_ala_beta_intervals(E);
         break;
     case 1:
         /* Adams-Williamson EoS */
@@ -183,11 +192,11 @@ void reference_state(struct All_variables *E)
 }
 
 
-/* Map strict-ALA nodal beta to one element coefficient by arithmetic endpoint
- * averaging.  Continuity and pressure buoyancy both consume ala_beta.  The
- * density logarithmic secant is validation only; it never replaces supplied
- * strict-ALA beta.  reference_state=1 remains the explicit analytic benchmark
- * policy and is the only ALA path allowed to construct beta from density.
+/* Select one authoritative strict-ALA element beta.  Continuity, pressure
+ * buoyancy, augmented-Lagrangian terms, multigrid restriction and diagnostics
+ * all consume ala_beta.  File-backed interval beta is the strict,
+ * phase-inclusive density representation; legacy paths retain nodal endpoint
+ * averaging or the density logarithmic secant.
  *
  * Validation uses relative mismatch |beta-beta_rho|/max(|beta_rho|,1e-12).
  * RMS > 2% or maximum > 5% warns; RMS > 10% or maximum > 25% fails.  These
@@ -247,9 +256,12 @@ static void initialize_ala_beta(struct All_variables *E)
         if(E->refstate.choice != 0)
             E->refstate.ala_beta_supplied[nz] = beta_rho;
         if(E->control.ala_pressure_buoyancy && E->refstate.choice == 0 &&
-           strcmp(E->control.ala_beta_element_source,
-                  "supplied_average") == 0)
+           strcmp(E->control.ala_beta_element_source,"supplied_average") == 0)
             beta = E->refstate.ala_beta_supplied[nz];
+        else if(E->control.ala_pressure_buoyancy &&
+                E->refstate.choice == 0 &&
+                strcmp(E->control.ala_beta_element_source,"interval") == 0)
+            beta = E->refstate.ala_beta_interval[nz];
         else
             beta = E->refstate.ala_beta_density[nz];
         if(!isfinite(E->refstate.ala_beta_supplied[nz]) ||
@@ -268,7 +280,7 @@ static void initialize_ala_beta(struct All_variables *E)
         }
         E->refstate.ala_beta[nz] = beta;
 
-        mismatch = E->refstate.ala_beta_supplied[nz] - beta_rho;
+        mismatch = beta - beta_rho;
         relative = fabs(mismatch) / max(fabs(beta_rho), beta_floor);
         beta_thermo = E->control.disptn_number
             * 0.5 * (E->refstate.thermal_expansivity[nz] +
@@ -278,7 +290,7 @@ static void initialize_ala_beta(struct All_variables *E)
                       E->refstate.heat_capacity[nz+1])
                * 0.5 * (E->refstate.gamma_eff[nz] +
                         E->refstate.gamma_eff[nz+1]));
-        thermo_mismatch = E->refstate.ala_beta_supplied[nz] - beta_thermo;
+        thermo_mismatch = beta - beta_thermo;
         thermo_relative = fabs(thermo_mismatch) /
                           max(fabs(beta_thermo), beta_floor);
         global_nz = nz + E->lmesh.nzs - 1;
@@ -322,7 +334,7 @@ static void initialize_ala_beta(struct All_variables *E)
         if(global_nz == global_max.index) {
             beta_rho = -(log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz])) /
                        (E->sx[1][3][nz+1] - E->sx[1][3][nz]);
-            local_signed_at_max = E->refstate.ala_beta_supplied[nz] - beta_rho;
+            local_signed_at_max = E->refstate.ala_beta[nz] - beta_rho;
             local_depth_at_max = 1.0 - 0.5 * (E->sx[1][3][nz] + E->sx[1][3][nz+1]);
         }
     }
@@ -735,6 +747,100 @@ static void read_refstate(struct All_variables *E)
 
     fclose(fp);
     return;
+}
+
+
+static void read_ala_beta_intervals(struct All_variables *E)
+{
+    FILE *fp;
+    int columns, element_index, expected_index, local_index;
+    int local_first, local_last;
+    char buffer[255], trailing;
+    double r_inner, r_outer, beta_interval;
+    double mesh_inner, mesh_outer;
+    const double radius_tolerance = 1.0e-10;
+
+    if(!E->refstate.has_Ks) {
+        fprintf(stderr,
+                "ala_beta_element_source=interval requires an 8-column "
+                "strict reference state\n");
+        parallel_process_termination();
+    }
+
+    fp = fopen(E->refstate.beta_interval_filename, "r");
+    if(fp == NULL) {
+        fprintf(stderr, "Cannot open strict ALA interval beta file: %s\n",
+                E->refstate.beta_interval_filename);
+        parallel_process_termination();
+    }
+
+    expected_index = 1;
+    local_first = E->lmesh.nzs;
+    local_last = local_first + E->lmesh.elz - 1;
+    while(read_refstate_data_line(fp, buffer, 255)) {
+        columns = sscanf(buffer, "%d %lf %lf %lf %c",
+                         &element_index, &r_inner, &r_outer,
+                         &beta_interval, &trailing);
+        if(columns != 4 || element_index != expected_index) {
+            fprintf(stderr,
+                    "Interval beta file '%s', row %d: expected "
+                    "'element_index r_inner r_outer beta_interval' with "
+                    "sequential index %d\n",
+                    E->refstate.beta_interval_filename, expected_index,
+                    expected_index);
+            parallel_process_termination();
+        }
+        if(!isfinite(r_inner) || !isfinite(r_outer) ||
+           !isfinite(beta_interval) || r_outer <= r_inner ||
+           beta_interval <= 0.0) {
+            fprintf(stderr,
+                    "Invalid interval beta row %d in '%s'\n",
+                    element_index, E->refstate.beta_interval_filename);
+            parallel_process_termination();
+        }
+
+        if(element_index >= local_first && element_index <= local_last) {
+            local_index = element_index - local_first + 1;
+            mesh_inner = E->sx[1][3][local_index];
+            mesh_outer = E->sx[1][3][local_index+1];
+            if(fabs(r_inner-mesh_inner) > radius_tolerance ||
+               fabs(r_outer-mesh_outer) > radius_tolerance) {
+                fprintf(stderr,
+                        "Interval beta mesh mismatch: rank=%d global_element=%d "
+                        "file=(%.16e,%.16e) mesh=(%.16e,%.16e)\n",
+                        E->parallel.me, element_index, r_inner, r_outer,
+                        mesh_inner, mesh_outer);
+                parallel_process_termination();
+            }
+            E->refstate.ala_beta_interval[local_index] = beta_interval;
+        }
+        expected_index++;
+    }
+    fclose(fp);
+
+    if(expected_index-1 != E->mesh.elz) {
+        fprintf(stderr,
+                "Interval beta file '%s' has %d rows; expected %d radial "
+                "elements\n",
+                E->refstate.beta_interval_filename, expected_index-1,
+                E->mesh.elz);
+        parallel_process_termination();
+    }
+    for(local_index=1; local_index<=E->lmesh.elz; local_index++) {
+        if(!isfinite(E->refstate.ala_beta_interval[local_index]) ||
+           E->refstate.ala_beta_interval[local_index] <= 0.0) {
+            fprintf(stderr,
+                    "Missing interval beta: rank=%d local_element=%d\n",
+                    E->parallel.me, local_index);
+            parallel_process_termination();
+        }
+    }
+    E->refstate.has_beta_interval = 1;
+
+    if(E->parallel.me == 0)
+        fprintf(stderr,
+                "Read strict ALA interval beta '%s': %d radial elements\n",
+                E->refstate.beta_interval_filename, E->mesh.elz);
 }
 
 

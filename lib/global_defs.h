@@ -631,11 +631,14 @@ struct REF_STATE {
     int has_temperature;           /* thermodynamic Tref profile is available */
     int has_beta_ala;
     int has_Ks;
+    int has_beta_interval;
     char filename[200];
+    char beta_interval_filename[200];
     double *rho;
     double *ala_beta;              /* authoritative strict-ALA element beta */
     double *ala_beta_supplied;     /* endpoint-average supplied beta */
     double *ala_beta_density;      /* logarithmic density-secant beta */
+    double *ala_beta_interval;     /* strict file-supplied interval beta */
     double *beta_ala;              /* strict-ALA nodal beta, refstate column 6 */
     double *thermal_expansivity;
     double *heat_capacity;
