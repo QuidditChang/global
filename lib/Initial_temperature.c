@@ -40,6 +40,7 @@ void myerror(struct All_variables *, char *);
 #include "initial_temperature.h"
 void debug_tic(struct All_variables *);
 void read_tic_from_file(struct All_variables *);
+static void audit_strict_temperature_reference(struct All_variables *);
 
 #ifdef USE_GZDIR
 void restart_tic_from_gzdir_file(struct All_variables *);
@@ -204,10 +205,161 @@ void convection_initial_temperature(struct All_variables *E)
   /* Note: it is the callee's responsibility to conform tbc. */
   /* like a call to temperatures_conform_bcs(E); */
 
+  audit_strict_temperature_reference(E);
+
   if (E->control.verbose)
     debug_tic(E);
 
   return;
+}
+
+
+/* Read-only semantic audit after the initial total-temperature field exists.
+ * The reference profile and E->T are never modified here. */
+static void audit_strict_temperature_reference(struct All_variables *E)
+{
+  int cap, i, j, k, node, target;
+  int local_interval_count, global_interval_count;
+  int local_sample_count[4], global_sample_count[4];
+  double target_depth_km[4];
+  double target_radius[4];
+  double local_distance[4], global_distance[4];
+  double local_delta_sum[4], global_delta_sum[4];
+  double temperature0, temperature1, dr;
+  double dlnT_dr, adiabatic_rhs, residual, relative;
+  double local_relative_sq, global_relative_sq;
+  double local_residual_max, global_residual_max;
+  double local_relative_max, global_relative_max;
+  double alpha_g_cp0, alpha_g_cp1;
+  const double relative_floor = 1.0e-12;
+  const double radial_tolerance = 1.0e-12;
+
+  if(!E->control.ala_pressure_buoyancy ||
+     E->refstate.choice != 0 || !E->refstate.has_Ks ||
+     !E->refstate.has_temperature) {
+    if(E->parallel.me == 0)
+      fprintf(stderr,
+              "legacy reference state, skip strict temperature semantic audit\n");
+    return;
+  }
+  if(!E->control.strict_reference_audit) {
+    if(E->parallel.me == 0)
+      fprintf(stderr, "STRICT TEMPERATURE REFERENCE AUDIT disabled\n");
+    return;
+  }
+
+  target_depth_km[0] = 0.0;
+  target_depth_km[1] = 410.0;
+  target_depth_km[2] = 660.0;
+  target_depth_km[3] =
+    (E->sphere.ro-E->sphere.ri) * E->data.radius_km;
+  for(target=0; target<4; target++) {
+    target_radius[target] =
+      E->sphere.ro - target_depth_km[target] / E->data.radius_km;
+    local_distance[target] = 1.0e30;
+    local_delta_sum[target] = 0.0;
+    local_sample_count[target] = 0;
+    for(k=1; k<=E->lmesh.noz; k++)
+      local_distance[target] =
+        min(local_distance[target],
+            fabs(E->sx[1][3][k]-target_radius[target]));
+  }
+  MPI_Allreduce(local_distance, global_distance, 4, MPI_DOUBLE,
+                MPI_MIN, E->parallel.world);
+
+  for(target=0; target<4; target++)
+    for(k=1; k<=E->lmesh.noz; k++)
+      if(fabs(E->sx[1][3][k]-target_radius[target])
+         <= global_distance[target]+radial_tolerance)
+        for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+          for(i=1; i<=E->lmesh.noy; i++)
+            for(j=1; j<=E->lmesh.nox; j++) {
+              node = k+(j-1)*E->lmesh.noz
+                     +(i-1)*E->lmesh.nox*E->lmesh.noz;
+              local_delta_sum[target] +=
+                E->T[cap][node]-E->refstate.temperature[k];
+              local_sample_count[target]++;
+            }
+  MPI_Allreduce(local_delta_sum, global_delta_sum, 4, MPI_DOUBLE,
+                MPI_SUM, E->parallel.world);
+  MPI_Allreduce(local_sample_count, global_sample_count, 4, MPI_INT,
+                MPI_SUM, E->parallel.world);
+
+  local_relative_sq = 0.0;
+  local_residual_max = 0.0;
+  local_relative_max = 0.0;
+  local_interval_count = E->lmesh.elz;
+  for(k=1; k<=E->lmesh.elz; k++) {
+    temperature0 = E->data.Ttop
+      + E->refstate.temperature[k]*E->data.ref_temperature;
+    temperature1 = E->data.Ttop
+      + E->refstate.temperature[k+1]*E->data.ref_temperature;
+    dr = E->sx[1][3][k+1]-E->sx[1][3][k];
+    dlnT_dr = (log(temperature1)-log(temperature0))/dr;
+    alpha_g_cp0 = E->refstate.thermal_expansivity[k]
+      * E->refstate.gravity[k] / E->refstate.heat_capacity[k];
+    alpha_g_cp1 = E->refstate.thermal_expansivity[k+1]
+      * E->refstate.gravity[k+1] / E->refstate.heat_capacity[k+1];
+    adiabatic_rhs = -E->control.disptn_number
+      * 0.5*(alpha_g_cp0+alpha_g_cp1);
+    residual = dlnT_dr-adiabatic_rhs;
+    relative = fabs(residual)
+      / max(fabs(adiabatic_rhs), relative_floor);
+    local_relative_sq += relative*relative;
+    local_residual_max = max(local_residual_max, fabs(residual));
+    local_relative_max = max(local_relative_max, relative);
+  }
+  MPI_Allreduce(&local_relative_sq, &global_relative_sq, 1, MPI_DOUBLE,
+                MPI_SUM, E->parallel.world);
+  MPI_Allreduce(&local_residual_max, &global_residual_max, 1, MPI_DOUBLE,
+                MPI_MAX, E->parallel.world);
+  MPI_Allreduce(&local_relative_max, &global_relative_max, 1, MPI_DOUBLE,
+                MPI_MAX, E->parallel.world);
+  MPI_Allreduce(&local_interval_count, &global_interval_count, 1, MPI_INT,
+                MPI_SUM, E->parallel.world);
+
+  if(E->parallel.me == 0) {
+    fprintf(stderr,
+            "STRICT TEMPERATURE REFERENCE AUDIT\n"
+            "Tref source:\n"
+            "    Katsura 2022 Table S5 temperature\n"
+            "    four phase branches; endpoint-constrained piecewise cubic fit\n"
+            "    serialized endpoints use total-temperature boundary values;\n"
+            "    read_refstate reconstructs smooth endpoints only for the\n"
+            "    initial background geotherm\n"
+            "Temperature semantics:\n"
+            "    Tref: E->refstate.temperature (fixed reference profile)\n"
+            "    deltaT_initial: E->T_initial-E->refstate.temperature\n"
+            "    total temperature: E->T (energy-equation state)\n");
+    if(E->convection.tic_method == -1)
+      fprintf(stderr,
+              "Initial temperature anomaly:\n"
+              "    restart input selected; E->T is a restart state, skip\n");
+    else {
+      fprintf(stderr, "Initial temperature anomaly:\n");
+      for(target=0; target<4; target++) {
+        if(global_sample_count[target] > 0) {
+          double delta =
+            global_delta_sum[target]/global_sample_count[target];
+          fprintf(stderr,
+                  "    depth=%7.2f km deltaT*=% .9e deltaT_K=% .9e\n",
+                  target_depth_km[target], delta,
+                  delta*E->data.ref_temperature);
+        }
+      }
+    }
+    fprintf(stderr,
+            "Tref adiabatic representation:\n"
+            "    compare dln(Tref_K)/dr* with -Di*alpha*gravity/Cp\n"
+            "    relative RMS: %e\n"
+            "    relative MAX: %e\n"
+            "    absolute residual MAX: %e\n"
+            "Phase semantics:\n"
+            "    Xref uses E->refstate.temperature\n"
+            "    dynamic X uses E->T\n",
+            sqrt(global_relative_sq/global_interval_count),
+            global_relative_max, global_residual_max);
+  }
 }
 
 
