@@ -88,6 +88,17 @@ void mat_prop_allocate(struct All_variables *E)
        continuity, momentum, heating, expansion, or EOS closure. */
     E->refstate.temperature = (double *) malloc((noz+1)*sizeof(double));
     E->refstate.gamma_eff = (double *) malloc((noz+1)*sizeof(double));
+    E->refstate.Ks = (double *) calloc(noz+1, sizeof(double));
+    if(E->refstate.gravity == NULL ||
+       E->refstate.thermal_expansivity == NULL ||
+       E->refstate.heat_capacity == NULL ||
+       E->refstate.dis == NULL ||
+       E->refstate.temperature == NULL ||
+       E->refstate.gamma_eff == NULL ||
+       E->refstate.Ks == NULL) {
+        fprintf(stderr, "Unable to allocate reference thermodynamic storage\n");
+        parallel_process_termination();
+    }
     E->refstate.has_temperature = 0;
     E->refstate.temperature_cmb = 0.0;
     E->refstate.temperature_surface = 0.0;
@@ -108,6 +119,8 @@ void mat_prop_free(struct All_variables *E)
     E->refstate.ala_beta_density = NULL;
     free(E->refstate.beta_ala);
     E->refstate.beta_ala = NULL;
+    free(E->refstate.Ks);
+    E->refstate.Ks = NULL;
 }
 
 
@@ -499,21 +512,22 @@ static void read_refstate(struct All_variables *E)
     }
     if(E->control.ala_pressure_buoyancy)
         cmb_columns = sscanf(cmb_buffer,
-                             "%lf %lf %lf %lf %lf %lf %lf %c",
+                             "%lf %lf %lf %lf %lf %lf %lf %lf %c",
                              &cmb_values[0], &cmb_values[1], &cmb_values[2],
                              &cmb_values[3], &cmb_values[4], &cmb_values[5],
-                             &cmb_values[6], &trailing);
+                             &cmb_values[6], &cmb_values[7], &trailing);
     else
         cmb_columns = sscanf(cmb_buffer,
                              "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
                              &cmb_values[0], &cmb_values[1], &cmb_values[2],
                              &cmb_values[3], &cmb_values[4], &cmb_values[5],
                              &cmb_values[6], &cmb_values[7], &cmb_values[8]);
-    if(E->control.ala_pressure_buoyancy && cmb_columns != 7) {
+    if(E->control.ala_pressure_buoyancy &&
+       cmb_columns != 7 && cmb_columns != 8) {
         fprintf(stderr,
                 "Reference state file '%s', global radial row 1: "
-                "strict ALA requires exactly 7 numeric columns "
-                "(rho g Tref alpha Cp beta Gamma_eff), found %d\n",
+                "strict ALA requires 7 or 8 numeric columns "
+                "(rho g Tref alpha Cp beta Gamma_eff [Ks]), found %d\n",
                 E->refstate.filename, cmb_columns);
         parallel_process_termination();
     }
@@ -538,13 +552,15 @@ static void read_refstate(struct All_variables *E)
             last_temperature[j] = 0.0;
         }
         while(read_refstate_data_line(fp, buffer, 255)) {
-            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
+            columns = sscanf(buffer,
+                             "%lf %lf %lf %lf %lf %lf %lf %lf %c",
                              &values[0], &values[1], &values[2], &values[3],
-                             &values[4], &values[5], &values[6], &trailing);
-            if(columns != 7) {
+                             &values[4], &values[5], &values[6], &values[7],
+                             &trailing);
+            if(columns != 7 && columns != 8) {
                 fprintf(stderr,
                         "Reference state file '%s', global radial row %d: "
-                        "strict ALA requires exactly 7 numeric columns\n",
+                        "strict ALA requires 7 or 8 numeric columns\n",
                         E->refstate.filename, background_rows+1);
                 parallel_process_termination();
             }
@@ -590,19 +606,22 @@ static void read_refstate(struct All_variables *E)
         }
 
         if(E->control.ala_pressure_buoyancy)
-            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %c",
+            columns = sscanf(buffer,
+                             "%lf %lf %lf %lf %lf %lf %lf %lf %c",
                              &values[0], &values[1], &values[2], &values[3],
-                             &values[4], &values[5], &values[6], &trailing);
+                             &values[4], &values[5], &values[6], &values[7],
+                             &trailing);
         else
             columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
                              &values[0], &values[1], &values[2], &values[3],
                              &values[4], &values[5], &values[6], &values[7],
                              &values[8]);
-        if(E->control.ala_pressure_buoyancy && columns != 7) {
+        if(E->control.ala_pressure_buoyancy &&
+           columns != 7 && columns != 8) {
             fprintf(stderr,
                     "Reference state file '%s', global radial row %d: "
-                    "strict ALA requires exactly 7 numeric columns "
-                    "(rho g Tref alpha Cp beta Gamma_eff), found %d\n",
+                    "strict ALA requires 7 or 8 numeric columns "
+                    "(rho g Tref alpha Cp beta Gamma_eff [Ks]), found %d\n",
                     E->refstate.filename, i+E->lmesh.nzs-1, columns);
             parallel_process_termination();
         }
@@ -624,8 +643,8 @@ static void read_refstate(struct All_variables *E)
         }
 
         if(E->control.ala_pressure_buoyancy) {
-            /* Conductivity is transport physics, not reference-state data.
-             * Strict schema: rho g Tref alpha Cp beta Gamma_eff. */
+            /* Strict schema:
+             * rho g Tref alpha Cp beta Gamma_eff [Ks]. */
             E->refstate.rho[i] = values[0];
             E->refstate.gravity[i] = values[1];
             E->refstate.temperature[i] = values[2];
@@ -633,6 +652,7 @@ static void read_refstate(struct All_variables *E)
             E->refstate.heat_capacity[i] = values[4];
             E->refstate.beta_ala[i] = values[5];
             E->refstate.gamma_eff[i] = values[6];
+            E->refstate.Ks[i] = columns == 8 ? values[7] : 0.0;
             E->refstate.dis[i] = 1.0; /* inert legacy storage, not strict input */
             if(E->refstate.rho[i] <= 0.0 ||
                E->refstate.gravity[i] <= 0.0 ||
@@ -646,10 +666,14 @@ static void read_refstate(struct All_variables *E)
                !isfinite(E->refstate.thermal_expansivity[i]) ||
                !isfinite(E->refstate.heat_capacity[i]) ||
                !isfinite(E->refstate.beta_ala[i]) ||
-               !isfinite(E->refstate.gamma_eff[i])) {
+               !isfinite(E->refstate.gamma_eff[i]) ||
+               (columns == 8 &&
+                (!isfinite(E->refstate.Ks[i]) ||
+                 E->refstate.Ks[i] <= 0.0))) {
                 fprintf(stderr,
                         "Invalid strict ALA row %d: all fields must be finite "
-                        "and rho/g/alpha/Cp/beta/Gamma_eff positive\n",
+                        "and rho/g/alpha/Cp/beta/Gamma_eff plus optional Ks "
+                        "positive\n",
                         i+E->lmesh.nzs-1);
                 parallel_process_termination();
             }
@@ -665,6 +689,7 @@ static void read_refstate(struct All_variables *E)
             E->refstate.temperature[i] = columns >= 8 ? values[6] : 0.0;
             E->refstate.gamma_eff[i] = columns >= 8 ? values[7] : 1.0;
             E->refstate.beta_ala[i] = columns == 9 ? values[8] : 0.0;
+            E->refstate.Ks[i] = 0.0;
         }
 
         /**** debug ****
@@ -693,9 +718,11 @@ static void read_refstate(struct All_variables *E)
     if(E->parallel.me == 0 && E->control.ala_pressure_buoyancy) {
         fprintf(stderr,
                 "Read strict ALA reference state '%s': "
-                "rho g Tref alpha Cp beta Gamma_eff; "
+                "rho g Tref alpha Cp beta Gamma_eff%s; "
                 "unclosed T_K endpoints CMB=%e surface=%e\n",
-                E->refstate.filename, E->refstate.temperature_cmb,
+                E->refstate.filename,
+                expected_columns == 8 ? " Ks" : "",
+                E->refstate.temperature_cmb,
                 E->refstate.temperature_surface);
     }
     else if(E->parallel.me == 0 && E->refstate.has_temperature) {
@@ -741,6 +768,7 @@ static void adams_williamson_eos(struct All_variables *E)
 	E->refstate.dis[i] = 1; // DJB EBA
 	E->refstate.temperature[i] = 0.0;
 	E->refstate.gamma_eff[i] = 1.0;
+	E->refstate.Ks[i] = 0.0;
 	/*E->refstate.Tadi[i] = (E->control.adiabaticT0 + E->control.surface_temp) * exp(E->control.disptn_number * z) - E->control.surface_temp;*/
     }
 

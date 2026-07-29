@@ -642,6 +642,7 @@ struct REF_STATE {
     double temperature_cmb;         /* unclosed initial-background CMB value, available on every rank */
     double temperature_surface;     /* unclosed initial-background surface value, available on every rank */
     double *gamma_eff;              /* dimensionless strict-ALA Gamma_eff (column 7) */
+    double *Ks;                     /* physical strict-ALA K_S in GPa (optional column 8) */
     double *gravity;
     double *dis;                    /* legacy BA/EBA/TALA reference-state mask only */
     /*double *Tadi;*/
