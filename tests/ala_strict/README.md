@@ -1,13 +1,19 @@
-# ALA strict test placeholder
+# ALA strict tests
 
-This directory reserves the future strict-ALA validation suite.
+Run the phase-reference buoyancy regression with:
 
-Planned test groups are:
+```text
+python3 tests/ala_strict/test_phase_buoyancy.py
+```
 
-- reference-state closure;
-- phase/reference consistency;
-- discrete operator adjoint checks;
-- energy-budget closure;
-- multigrid and Galerkin validation.
+The phase test verifies:
 
-Commit 0 adds no executable tests and changes no existing test.
+- `T=Tref` gives `X-Xref=0`;
+- the dynamic absolute phase fraction remains the legacy `X`;
+- strict buoyancy differs only by the radial reference subtraction;
+- phase-boundary output still uses absolute `X`;
+- latent heating still receives absolute `phase_B`;
+- mechanical-power and buoyancy-profile diagnostics use `X-Xref`.
+
+Future test groups remain reserved for operator adjoint, energy-budget, and
+multigrid/Galerkin validation.

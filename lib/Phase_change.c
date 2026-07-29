@@ -106,17 +106,37 @@ void phase_change_apply(struct All_variables *E, double **buoy)
 }
 
 
+float phase_change_reference_fraction(struct All_variables *E,
+                                      int phase_index, int cap, int node)
+{
+  int nz;
+  float e_pressure, dz;
+  struct Phase_transition *phase = &E->control.phase[phase_index];
+
+  nz = ((node-1) % E->lmesh.noz) + 1;
+  dz = (E->sphere.ro-E->sx[cap][3][node]) - phase->depth;
+  e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
+      - phase->clapeyron
+      * (E->refstate.temperature[nz] - phase->transT);
+
+  return 0.5 * (1.0 + tanh(phase->inv_width * e_pressure));
+}
+
+
 static void apply_one_phase(struct All_variables *E, double **buoy,
                             int phase_index)
 {
   int m, i;
+  float Xref;
   struct Phase_transition *phase = &E->control.phase[phase_index];
   float **B = E->phase_B[phase_index];
 
   calc_phase_change(E, phase_index);
   for(m=1;m<=E->sphere.caps_per_proc;m++)
-    for(i=1;i<=E->lmesh.nno;i++)
-      buoy[m][i] -= phase->Ra * B[m][i];
+    for(i=1;i<=E->lmesh.nno;i++) {
+      Xref = phase_change_reference_fraction(E, phase_index, m, i);
+      buoy[m][i] -= phase->Ra * (B[m][i] - Xref);
+    }
 
   if (E->control.verbose) {
     fprintf(E->fp_out,
@@ -181,6 +201,7 @@ static void calc_phase_change(struct All_variables *E,
 static void debug_phase_change(struct All_variables *E, int phase_index)
 {
   int m, j;
+  float Xref, deltaX;
   struct Phase_transition *phase = &E->control.phase[phase_index];
   float **B = E->phase_B[phase_index];
 
@@ -189,13 +210,18 @@ static void debug_phase_change(struct All_variables *E, int phase_index)
           phase_index, phase->depth, phase->depth*E->data.radius_km);
   for(m=1;m<=E->sphere.caps_per_proc;m++)        {
     fprintf(E->fp_out,"for cap %d\n",E->sphere.capid[m]);
-    for (j=1;j<=E->lmesh.nno;j++)
+    for (j=1;j<=E->lmesh.nno;j++) {
+      Xref = phase_change_reference_fraction(E, phase_index, m, j);
+      deltaX = B[m][j] - Xref;
       fprintf(E->fp_out,
-              "phase_depth=%.6e node=%06d Z=%.6e T=%.6e B=%.6e "
+              "phase_depth=%.6e node=%06d Z=%.6e T=%.6e "
+              "B=%.6e Xref=%.6e deltaX=%.6e "
               "density_jump_contribution=%.6e "
               "phase_buoyancy_contribution=%.6e\n",
               phase->depth, j, E->sx[m][3][j], E->T[m][j], B[m][j],
-              phase->density_jump*B[m][j], -phase->Ra*B[m][j]);
+              Xref, deltaX, phase->density_jump*deltaX,
+              -phase->Ra*deltaX);
+    }
   }
   fflush(E->fp_out);
 

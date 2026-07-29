@@ -32,6 +32,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "drive_solvers.h"
+#include "phase_change.h"
 
 double global_vdot();
 double vnorm_nonnewt();
@@ -688,7 +689,9 @@ static void write_mechanical_power(struct All_variables *E)
                 if(E->control.phase[phase_index].Ra != 0.0)
                     phase[phase_index][m][i] =
                         -E->control.phase[phase_index].Ra
-                        * E->phase_B[phase_index][m][i];
+                        * (E->phase_B[phase_index][m][i]
+                           - phase_change_reference_fraction(
+                               E, phase_index, m, i));
                 else
                     phase[phase_index][m][i] = 0.0;
             }

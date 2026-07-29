@@ -12,6 +12,7 @@
 #include "npz_writer.h"
 #include "output.h"
 #include "parsing.h"
+#include "phase_change.h"
 
 #define PROFILE_PERCENTILE_COUNT 5
 #define PROFILE_STATS_COUNT 3
@@ -541,7 +542,9 @@ static void prepare_buoyancy_profile_fields(struct All_variables *E)
                 if (E->control.phase[phase_index].Ra != 0.0)
                     buoyancy_phase_cache[phase_index][cap][node] =
                         -E->control.phase[phase_index].Ra
-                        * E->phase_B[phase_index][cap][node];
+                        * (E->phase_B[phase_index][cap][node]
+                           - phase_change_reference_fraction(
+                               E, phase_index, cap, node));
         }
 
     remove_horiz_ave2(E, buoyancy_thermal_cache);

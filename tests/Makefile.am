@@ -29,6 +29,8 @@ EXTRA_DIST = \
 	signon.py \
 	test1.sh \
 	test2.sh \
-	test5.sh
+	test5.sh \
+	ala_strict/README.md \
+	ala_strict/test_phase_buoyancy.py
 
 ## end of Makefile.am
