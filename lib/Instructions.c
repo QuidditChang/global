@@ -1010,6 +1010,7 @@ void allocate_common_vars(E)
 
   E->P[j]        = (double *) malloc((npno+1)*sizeof(double));
   E->T[j]        = (double *) malloc((nno+1)*sizeof(double));
+  E->DataT[j]    = (double *) malloc((nno+1)*sizeof(double));
   E->NP[j]       = (float *) malloc((nno+1)*sizeof(float));
   E->edot[j]     = (float *) malloc((nno+1)*sizeof(float));
   E->buoyancy[j] = (double *) malloc((nno+1)*sizeof(double));
@@ -1184,6 +1185,7 @@ void allocate_common_vars(E)
 
   for(i=1;i<=E->lmesh.nno;i++) {
      E->T[j][i] = 0.0;
+     E->DataT[j][i] = 0.0;
      E->assim_delta_T[j][i] = 0.0;
   }
 

@@ -641,6 +641,7 @@ struct REF_STATE {
     double *thermal_expansivity;
     double *heat_capacity;
     double *temperature;            /* column 3 initial background geotherm; not active ALA state */
+    double *Tref;                    /* semantic alias of temperature; no separate ownership */
     double temperature_cmb;         /* unclosed initial-background CMB value, available on every rank */
     double temperature_surface;     /* unclosed initial-background surface value, available on every rank */
     double *gamma_eff;              /* dimensionless strict-ALA Gamma_eff (column 7) */
@@ -877,6 +878,7 @@ struct All_variables {
 
     double *P[NCS],*F[NCS],*H[NCS],*S[NCS],*U[NCS];
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
+    double *DataT[NCS];          /* derived anomaly cache: total T - refstate.Tref */
     double *assim_delta_T[NCS];
     double *u1[NCS];
     double *temp[NCS],*temp1[NCS];

@@ -91,6 +91,8 @@ void mat_prop_allocate(struct All_variables *E)
     /* Column 3 initializes the background geotherm; it is not used by ALA
        continuity, momentum, heating, expansion, or EOS closure. */
     E->refstate.temperature = (double *) malloc((noz+1)*sizeof(double));
+    /* Tref is a semantic alias. temperature remains the storage owner. */
+    E->refstate.Tref = E->refstate.temperature;
     E->refstate.gamma_eff = (double *) malloc((noz+1)*sizeof(double));
     E->refstate.Ks = (double *) calloc(noz+1, sizeof(double));
     if(E->refstate.gravity == NULL ||
@@ -477,7 +479,7 @@ static void validate_strict_reference_state(struct All_variables *E)
                 nz = ((node-1) % E->lmesh.noz) + 1;
                 X = phase_change_fraction_at_temperature(
                     E, phase_index, cap, node,
-                    E->refstate.temperature[nz]);
+                    E->refstate.Tref[nz]);
                 Xref = phase_change_reference_fraction(
                     E, phase_index, cap, node);
                 local_phase_max = max(local_phase_max, fabs(X-Xref));

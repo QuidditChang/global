@@ -40,6 +40,7 @@ void myerror(struct All_variables *, char *);
 #include "initial_temperature.h"
 void debug_tic(struct All_variables *);
 void read_tic_from_file(struct All_variables *);
+static void initialize_temperature_anomaly(struct All_variables *);
 static void audit_strict_temperature_reference(struct All_variables *);
 
 #ifdef USE_GZDIR
@@ -205,12 +206,33 @@ void convection_initial_temperature(struct All_variables *E)
   /* Note: it is the callee's responsibility to conform tbc. */
   /* like a call to temperatures_conform_bcs(E); */
 
+  initialize_temperature_anomaly(E);
   audit_strict_temperature_reference(E);
 
   if (E->control.verbose)
     debug_tic(E);
 
   return;
+}
+
+
+/* E->T remains the authoritative total temperature. DataT is a derived
+ * cache initialized after TIC/restart construction; it is not an energy
+ * equation unknown in this migration step. */
+static void initialize_temperature_anomaly(struct All_variables *E)
+{
+  int cap, node, nz;
+
+  for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+    for(node=1; node<=E->lmesh.nno; node++) {
+      nz = ((node-1) % E->lmesh.noz) + 1;
+      if(E->control.ala_pressure_buoyancy &&
+         E->refstate.has_temperature && E->refstate.Tref != NULL)
+        E->DataT[cap][node] =
+          E->T[cap][node]-E->refstate.Tref[nz];
+      else
+        E->DataT[cap][node] = 0.0;
+    }
 }
 
 
@@ -224,12 +246,15 @@ static void audit_strict_temperature_reference(struct All_variables *E)
   double target_depth_km[4];
   double target_radius[4];
   double local_distance[4], global_distance[4];
+  double local_total_sum[4], global_total_sum[4];
+  double local_ref_sum[4], global_ref_sum[4];
   double local_delta_sum[4], global_delta_sum[4];
   double temperature0, temperature1, dr;
   double dlnT_dr, adiabatic_rhs, residual, relative;
   double local_relative_sq, global_relative_sq;
   double local_residual_max, global_residual_max;
   double local_relative_max, global_relative_max;
+  double local_reconstruction_max, global_reconstruction_max;
   double alpha_g_cp0, alpha_g_cp1;
   const double relative_floor = 1.0e-12;
   const double radial_tolerance = 1.0e-12;
@@ -257,6 +282,8 @@ static void audit_strict_temperature_reference(struct All_variables *E)
     target_radius[target] =
       E->sphere.ro - target_depth_km[target] / E->data.radius_km;
     local_distance[target] = 1.0e30;
+    local_total_sum[target] = 0.0;
+    local_ref_sum[target] = 0.0;
     local_delta_sum[target] = 0.0;
     local_sample_count[target] = 0;
     for(k=1; k<=E->lmesh.noz; k++)
@@ -276,10 +303,15 @@ static void audit_strict_temperature_reference(struct All_variables *E)
             for(j=1; j<=E->lmesh.nox; j++) {
               node = k+(j-1)*E->lmesh.noz
                      +(i-1)*E->lmesh.nox*E->lmesh.noz;
-              local_delta_sum[target] +=
-                E->T[cap][node]-E->refstate.temperature[k];
+              local_total_sum[target] += E->T[cap][node];
+              local_ref_sum[target] += E->refstate.Tref[k];
+              local_delta_sum[target] += E->DataT[cap][node];
               local_sample_count[target]++;
             }
+  MPI_Allreduce(local_total_sum, global_total_sum, 4, MPI_DOUBLE,
+                MPI_SUM, E->parallel.world);
+  MPI_Allreduce(local_ref_sum, global_ref_sum, 4, MPI_DOUBLE,
+                MPI_SUM, E->parallel.world);
   MPI_Allreduce(local_delta_sum, global_delta_sum, 4, MPI_DOUBLE,
                 MPI_SUM, E->parallel.world);
   MPI_Allreduce(local_sample_count, global_sample_count, 4, MPI_INT,
@@ -288,12 +320,24 @@ static void audit_strict_temperature_reference(struct All_variables *E)
   local_relative_sq = 0.0;
   local_residual_max = 0.0;
   local_relative_max = 0.0;
+  local_reconstruction_max = 0.0;
   local_interval_count = E->lmesh.elz;
+  for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+    for(node=1; node<=E->lmesh.nno; node++) {
+      k = ((node-1) % E->lmesh.noz) + 1;
+      local_reconstruction_max =
+        max(local_reconstruction_max,
+            fabs(E->T[cap][node]
+                 -(E->refstate.Tref[k]+E->DataT[cap][node])));
+    }
+  MPI_Allreduce(&local_reconstruction_max, &global_reconstruction_max,
+                1, MPI_DOUBLE, MPI_MAX, E->parallel.world);
+
   for(k=1; k<=E->lmesh.elz; k++) {
     temperature0 = E->data.Ttop
-      + E->refstate.temperature[k]*E->data.ref_temperature;
+      + E->refstate.Tref[k]*E->data.ref_temperature;
     temperature1 = E->data.Ttop
-      + E->refstate.temperature[k+1]*E->data.ref_temperature;
+      + E->refstate.Tref[k+1]*E->data.ref_temperature;
     dr = E->sx[1][3][k+1]-E->sx[1][3][k];
     dlnT_dr = (log(temperature1)-log(temperature0))/dr;
     alpha_g_cp0 = E->refstate.thermal_expansivity[k]
@@ -328,8 +372,8 @@ static void audit_strict_temperature_reference(struct All_variables *E)
             "    read_refstate reconstructs smooth endpoints only for the\n"
             "    initial background geotherm\n"
             "Temperature semantics:\n"
-            "    Tref: E->refstate.temperature (fixed reference profile)\n"
-            "    deltaT_initial: E->T_initial-E->refstate.temperature\n"
+            "    Tref: E->refstate.Tref (alias of legacy temperature storage)\n"
+            "    DataT: E->DataT = E->T-E->refstate.Tref\n"
             "    total temperature: E->T (energy-equation state)\n");
     if(E->convection.tic_method == -1)
       fprintf(stderr,
@@ -339,24 +383,32 @@ static void audit_strict_temperature_reference(struct All_variables *E)
       fprintf(stderr, "Initial temperature anomaly:\n");
       for(target=0; target<4; target++) {
         if(global_sample_count[target] > 0) {
+          double total =
+            global_total_sum[target]/global_sample_count[target];
+          double ref =
+            global_ref_sum[target]/global_sample_count[target];
           double delta =
             global_delta_sum[target]/global_sample_count[target];
           fprintf(stderr,
-                  "    depth=%7.2f km deltaT*=% .9e deltaT_K=% .9e\n",
-                  target_depth_km[target], delta,
+                  "    depth=%7.2f km Ttotal*=% .9e Tref*=% .9e "
+                  "DataT*=% .9e DataT_K=% .9e\n",
+                  target_depth_km[target], total, ref, delta,
                   delta*E->data.ref_temperature);
         }
       }
     }
     fprintf(stderr,
+            "Temperature decomposition:\n"
+            "    max|Ttotal-(Tref+DataT)|: %e\n"
             "Tref adiabatic representation:\n"
             "    compare dln(Tref_K)/dr* with -Di*alpha*gravity/Cp\n"
             "    relative RMS: %e\n"
             "    relative MAX: %e\n"
             "    absolute residual MAX: %e\n"
             "Phase semantics:\n"
-            "    Xref uses E->refstate.temperature\n"
+            "    Xref uses E->refstate.Tref\n"
             "    dynamic X uses E->T\n",
+            global_reconstruction_max,
             sqrt(global_relative_sq/global_interval_count),
             global_relative_max, global_residual_max);
   }

@@ -23,7 +23,8 @@ Table S5. The strict generator:
    boundary values.
 
 The reader retains the serialized nodal values in
-`E->refstate.temperature`. It separately reconstructs smooth surface and CMB
+`E->refstate.temperature` and exposes the same allocation through the semantic
+alias `E->refstate.Tref`. It separately reconstructs smooth surface and CMB
 background endpoints from neighboring interior samples for use by the
 initial-temperature builder. Consequently the serialized array has mixed
 endpoint semantics even though the initializer already treats boundary-layer
@@ -34,18 +35,18 @@ temperature as a superposed anomaly.
 The audit names the existing quantities without introducing a new state:
 
 \[
-T_{\mathrm{ref}}^* = E\mathbin{\to}\mathrm{refstate.temperature},
+T_{\mathrm{ref}}^* = E\mathbin{\to}\mathrm{refstate.Tref},
 \]
 
 \[
-\delta T_{\mathrm{initial}}^*
+E\mathbin{\to}DataT(t=0)
 =E\mathbin{\to}T(t=0)-T_{\mathrm{ref}}^*,
 \]
 
 and `E->T` remains the dynamic total-temperature field evolved by the existing
 energy equation.
 
-The horizontal mean of `deltaT_initial` is reported at the model nodes nearest
+The horizontal means of `Ttotal`, `Tref`, and `DataT` are reported at the model nodes nearest
 the surface, 410 km, 660 km, and CMB. Both nondimensional values and kelvin
 values are printed. Restart input is explicitly skipped because a restart
 field is not the model's constructed initial temperature.
@@ -93,7 +94,7 @@ reinterpret them as a new temperature profile.
 
 The phase paths remain unchanged:
 
-- reference phase fraction `Xref` uses `E->refstate.temperature`;
+- reference phase fraction `Xref` uses `E->refstate.Tref`;
 - dynamic absolute phase fraction `X` uses the current total temperature
   `E->T`;
 - strict phase buoyancy continues to use `X-Xref`.
@@ -112,9 +113,8 @@ is large. This does not establish that the interior Katsura adiabat is
 physically wrong. It establishes that the interior profile and boundary-layer
 closure must not be judged as one undifferentiated `Tref` quantity.
 
-The current implementation is only a partial semantic separation:
-`E->T` is a total-temperature field constructed from a Katsura background plus
-thermal anomalies, but no persistent `deltaT` state exists and
-`E->refstate.temperature` still combines thermodynamic-reference and
-initial-background roles. This commit documents and measures that condition;
-it does not change it.
+The architecture now names the fixed reference explicitly through `Tref` and
+stores an initialization anomaly in `DataT`. `E->T` remains the authoritative
+total-temperature field constructed from a Katsura background plus thermal
+anomalies. `DataT` is not yet synchronized after subsequent accepted thermal
+or assimilation updates, so it is not an independently evolved state.

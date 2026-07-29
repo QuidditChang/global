@@ -35,3 +35,22 @@ Numerical changes: **NONE**
 Runtime configuration changes: **NONE**
 
 Reference-data changes: **NONE**
+
+## Temperature architecture separation
+
+Changes:
+
+- added `E->refstate.Tref` as a semantic alias of the legacy reference
+  temperature allocation;
+- added derived `E->DataT` storage initialized as `E->T-Tref`;
+- added a machine-precision `Ttotal=Tref+DataT` audit;
+- documented the unchanged assimilation interface and future synchronization
+  boundary.
+
+Physics changes: **NONE**
+
+Numerical changes: **NONE**
+
+Runtime configuration changes: **NONE**
+
+Reference-data changes: **NONE**

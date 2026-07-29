@@ -117,7 +117,7 @@ float phase_change_reference_fraction(struct All_variables *E,
   dz = (E->sphere.ro-E->sx[cap][3][node]) - phase->depth;
   e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
       - phase->clapeyron
-      * (E->refstate.temperature[nz] - phase->transT);
+      * (E->refstate.Tref[nz] - phase->transT);
 
   return 0.5 * (1.0 + tanh(phase->inv_width * e_pressure));
 }

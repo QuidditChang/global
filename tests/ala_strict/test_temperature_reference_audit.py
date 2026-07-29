@@ -10,6 +10,10 @@ from pathlib import Path
 
 GLOBAL_ROOT = Path(__file__).resolve().parents[2]
 SOURCE = GLOBAL_ROOT / "lib" / "Initial_temperature.c"
+MATERIAL_SOURCE = GLOBAL_ROOT / "lib" / "Material_properties.c"
+PHASE_SOURCE = GLOBAL_ROOT / "lib" / "Phase_change.c"
+INSTRUCTIONS_SOURCE = GLOBAL_ROOT / "lib" / "Instructions.c"
+DEFS_SOURCE = GLOBAL_ROOT / "lib" / "global_defs.h"
 
 
 class StrictTemperatureReferenceAuditTest(unittest.TestCase):
@@ -26,6 +30,28 @@ class StrictTemperatureReferenceAuditTest(unittest.TestCase):
         cls.audit = source[start:end]
         cls.source = source
 
+    def test_tref_is_a_non_owning_alias(self) -> None:
+        definitions = DEFS_SOURCE.read_text(encoding="utf-8")
+        material = MATERIAL_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("double *Tref;", definitions)
+        self.assertIn(
+            "E->refstate.Tref = E->refstate.temperature;", material
+        )
+
+    def test_data_t_is_allocated_and_initialized_after_total_t(self) -> None:
+        definitions = DEFS_SOURCE.read_text(encoding="utf-8")
+        instructions = INSTRUCTIONS_SOURCE.read_text(encoding="utf-8")
+        function = self.source[
+            self.source.index("void convection_initial_temperature(") :
+            self.source.index("\n\n/* E->T remains",)
+        ]
+        self.assertIn("double *DataT[NCS]", definitions)
+        self.assertIn("E->DataT[j]", instructions)
+        self.assertGreater(
+            function.index("initialize_temperature_anomaly(E);"),
+            function.index("(E->solver.construct_tic_from_input)(E);"),
+        )
+
     def test_audit_runs_after_initial_temperature_construction(self) -> None:
         function = self.source[
             self.source.index("void convection_initial_temperature(") :
@@ -38,8 +64,8 @@ class StrictTemperatureReferenceAuditTest(unittest.TestCase):
 
     def test_delta_temperature_is_read_only_difference(self) -> None:
         self.assertIn(
-            "E->T[cap][node]-E->refstate.temperature[k]",
-            self.audit,
+            "E->T[cap][node]-E->refstate.Tref[nz]",
+            self.source,
         )
         self.assertIsNone(
             re.search(r"E->T\[[^\n;]+\]\s*=", self.audit)
@@ -64,10 +90,24 @@ class StrictTemperatureReferenceAuditTest(unittest.TestCase):
             self.audit,
         )
         self.assertIn(
-            "Xref uses E->refstate.temperature",
+            "Xref uses E->refstate.Tref",
             self.audit,
         )
         self.assertIn("dynamic X uses E->T", self.audit)
+
+    def test_phase_reference_uses_tref_alias(self) -> None:
+        phase = PHASE_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("E->refstate.Tref[nz] - phase->transT", phase)
+        self.assertNotIn(
+            "E->refstate.temperature[nz] - phase->transT", phase
+        )
+
+    def test_decomposition_closure_is_machine_precision_diagnostic(self) -> None:
+        self.assertIn(
+            "E->refstate.Tref[k]+E->DataT[cap][node]",
+            self.audit,
+        )
+        self.assertIn("max|Ttotal-(Tref+DataT)|:", self.audit)
 
     def test_restart_is_not_mislabeled_as_initial_anomaly(self) -> None:
         self.assertIn("E->convection.tic_method == -1", self.audit)
