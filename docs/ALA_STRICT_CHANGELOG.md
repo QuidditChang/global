@@ -72,3 +72,29 @@ Numerical changes: **NONE**
 Runtime configuration changes: **NONE**
 
 Reference-data changes: **NONE**
+
+## Production configuration freeze
+
+Changes:
+
+- added `runs/cmbhf_ALA_strict.cfg` with the strict reference-state input;
+- made serialized Tref a pure Katsura fitted thermodynamic profile at all
+  nodes, without 300 K/3800 K endpoint overwrites;
+- made the reader use the serialized Tref endpoints directly;
+- retained `E->T` as the total-temperature state and `assim_delta_T` as the
+  existing assimilation increment;
+- removed the runtime strict-reference and temperature-semantic audit hooks;
+- removed the redundant one-time `DataT` allocation and cache;
+- added production static regressions and the readiness report.
+
+Physics changes: strict reference-temperature semantics finalized; no solver,
+energy, continuity, or phase-equation change.
+
+Numerical changes: initial total temperature now superposes the unchanged
+`cmbhf_ALA` anomaly construction on pure fitted Tref endpoints.
+
+Runtime configuration changes: strict production cfg selects
+`refstate_ALA_strict.txt`.
+
+Reference-data changes: column 3 endpoint overwrites removed; schema and all
+other columns unchanged.

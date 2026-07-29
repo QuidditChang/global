@@ -20,10 +20,10 @@ PROFILE_SOURCE = GLOBAL_ROOT / "lib" / "Profile_output.c"
 
 
 def _cfg_vector(name: str) -> np.ndarray:
-    text = (RUNS_ROOT / "cmbhf_ALA.cfg").read_text(encoding="utf-8")
+    text = (RUNS_ROOT / "cmbhf_ALA_strict.cfg").read_text(encoding="utf-8")
     match = re.search(rf"^\s*{re.escape(name)}\s*=\s*(.*?)\s*$", text, re.M)
     if match is None:
-        raise AssertionError(f"Missing {name} in cmbhf_ALA.cfg")
+        raise AssertionError(f"Missing {name} in cmbhf_ALA_strict.cfg")
     return np.asarray(
         [float(value.strip()) for value in match.group(1).split(",")],
         dtype=float,
@@ -50,7 +50,9 @@ def _phase_fraction(
 class StrictPhaseBuoyancyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        refstate = np.loadtxt(RUNS_ROOT / "refstate_ALA.txt", comments="#")
+        refstate = np.loadtxt(
+            RUNS_ROOT / "refstate_ALA_strict.txt", comments="#"
+        )
         radius = np.loadtxt(
             RUNS_ROOT / "GLB.coor.global.dat", skiprows=1, usecols=1
         )

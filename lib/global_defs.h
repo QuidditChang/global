@@ -476,7 +476,6 @@ struct CONTROL {
     int ala_schur_symmetry_check;
     double ala_schur_symmetry_tolerance;
     char ala_beta_element_source[32];
-    int strict_reference_audit;
     double ala_inner_accuracy_max;
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
@@ -629,7 +628,7 @@ struct CONTROL {
 
 struct REF_STATE {
     int choice;
-    int has_temperature;           /* initial background geotherm is available */
+    int has_temperature;           /* thermodynamic Tref profile is available */
     int has_beta_ala;
     int has_Ks;
     char filename[200];
@@ -640,10 +639,10 @@ struct REF_STATE {
     double *beta_ala;              /* strict-ALA nodal beta, refstate column 6 */
     double *thermal_expansivity;
     double *heat_capacity;
-    double *temperature;            /* column 3 initial background geotherm; not active ALA state */
+    double *temperature;            /* column 3 thermodynamic Tref storage */
     double *Tref;                    /* semantic alias of temperature; no separate ownership */
-    double temperature_cmb;         /* unclosed initial-background CMB value, available on every rank */
-    double temperature_surface;     /* unclosed initial-background surface value, available on every rank */
+    double temperature_cmb;         /* Tref at CMB, available on every rank */
+    double temperature_surface;     /* Tref at surface, available on every rank */
     double *gamma_eff;              /* dimensionless strict-ALA Gamma_eff (column 7) */
     double *Ks;                     /* physical strict-ALA K_S in GPa (optional column 8) */
     double *gravity;
@@ -878,7 +877,6 @@ struct All_variables {
 
     double *P[NCS],*F[NCS],*H[NCS],*S[NCS],*U[NCS];
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
-    double *DataT[NCS];          /* derived anomaly cache: total T - refstate.Tref */
     double *assim_delta_T[NCS];
     double *u1[NCS];
     double *temp[NCS],*temp1[NCS];

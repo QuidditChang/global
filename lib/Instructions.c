@@ -520,8 +520,6 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_augmented_lagrangian_gamma),"0.0",m);
   input_string("ala_beta_element_source",
                E->control.ala_beta_element_source,"supplied_average",m);
-  input_boolean("strict_reference_audit",
-                &(E->control.strict_reference_audit),"on",m);
   input_double("ala_inner_accuracy_max",
                &(E->control.ala_inner_accuracy_max),"1.0e-4",m);
   input_double("ala_inner_accuracy_factor",
@@ -1010,7 +1008,6 @@ void allocate_common_vars(E)
 
   E->P[j]        = (double *) malloc((npno+1)*sizeof(double));
   E->T[j]        = (double *) malloc((nno+1)*sizeof(double));
-  E->DataT[j]    = (double *) malloc((nno+1)*sizeof(double));
   E->NP[j]       = (float *) malloc((nno+1)*sizeof(float));
   E->edot[j]     = (float *) malloc((nno+1)*sizeof(float));
   E->buoyancy[j] = (double *) malloc((nno+1)*sizeof(double));
@@ -1185,7 +1182,6 @@ void allocate_common_vars(E)
 
   for(i=1;i<=E->lmesh.nno;i++) {
      E->T[j][i] = 0.0;
-     E->DataT[j][i] = 0.0;
      E->assim_delta_T[j][i] = 0.0;
   }
 
@@ -1342,7 +1338,6 @@ void global_default_values(E)
     E->control.ala_schur_symmetry_check = 0;
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;
     strcpy(E->control.ala_beta_element_source,"supplied_average");
-    E->control.strict_reference_audit = 1;
     E->control.ala_inner_accuracy_max = 1.0e-4;
     E->control.ala_inner_accuracy_factor = 1.0e-2;
     E->control.ala_pcg_restart_interval = 20;
