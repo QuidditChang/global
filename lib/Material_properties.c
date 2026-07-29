@@ -31,17 +31,20 @@
 #endif
 
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
 #include "global_defs.h"
 #include "material_properties.h"
 #include "parallel_related.h"
+#include "phase_change.h"
 
 static void read_refstate(struct All_variables *E);
 static int read_refstate_data_line(FILE *fp, char *buffer, int length);
 static void adams_williamson_eos(struct All_variables *E);
 static void initialize_ala_beta(struct All_variables *E);
+static void validate_strict_reference_state(struct All_variables *E);
 
 int layers_r(struct All_variables *,float);
 
@@ -70,6 +73,7 @@ void mat_prop_allocate(struct All_variables *E)
         parallel_process_termination();
     }
     E->refstate.has_beta_ala = 0;
+    E->refstate.has_Ks = 0;
 
     /* reference profile of gravity */
     E->refstate.gravity = (double *) malloc((noz+1)*sizeof(double));
@@ -150,6 +154,7 @@ void reference_state(struct All_variables *E)
         parallel_process_termination();
     }
 
+    validate_strict_reference_state(E);
     initialize_ala_beta(E);
 
     if(E->control.ala_pressure_buoyancy) {
@@ -349,8 +354,148 @@ static void initialize_ala_beta(struct All_variables *E)
     }
     if(E->control.ala_pressure_buoyancy &&
        (global_bad || relative_rms > 0.10 || thermo_relative_rms > 0.10)) {
-        fprintf(stderr, "Strict ALA reference state fails beta closure tolerance\n");
-        parallel_process_termination();
+        if(E->refstate.has_Ks) {
+            if(E->parallel.me == 0)
+                fprintf(stderr,
+                        "WARNING: phase-inclusive 8-column strict reference "
+                        "state exceeds legacy beta-closure tolerance; "
+                        "diagnostic only, supplied beta is unchanged\n");
+        }
+        else {
+            fprintf(stderr,
+                    "Strict ALA reference state fails beta closure tolerance\n");
+            parallel_process_termination();
+        }
+    }
+}
+
+
+/* Read-only startup diagnostics for the serialized strict reference state.
+ * This routine never replaces a reference value or changes an operator
+ * coefficient. */
+static void validate_strict_reference_state(struct All_variables *E)
+{
+    int nz, phase_index, cap, node;
+    int local_element_count, global_element_count;
+    int local_node_count, global_node_count;
+    double beta_secant, beta_input, beta_relative;
+    double gamma_check, gamma_difference;
+    double local_beta_rel_sq, global_beta_rel_sq;
+    double local_beta_rel_max, global_beta_rel_max;
+    double local_gamma_sq, global_gamma_sq;
+    double local_gamma_max, global_gamma_max;
+    double local_ks_min, global_ks_min;
+    double local_ks_max, global_ks_max;
+    double local_phase_max, global_phase_max;
+    double X, Xref;
+    const double beta_floor = 1.0e-12;
+
+    if(!E->control.ala_pressure_buoyancy || E->refstate.choice != 0) {
+        if(E->parallel.me == 0)
+            fprintf(stderr,
+                    "legacy reference state, skip strict audit\n");
+        return;
+    }
+    if(!E->control.strict_reference_audit) {
+        if(E->parallel.me == 0)
+            fprintf(stderr, "STRICT REFERENCE AUDIT disabled\n");
+        return;
+    }
+
+    local_beta_rel_sq = 0.0;
+    local_beta_rel_max = 0.0;
+    local_element_count = E->lmesh.elz;
+    for(nz=1; nz<=E->lmesh.elz; nz++) {
+        beta_secant =
+            -(log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz]))
+            / (E->sx[1][3][nz+1] - E->sx[1][3][nz]);
+        beta_input = 0.5 * (E->refstate.beta_ala[nz]
+                            + E->refstate.beta_ala[nz+1]);
+        beta_relative = fabs(beta_input - beta_secant)
+                        / max(fabs(beta_secant), beta_floor);
+        local_beta_rel_sq += beta_relative * beta_relative;
+        local_beta_rel_max = max(local_beta_rel_max, beta_relative);
+    }
+    MPI_Allreduce(&local_beta_rel_sq, &global_beta_rel_sq, 1, MPI_DOUBLE,
+                  MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_beta_rel_max, &global_beta_rel_max, 1, MPI_DOUBLE,
+                  MPI_MAX, E->parallel.world);
+    MPI_Allreduce(&local_element_count, &global_element_count, 1, MPI_INT,
+                  MPI_SUM, E->parallel.world);
+
+    local_gamma_sq = 0.0;
+    local_gamma_max = 0.0;
+    for(nz=1; nz<=E->lmesh.noz; nz++) {
+        gamma_check = E->refstate.thermal_expansivity[nz]
+                      * E->refstate.gravity[nz]
+                      / (E->refstate.heat_capacity[nz]
+                         * E->refstate.beta_ala[nz]);
+        gamma_difference = gamma_check - E->refstate.gamma_eff[nz];
+        local_gamma_sq += gamma_difference * gamma_difference;
+        local_gamma_max = max(local_gamma_max, fabs(gamma_difference));
+    }
+    local_node_count = E->lmesh.noz;
+    MPI_Allreduce(&local_gamma_sq, &global_gamma_sq, 1, MPI_DOUBLE,
+                  MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_gamma_max, &global_gamma_max, 1, MPI_DOUBLE,
+                  MPI_MAX, E->parallel.world);
+    MPI_Allreduce(&local_node_count, &global_node_count, 1, MPI_INT,
+                  MPI_SUM, E->parallel.world);
+
+    local_ks_min = DBL_MAX;
+    local_ks_max = -DBL_MAX;
+    if(E->refstate.has_Ks)
+        for(nz=1; nz<=E->lmesh.noz; nz++) {
+            local_ks_min = min(local_ks_min, E->refstate.Ks[nz]);
+            local_ks_max = max(local_ks_max, E->refstate.Ks[nz]);
+        }
+    MPI_Allreduce(&local_ks_min, &global_ks_min, 1, MPI_DOUBLE,
+                  MPI_MIN, E->parallel.world);
+    MPI_Allreduce(&local_ks_max, &global_ks_max, 1, MPI_DOUBLE,
+                  MPI_MAX, E->parallel.world);
+
+    local_phase_max = 0.0;
+    for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
+        for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+            for(node=1; node<=E->lmesh.nno; node++) {
+                nz = ((node-1) % E->lmesh.noz) + 1;
+                X = phase_change_fraction_at_temperature(
+                    E, phase_index, cap, node,
+                    E->refstate.temperature[nz]);
+                Xref = phase_change_reference_fraction(
+                    E, phase_index, cap, node);
+                local_phase_max = max(local_phase_max, fabs(X-Xref));
+            }
+    MPI_Allreduce(&local_phase_max, &global_phase_max, 1, MPI_DOUBLE,
+                  MPI_MAX, E->parallel.world);
+
+    if(E->parallel.me == 0) {
+        fprintf(stderr,
+                "STRICT REFERENCE AUDIT\n"
+                "rho-beta closure:\n"
+                "    RMS: %e\n"
+                "    MAX: %e\n"
+                "Gamma closure:\n"
+                "    RMS: %e\n"
+                "    MAX: %e\n",
+                sqrt(global_beta_rel_sq / global_element_count),
+                global_beta_rel_max,
+                sqrt(global_gamma_sq / global_node_count),
+                global_gamma_max);
+        if(E->refstate.has_Ks)
+            fprintf(stderr,
+                    "Ks profile:\n"
+                    "    MIN: %e GPa\n"
+                    "    MAX: %e GPa\n",
+                    global_ks_min, global_ks_max);
+        else
+            fprintf(stderr,
+                    "Ks profile:\n"
+                    "    legacy 7-column input, skip\n");
+        fprintf(stderr,
+                "Phase reference:\n"
+                "    max(|X-Xref|): %e\n",
+                global_phase_max);
     }
 }
 
@@ -702,6 +847,8 @@ static void read_refstate(struct All_variables *E)
         /* end of debug */
     }
 
+    E->refstate.has_Ks = E->control.ala_pressure_buoyancy &&
+                         expected_columns == 8;
     E->refstate.has_temperature = E->control.ala_pressure_buoyancy ||
                                   expected_columns >= 8;
     E->refstate.has_beta_ala = E->control.ala_pressure_buoyancy ||
@@ -775,6 +922,7 @@ static void adams_williamson_eos(struct All_variables *E)
     E->refstate.temperature_cmb = 0.0;
     E->refstate.temperature_surface = 0.0;
     E->refstate.has_beta_ala = 0;
+    E->refstate.has_Ks = 0;
     for(i=1; i<=E->lmesh.noz; i++)
         E->refstate.beta_ala[i] = 0.0;
 

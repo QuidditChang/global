@@ -31,3 +31,6 @@ void phase_change_allocate(struct All_variables *E);
 void phase_change_apply(struct All_variables *E, double **buoy);
 float phase_change_reference_fraction(struct All_variables *E,
                                       int phase_index, int cap, int node);
+float phase_change_fraction_at_temperature(struct All_variables *E,
+                                           int phase_index, int cap, int node,
+                                           double temperature);

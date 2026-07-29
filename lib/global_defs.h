@@ -476,6 +476,7 @@ struct CONTROL {
     int ala_schur_symmetry_check;
     double ala_schur_symmetry_tolerance;
     char ala_beta_element_source[32];
+    int strict_reference_audit;
     double ala_inner_accuracy_max;
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
@@ -630,6 +631,7 @@ struct REF_STATE {
     int choice;
     int has_temperature;           /* initial background geotherm is available */
     int has_beta_ala;
+    int has_Ks;
     char filename[200];
     double *rho;
     double *ala_beta;              /* authoritative strict-ALA element beta */

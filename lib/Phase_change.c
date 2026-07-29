@@ -123,6 +123,23 @@ float phase_change_reference_fraction(struct All_variables *E,
 }
 
 
+float phase_change_fraction_at_temperature(struct All_variables *E,
+                                           int phase_index, int cap, int node,
+                                           double temperature)
+{
+  int nz;
+  float e_pressure, dz;
+  struct Phase_transition *phase = &E->control.phase[phase_index];
+
+  nz = ((node-1) % E->lmesh.noz) + 1;
+  dz = (E->sphere.ro-E->sx[cap][3][node]) - phase->depth;
+  e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
+      - phase->clapeyron * (temperature - phase->transT);
+
+  return 0.5 * (1.0 + tanh(phase->inv_width * e_pressure));
+}
+
+
 static void apply_one_phase(struct All_variables *E, double **buoy,
                             int phase_index)
 {
