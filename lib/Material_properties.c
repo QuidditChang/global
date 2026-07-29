@@ -378,10 +378,13 @@ static void validate_strict_reference_state(struct All_variables *E)
     int nz, phase_index, cap, node;
     int local_element_count, global_element_count;
     int local_node_count, global_node_count;
-    double beta_secant, beta_input, beta_relative;
+    double dr, beta_secant, beta_input, beta_relative;
+    double beta_integral, density_log_change, integral_residual;
     double gamma_check, gamma_difference;
     double local_beta_rel_sq, global_beta_rel_sq;
     double local_beta_rel_max, global_beta_rel_max;
+    double local_integral_sq, global_integral_sq;
+    double local_integral_max, global_integral_max;
     double local_gamma_sq, global_gamma_sq;
     double local_gamma_max, global_gamma_max;
     double local_ks_min, global_ks_min;
@@ -390,7 +393,8 @@ static void validate_strict_reference_state(struct All_variables *E)
     double X, Xref;
     const double beta_floor = 1.0e-12;
 
-    if(!E->control.ala_pressure_buoyancy || E->refstate.choice != 0) {
+    if(!E->control.ala_pressure_buoyancy ||
+       E->refstate.choice != 0 || !E->refstate.has_Ks) {
         if(E->parallel.me == 0)
             fprintf(stderr,
                     "legacy reference state, skip strict audit\n");
@@ -404,21 +408,33 @@ static void validate_strict_reference_state(struct All_variables *E)
 
     local_beta_rel_sq = 0.0;
     local_beta_rel_max = 0.0;
+    local_integral_sq = 0.0;
+    local_integral_max = 0.0;
     local_element_count = E->lmesh.elz;
     for(nz=1; nz<=E->lmesh.elz; nz++) {
-        beta_secant =
-            -(log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz]))
-            / (E->sx[1][3][nz+1] - E->sx[1][3][nz]);
+        dr = E->sx[1][3][nz+1] - E->sx[1][3][nz];
+        density_log_change =
+            log(E->refstate.rho[nz+1]) - log(E->refstate.rho[nz]);
+        beta_secant = -density_log_change / dr;
         beta_input = 0.5 * (E->refstate.beta_ala[nz]
                             + E->refstate.beta_ala[nz+1]);
         beta_relative = fabs(beta_input - beta_secant)
                         / max(fabs(beta_secant), beta_floor);
+        beta_integral = beta_input * dr;
+        integral_residual = beta_integral + density_log_change;
         local_beta_rel_sq += beta_relative * beta_relative;
         local_beta_rel_max = max(local_beta_rel_max, beta_relative);
+        local_integral_sq += integral_residual * integral_residual;
+        local_integral_max =
+            max(local_integral_max, fabs(integral_residual));
     }
     MPI_Allreduce(&local_beta_rel_sq, &global_beta_rel_sq, 1, MPI_DOUBLE,
                   MPI_SUM, E->parallel.world);
     MPI_Allreduce(&local_beta_rel_max, &global_beta_rel_max, 1, MPI_DOUBLE,
+                  MPI_MAX, E->parallel.world);
+    MPI_Allreduce(&local_integral_sq, &global_integral_sq, 1, MPI_DOUBLE,
+                  MPI_SUM, E->parallel.world);
+    MPI_Allreduce(&local_integral_max, &global_integral_max, 1, MPI_DOUBLE,
                   MPI_MAX, E->parallel.world);
     MPI_Allreduce(&local_element_count, &global_element_count, 1, MPI_INT,
                   MPI_SUM, E->parallel.world);
@@ -472,7 +488,11 @@ static void validate_strict_reference_state(struct All_variables *E)
     if(E->parallel.me == 0) {
         fprintf(stderr,
                 "STRICT REFERENCE AUDIT\n"
-                "rho-beta closure:\n"
+                "rho-beta representation:\n"
+                "    node beta vs density secant (relative difference)\n"
+                "    RMS: %e\n"
+                "    MAX: %e\n"
+                "rho-beta integral closure:\n"
                 "    RMS: %e\n"
                 "    MAX: %e\n"
                 "Gamma closure:\n"
@@ -480,6 +500,8 @@ static void validate_strict_reference_state(struct All_variables *E)
                 "    MAX: %e\n",
                 sqrt(global_beta_rel_sq / global_element_count),
                 global_beta_rel_max,
+                sqrt(global_integral_sq / global_element_count),
+                global_integral_max,
                 sqrt(global_gamma_sq / global_node_count),
                 global_gamma_max);
         if(E->refstate.has_Ks)

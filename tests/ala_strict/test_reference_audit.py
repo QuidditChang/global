@@ -57,6 +57,18 @@ class StrictReferenceAuditTest(unittest.TestCase):
         audit = source[definition:end]
         self.assertIn("beta_secant =", audit)
         self.assertIn("beta_input = 0.5 *", audit)
+        self.assertIn("beta_integral = beta_input * dr;", audit)
+        self.assertIn(
+            "integral_residual = beta_integral + density_log_change;",
+            audit,
+        )
+        self.assertIn("rho-beta representation:", audit)
+        self.assertIn("rho-beta integral closure:", audit)
+        self.assertNotIn('"rho-beta closure:', audit)
+        self.assertIn(
+            "E->refstate.choice != 0 || !E->refstate.has_Ks",
+            audit,
+        )
         self.assertIsNone(
             re.search(
                 r"E->refstate\.[A-Za-z_]+\[[^\]]+\]\s*=",
