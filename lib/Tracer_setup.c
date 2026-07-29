@@ -153,6 +153,8 @@ void tracer_input(struct All_variables *E)
 
         input_int("ic_method_for_flavors",
                     &(E->trace.ic_method_for_flavors),"0,0,nomax",m);
+        input_boolean("tracer_reclassify_flavors",
+                      &(E->trace.reclassify_flavors),"on",m);
 
 
         if (E->trace.nflavors > 1) {
@@ -677,7 +679,8 @@ void count_tracers_of_flavors(struct All_variables *E)
         numtracers=E->trace.ntracers[j];
 
         /* Jiashun coded to define plateau */
-        if(intage==14 && intage<E->trench_visit_age) {
+        if(E->trace.reclassify_flavors &&
+           intage==14 && intage<E->trench_visit_age) {
             geomx1=(double *) malloc(250*sizeof(double));
             geomy1=(double *) malloc(250*sizeof(double));
             geomx2=(double *) malloc(250*sizeof(double));
@@ -747,6 +750,21 @@ void count_tracers_of_flavors(struct All_variables *E)
         for (kk=1; kk<=numtracers; kk++) {
             e = E->trace.ielement[j][kk];
 	    flavor = E->trace.extraq[j][0][kk];
+
+            /*
+             * Preserve cfg/restart flavors when legacy geological
+             * reclassification is disabled; only rebuild element counts.
+             */
+            if(!E->trace.reclassify_flavors) {
+                if(flavor < 0 || flavor >= E->trace.nflavors) {
+                    fprintf(stderr,
+                            "Invalid tracer flavor %d (configured range 0..%d)\n",
+                            flavor, E->trace.nflavors-1);
+                    parallel_process_termination();
+                }
+                E->trace.ntracer_flavor[j][flavor][e]++;
+                continue;
+            }
 
 	    /* change flavor inside oceanic crust to be 1 */
             theta = E->trace.basicq[j][0][kk];
@@ -981,7 +999,8 @@ void count_tracers_of_flavors(struct All_variables *E)
             E->trace.ntracer_flavor[j][flavor][e]++;
         } /* end of kk loop */
 
-        if(intage<E->trench_visit_age && E->monitor.solution_cycles>0)
+        if(E->trace.reclassify_flavors &&
+           intage<E->trench_visit_age && E->monitor.solution_cycles>0)
 	    E->trench_visit_age=intage;
     } /* end of j loop */
 
