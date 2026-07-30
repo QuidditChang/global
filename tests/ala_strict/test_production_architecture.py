@@ -150,6 +150,28 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("E->refstate.ala_beta[fine_nz] * dr", element)
         self.assertIn('"interval") != 0', instructions)
 
+    def test_interval_mesh_identity_allows_legacy_float_roundoff(self) -> None:
+        material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()
+        intervals = np.loadtxt(
+            RUNS_ROOT / "interval_ALA_strict.txt", comments="#"
+        )
+        serialized_radii = np.concatenate(
+            (intervals[:1, 1], intervals[:, 2])
+        )
+        runtime_radii = serialized_radii.astype(np.float32).astype(np.float64)
+        maximum_roundoff = float(
+            np.max(np.abs(serialized_radii - runtime_radii))
+        )
+        tolerance = 4.0 * np.finfo(np.float32).eps
+
+        self.assertGreater(maximum_roundoff, 1.0e-10)
+        self.assertLessEqual(maximum_roundoff, tolerance)
+        self.assertIn("#include <float.h>", material)
+        self.assertIn(
+            "const double radius_tolerance = 4.0 * FLT_EPSILON;",
+            material,
+        )
+
     def test_pyre_bindings_cover_strict_runtime_options(self) -> None:
         param = (
             GLOBAL_ROOT / "CitcomS" / "Components" / "Param.py"

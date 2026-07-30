@@ -31,6 +31,7 @@
 #endif
 
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -758,7 +759,13 @@ static void read_ala_beta_intervals(struct All_variables *E)
     char buffer[255], trailing;
     double r_inner, r_outer, beta_interval;
     double mesh_inner, mesh_outer;
-    const double radius_tolerance = 1.0e-10;
+    /*
+     * full_node_locations() reads coor_file radii through a float before
+     * storing them in the double-precision runtime mesh.  The interval file
+     * retains the serialized decimal radii, so compare coordinate identity
+     * at the precision of that legacy mesh input path.
+     */
+    const double radius_tolerance = 4.0 * FLT_EPSILON;
 
     if(!E->refstate.has_Ks) {
         fprintf(stderr,
