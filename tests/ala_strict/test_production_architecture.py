@@ -39,7 +39,9 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_inputs_and_stage6c_metric(self) -> None:
+    def test_cfg_changes_only_strict_inputs_and_stage6d_coarse_space(
+        self,
+    ) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
@@ -47,6 +49,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
+            "ala_geneo_preconditioner",
+            "ala_geneo_basis_type",
         )
         self.assertEqual(
             _without_cfg_keys(legacy, strict_keys),
@@ -69,7 +73,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_velocity_solver\s*="
-            r"\s*node_block\s*$",
+            r"\s*diagonal\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_geneo_preconditioner\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_geneo_basis_type\s*="
+            r"\s*radial_partition\s*$",
         )
 
     def test_strict_reference_schema_and_tref_endpoints(self) -> None:
@@ -218,6 +231,14 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             '"ala_shallow_patch_velocity_solver"',
             properties,
         )
+        self.assertIn(
+            'ala_geneo_basis_type = prop.str(',
+            incompressible,
+        )
+        self.assertIn(
+            'getStringProperty(properties, "ala_geneo_basis_type"',
+            properties,
+        )
 
     def test_stage6c_shallow_schur_is_spd_gram_with_rollback(self) -> None:
         stokes = (
@@ -259,6 +280,37 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "char ala_shallow_patch_velocity_solver[20];",
             definitions,
         )
+
+    def test_stage6d_cross_rank_radial_partition_is_fixed_galerkin(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        instructions = (
+            GLOBAL_ROOT / "lib" / "Instructions.c"
+        ).read_text(encoding="utf-8")
+        definitions = (
+            GLOBAL_ROOT / "lib" / "global_defs.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ala_build_radial_partition_shapes", stokes)
+        self.assertIn("active_map[j]>=0 && j%rbins==mode", stokes)
+        self.assertIn(
+            "accepted=ala_build_radial_partition_shapes(",
+            stokes,
+        )
+        self.assertIn("geometric_radial_partition", stokes)
+        self.assertIn(
+            "mpi_overlap_schwarz_plus_cross_rank_radial_aggregate",
+            stokes,
+        )
+        self.assertIn("apply_ala_galerkin_fixed_schur(", stokes)
+        self.assertIn(
+            "radial_partition requires a cross-rank GenEO group",
+            instructions,
+        )
+        self.assertIn("char ala_geneo_basis_type[24];", definitions)
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,

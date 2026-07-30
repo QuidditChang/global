@@ -589,8 +589,10 @@ static void apply_ala_geneo_correction(struct All_variables *E,
         }
         if(E->parallel.me==0) {
             fprintf(E->fp,"ALA_GENEO_COARSE_SOLVE iteration=%d modes=%d "
+                    "basis_type=%s "
                     "projected_rhs_norm=%e residual_reduction=%e "
-                    "coarse_energy=%e weight=%e\n",iteration,n,sqrt(rhs2),
+                    "coarse_energy=%e weight=%e\n",iteration,n,
+                    E->control.ala_geneo_basis_type,sqrt(rhs2),
                     sqrt(residual2/max(rhs2,1.0e-300)),global_energy,
                     E->control.ala_geneo_weight);
             fflush(E->fp);
@@ -2141,6 +2143,54 @@ static int ala_geneo_bin(int ex, int ey, int ez, int elx, int ely,
 }
 
 
+/* Stage 6d deterministic coarse space.  The radial-bin indicators are
+   disjoint on each cross-rank processor aggregate and together span its
+   complete shallow constant mode.  Diagonal-energy normalization changes
+   only the basis scaling, not that partition space. */
+static int ala_build_radial_partition_shapes(const double *aggregate,
+    const int *active_map, int nbins, int rbins,
+    double *selected_shapes, double *selected_values)
+{
+    int mode,i,j;
+    double denominator,rayleigh_numerator,rayleigh_denominator;
+
+    for(mode=0;mode<rbins;mode++) {
+        denominator=0.0;
+        for(j=0;j<nbins;j++) {
+            selected_shapes[mode*nbins+j]=0.0;
+            if(active_map[j]>=0 && j%rbins==mode) {
+                selected_shapes[mode*nbins+j]=1.0;
+                denominator += aggregate[j*nbins+j];
+            }
+        }
+        if(!isfinite(denominator) || denominator<=1.0e-30)
+            return(0);
+        denominator=sqrt(denominator);
+        for(j=0;j<nbins;j++)
+            selected_shapes[mode*nbins+j] /= denominator;
+        rayleigh_numerator=0.0;
+        rayleigh_denominator=0.0;
+        for(i=0;i<nbins;i++)
+            if(active_map[i]>=0) {
+                rayleigh_denominator += aggregate[i*nbins+i]
+                    *selected_shapes[mode*nbins+i]
+                    *selected_shapes[mode*nbins+i];
+                for(j=0;j<nbins;j++)
+                    if(active_map[j]>=0)
+                        rayleigh_numerator +=
+                            selected_shapes[mode*nbins+i]
+                            *aggregate[i*nbins+j]
+                            *selected_shapes[mode*nbins+j];
+            }
+        selected_values[mode]=rayleigh_numerator
+            /max(rayleigh_denominator,1.0e-300);
+        if(!isfinite(selected_values[mode]))
+            return(0);
+    }
+    return(rbins);
+}
+
+
 /* Dense symmetric Jacobi eigensolver for the small local GenEO aggregate
    problem.  Eigenvectors are returned by columns. */
 static int ala_geneo_jacobi_eigensolve(double *a, double *vectors,
@@ -2927,157 +2977,171 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                    aggregate[i*nbins+i]>0.0)
                     active_map[i]=nactive++;
             }
-            for(i=0;i<nbins;i++)
-                if(active_map[i]>=0)
-                    for(j=0;j<nbins;j++)
-                        if(active_map[j]>=0) {
-                            active1=active_map[i];
-                            active2=active_map[j];
-                            value=0.5*(aggregate[i*nbins+j]
-                                     +aggregate[j*nbins+i]);
-                            normalized[active1*nactive+active2]=value
-                                /sqrt(aggregate[i*nbins+i]
-                                      *aggregate[j*nbins+j]);
-                            if(!isfinite(
-                                normalized[active1*nactive+active2]))
-                                myerror(E,
-                                    "ALA cross-rank GenEO operator is not finite");
-                        }
-            if(nactive>0)
-                iterations=ala_geneo_jacobi_eigensolve(
-                    normalized,vectors,eigenvalues,nactive);
-            if(nactive>0 &&
-               iterations>=max(50*nactive*nactive,1))
-                myerror(E,
-                    "ALA cross-rank GenEO eigensolve did not converge");
-            for(i=0;i<nactive;i++)
-                if(!isfinite(eigenvalues[i]))
-                    myerror(E,
-                        "ALA cross-rank GenEO eigenvalue is not finite");
-            for(i=0;i<nactive;i++)
-                for(j=i+1;j<nactive;j++)
-                    if(eigenvalues[j]<eigenvalues[i]) {
-                        value=eigenvalues[i];
-                        eigenvalues[i]=eigenvalues[j];
-                        eigenvalues[j]=value;
-                        for(k=0;k<nactive;k++) {
-                            value=vectors[k*nactive+i];
-                            vectors[k*nactive+i]=vectors[k*nactive+j];
-                            vectors[k*nactive+j]=value;
-                        }
-                    }
-            desired_modes=0;
-            while(desired_modes<nactive &&
-                  desired_modes<E->control.ala_geneo_max_modes_per_rank &&
-                  eigenvalues[desired_modes]<=threshold)
-                desired_modes++;
-            if(nactive>0)
-                desired_modes=max(desired_modes,
-                    E->control.ala_geneo_min_modes_per_rank);
-            desired_modes=min(desired_modes,nactive);
-            desired_modes=min(desired_modes,
-                E->control.ala_geneo_max_modes_per_rank);
-
-            /* The first mode is the normalized indicator of the complete
-               processor aggregate.  These disjoint indicators are an exact
-               partition of unity and guarantee that the new path contains a
-               genuinely cross-rank component even when the summed principal
-               eigenproblem is block diagonal across rank interfaces. */
-            accepted=0;
-            if(desired_modes>0) {
-                denominator=0.0;
-                for(j=0;j<nbins;j++)
-                    if(active_map[j]>=0) {
-                        selected_shapes[m][j]=1.0;
-                        denominator += aggregate[j*nbins+j];
-                    }
-                if(!isfinite(denominator) || denominator<=1.0e-30)
-                    myerror(E,
-                        "ALA cross-rank GenEO partition mode has zero mass");
-                denominator=sqrt(denominator);
-                for(j=0;j<nbins;j++)
-                    selected_shapes[m][j] /= denominator;
-                rayleigh_numerator=0.0;
-                rayleigh_denominator=0.0;
+            if(strcmp(E->control.ala_geneo_basis_type,"spectral")==0) {
                 for(i=0;i<nbins;i++)
-                    if(active_map[i]>=0) {
-                        rayleigh_denominator += aggregate[i*nbins+i]
-                            *selected_shapes[m][i]
-                            *selected_shapes[m][i];
+                    if(active_map[i]>=0)
                         for(j=0;j<nbins;j++)
-                            if(active_map[j]>=0)
-                                rayleigh_numerator +=
-                                    selected_shapes[m][i]
-                                    *aggregate[i*nbins+j]
-                                    *selected_shapes[m][j];
-                    }
-                selected_values[m][0]=rayleigh_numerator
-                    /max(rayleigh_denominator,1.0e-300);
-                accepted=1;
+                            if(active_map[j]>=0) {
+                                active1=active_map[i];
+                                active2=active_map[j];
+                                value=0.5*(aggregate[i*nbins+j]
+                                         +aggregate[j*nbins+i]);
+                                normalized[active1*nactive+active2]=value
+                                    /sqrt(aggregate[i*nbins+i]
+                                          *aggregate[j*nbins+j]);
+                                if(!isfinite(
+                                    normalized[active1*nactive+active2]))
+                                    myerror(E,
+                                        "ALA cross-rank GenEO operator is not finite");
+                            }
+                if(nactive>0)
+                    iterations=ala_geneo_jacobi_eigensolve(
+                        normalized,vectors,eigenvalues,nactive);
+                if(nactive>0 &&
+                   iterations>=max(50*nactive*nactive,1))
+                    myerror(E,
+                        "ALA cross-rank GenEO eigensolve did not converge");
+                for(i=0;i<nactive;i++)
+                    if(!isfinite(eigenvalues[i]))
+                        myerror(E,
+                            "ALA cross-rank GenEO eigenvalue is not finite");
+                for(i=0;i<nactive;i++)
+                    for(j=i+1;j<nactive;j++)
+                        if(eigenvalues[j]<eigenvalues[i]) {
+                            value=eigenvalues[i];
+                            eigenvalues[i]=eigenvalues[j];
+                            eigenvalues[j]=value;
+                            for(k=0;k<nactive;k++) {
+                                value=vectors[k*nactive+i];
+                                vectors[k*nactive+i]
+                                    =vectors[k*nactive+j];
+                                vectors[k*nactive+j]=value;
+                            }
+                        }
             }
+            if(strcmp(E->control.ala_geneo_basis_type,
+                      "radial_partition")==0) {
+                desired_modes=rbins;
+                accepted=ala_build_radial_partition_shapes(
+                    aggregate,active_map,nbins,rbins,
+                    selected_shapes[m],selected_values[m]);
+                if(accepted!=desired_modes)
+                    myerror(E,
+                        "ALA Stage 6d radial partition basis is incomplete");
+            }
+            else {
+                desired_modes=0;
+                while(desired_modes<nactive &&
+                      desired_modes<E->control.ala_geneo_max_modes_per_rank &&
+                      eigenvalues[desired_modes]<=threshold)
+                    desired_modes++;
+                if(nactive>0)
+                    desired_modes=max(desired_modes,
+                        E->control.ala_geneo_min_modes_per_rank);
+                desired_modes=min(desired_modes,nactive);
+                desired_modes=min(desired_modes,
+                    E->control.ala_geneo_max_modes_per_rank);
 
-            /* Add low-energy spectral shapes after D-orthogonalizing them
-               against the partition mode and previously accepted shapes.
-               Near-dependent candidates are skipped instead of creating an
-               ill-conditioned global Galerkin matrix. */
-            candidate=0;
-            while(accepted<desired_modes && candidate<nactive) {
-                for(j=0;j<nbins;j++)
-                    selected_shapes[m][accepted*nbins+j]
-                        =(active_map[j]>=0)
-                        ? vectors[active_map[j]*nactive+candidate]
-                          /sqrt(aggregate[j*nbins+j])
-                        : 0.0;
-                for(p=0;p<accepted;p++) {
-                    coefficient=0.0;
+                /* The first mode is the normalized indicator of the complete
+                   processor aggregate.  These disjoint indicators are an exact
+                   partition of unity and guarantee that the spectral path
+                   contains a genuinely cross-rank component. */
+                accepted=0;
+                if(desired_modes>0) {
                     denominator=0.0;
                     for(j=0;j<nbins;j++)
                         if(active_map[j]>=0) {
-                            coefficient += aggregate[j*nbins+j]
-                                *selected_shapes[m][accepted*nbins+j]
-                                *selected_shapes[m][p*nbins+j];
-                            denominator += aggregate[j*nbins+j]
-                                *selected_shapes[m][p*nbins+j]
-                                *selected_shapes[m][p*nbins+j];
+                            selected_shapes[m][j]=1.0;
+                            denominator += aggregate[j*nbins+j];
                         }
-                    coefficient /= max(denominator,1.0e-300);
+                    if(!isfinite(denominator) || denominator<=1.0e-30)
+                        myerror(E,
+                            "ALA cross-rank GenEO partition mode has zero mass");
+                    denominator=sqrt(denominator);
+                    for(j=0;j<nbins;j++)
+                        selected_shapes[m][j] /= denominator;
+                    rayleigh_numerator=0.0;
+                    rayleigh_denominator=0.0;
+                    for(i=0;i<nbins;i++)
+                        if(active_map[i]>=0) {
+                            rayleigh_denominator += aggregate[i*nbins+i]
+                                *selected_shapes[m][i]
+                                *selected_shapes[m][i];
+                            for(j=0;j<nbins;j++)
+                                if(active_map[j]>=0)
+                                    rayleigh_numerator +=
+                                        selected_shapes[m][i]
+                                        *aggregate[i*nbins+j]
+                                        *selected_shapes[m][j];
+                        }
+                    selected_values[m][0]=rayleigh_numerator
+                        /max(rayleigh_denominator,1.0e-300);
+                    accepted=1;
+                }
+
+                /* Add low-energy spectral shapes after D-orthogonalizing them
+                   against the partition mode and previously accepted shapes.
+                   Near-dependent candidates are skipped instead of creating
+                   an ill-conditioned global Galerkin matrix. */
+                candidate=0;
+                while(accepted<desired_modes && candidate<nactive) {
                     for(j=0;j<nbins;j++)
                         selected_shapes[m][accepted*nbins+j]
-                            -=coefficient
-                              *selected_shapes[m][p*nbins+j];
-                }
-                denominator=0.0;
-                for(j=0;j<nbins;j++)
-                    if(active_map[j]>=0)
-                        denominator += aggregate[j*nbins+j]
-                            *selected_shapes[m][accepted*nbins+j]
-                            *selected_shapes[m][accepted*nbins+j];
-                candidate++;
-                if(!isfinite(denominator) || denominator<=1.0e-20) {
-                    for(j=0;j<nbins;j++)
-                        selected_shapes[m][accepted*nbins+j]=0.0;
-                    continue;
-                }
-                denominator=sqrt(denominator);
-                for(j=0;j<nbins;j++)
-                    selected_shapes[m][accepted*nbins+j] /= denominator;
-                rayleigh_numerator=0.0;
-                rayleigh_denominator=0.0;
-                for(i=0;i<nbins;i++)
-                    if(active_map[i]>=0) {
-                        rayleigh_denominator += aggregate[i*nbins+i]
-                            *selected_shapes[m][accepted*nbins+i]
-                            *selected_shapes[m][accepted*nbins+i];
+                            =(active_map[j]>=0)
+                            ? vectors[active_map[j]*nactive+candidate]
+                              /sqrt(aggregate[j*nbins+j])
+                            : 0.0;
+                    for(p=0;p<accepted;p++) {
+                        coefficient=0.0;
+                        denominator=0.0;
                         for(j=0;j<nbins;j++)
-                            if(active_map[j]>=0)
-                                rayleigh_numerator +=
-                                    selected_shapes[m][accepted*nbins+i]
-                                    *aggregate[i*nbins+j]
-                                    *selected_shapes[m][accepted*nbins+j];
+                            if(active_map[j]>=0) {
+                                coefficient += aggregate[j*nbins+j]
+                                    *selected_shapes[m][accepted*nbins+j]
+                                    *selected_shapes[m][p*nbins+j];
+                                denominator += aggregate[j*nbins+j]
+                                    *selected_shapes[m][p*nbins+j]
+                                    *selected_shapes[m][p*nbins+j];
+                            }
+                        coefficient /= max(denominator,1.0e-300);
+                        for(j=0;j<nbins;j++)
+                            selected_shapes[m][accepted*nbins+j]
+                                -=coefficient
+                                  *selected_shapes[m][p*nbins+j];
                     }
-                selected_values[m][accepted]=rayleigh_numerator
-                    /max(rayleigh_denominator,1.0e-300);
-                accepted++;
+                    denominator=0.0;
+                    for(j=0;j<nbins;j++)
+                        if(active_map[j]>=0)
+                            denominator += aggregate[j*nbins+j]
+                                *selected_shapes[m][accepted*nbins+j]
+                                *selected_shapes[m][accepted*nbins+j];
+                    candidate++;
+                    if(!isfinite(denominator) || denominator<=1.0e-20) {
+                        for(j=0;j<nbins;j++)
+                            selected_shapes[m][accepted*nbins+j]=0.0;
+                        continue;
+                    }
+                    denominator=sqrt(denominator);
+                    for(j=0;j<nbins;j++)
+                        selected_shapes[m][accepted*nbins+j] /= denominator;
+                    rayleigh_numerator=0.0;
+                    rayleigh_denominator=0.0;
+                    for(i=0;i<nbins;i++)
+                        if(active_map[i]>=0) {
+                            rayleigh_denominator += aggregate[i*nbins+i]
+                                *selected_shapes[m][accepted*nbins+i]
+                                *selected_shapes[m][accepted*nbins+i];
+                            for(j=0;j<nbins;j++)
+                                if(active_map[j]>=0)
+                                    rayleigh_numerator +=
+                                      selected_shapes[m][accepted*nbins+i]
+                                      *aggregate[i*nbins+j]
+                                      *selected_shapes[m][accepted*nbins+j];
+                        }
+                    selected_values[m][accepted]=rayleigh_numerator
+                        /max(rayleigh_denominator,1.0e-300);
+                    accepted++;
+                }
             }
             if(accepted<desired_modes)
                 myerror(E,
@@ -3226,7 +3290,13 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             local_has_support=(norm>1.0e-30) ? 1 : 0;
             MPI_Allreduce(&local_has_support,&supported_members,1,MPI_INT,
                           MPI_SUM,group_comm[m]);
-            if(i==0 && supported_members!=group_size)
+            if(strcmp(E->control.ala_geneo_basis_type,
+                      "radial_partition")==0 &&
+               supported_members!=group_size)
+                myerror(E,
+                    "ALA Stage 6d radial mode misses a member rank");
+            if(strcmp(E->control.ala_geneo_basis_type,"spectral")==0 &&
+               i==0 && supported_members!=group_size)
                 myerror(E,
                     "ALA cross-rank GenEO partition mode misses a member rank");
             if(!isfinite(group_norm) || group_norm<=1.0e-30)
@@ -3373,10 +3443,11 @@ static void build_ala_cross_rank_geneo_coarse_cache(
     if(E->parallel.me==0) {
         fprintf(E->fp,
             "ALA cross-rank GenEO coarse space global_modes=%d "
+            "basis_type=%s "
             "active_aggregates=%d modes_per_aggregate_range=(%d,%d) "
             "rank_group=%dx%d group_member_range=(%d,%d) "
             "aggregate_bins_max=%dx%dx%d partition_of_unity=disjoint_exact "
-            "selection_operator=interface_coupled_jacobi "
+            "basis_construction=%s "
             "interface_entries=%d selection_symmetry_defect=%e "
             "threshold=%e selected_rayleigh_range=(%e,%e) "
             "second_mode_rayleigh_range=(%e,%e) "
@@ -3384,9 +3455,13 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             "symmetry_defect=%e diagonal_range=(%e,%e) "
             "regularization=%e shift=%e min_pivot=%e "
             "setup_seconds_max=%e status=pass\n",
-            n,global_active,global_mode_min,global_mode_max,
+            n,E->control.ala_geneo_basis_type,
+            global_active,global_mode_min,global_mode_max,
             rank_group_x,rank_group_y,global_group_min,global_group_max,
             hbins*rank_group_x,hbins*rank_group_y,rbins,
+            strcmp(E->control.ala_geneo_basis_type,"radial_partition")==0
+                ? "geometric_radial_partition"
+                : "interface_coupled_jacobi",
             global_interface_entries,global_selection_symmetry_max,threshold,
             global_eigen_min,global_eigen_max,
             global_second_min,global_second_max,iterations,n,
@@ -3395,14 +3470,19 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             global_setup_seconds);
         fprintf(stderr,
             "ALA cross-rank GenEO coarse space global_modes=%d "
+            "basis_type=%s "
             "active_aggregates=%d rank_group=%dx%d "
             "aggregate_bins_max=%dx%dx%d "
             "partition_of_unity=disjoint_exact "
-            "selection_operator=interface_coupled_jacobi "
+            "basis_construction=%s "
             "interface_entries=%d selection_symmetry_defect=%e "
             "symmetry_defect=%e setup_seconds_max=%e status=pass\n",
-            n,global_active,rank_group_x,rank_group_y,
+            n,E->control.ala_geneo_basis_type,
+            global_active,rank_group_x,rank_group_y,
             hbins*rank_group_x,hbins*rank_group_y,rbins,
+            strcmp(E->control.ala_geneo_basis_type,"radial_partition")==0
+                ? "geometric_radial_partition"
+                : "interface_coupled_jacobi",
             global_interface_entries,global_selection_symmetry_max,
             symmetry,global_setup_seconds);
         fflush(E->fp);
@@ -5167,7 +5247,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         preconditioner_mode=
             (E->control.ala_geneo_rank_group_x>1 ||
              E->control.ala_geneo_rank_group_y>1)
-            ? "mpi_overlap_schwarz_plus_cross_rank_geneo"
+            ? (strcmp(E->control.ala_geneo_basis_type,
+                      "radial_partition")==0
+               ? "mpi_overlap_schwarz_plus_cross_rank_radial_aggregate"
+               : "mpi_overlap_schwarz_plus_cross_rank_geneo")
             : "mpi_overlap_schwarz_plus_geneo";
     else if(E->control.ala_two_level_preconditioner)
         preconditioner_mode=E->control.ala_shallow_patch_preconditioner
@@ -5188,7 +5271,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e "
+                "global_weight=%e geneo=%s geneo_basis_type=%s "
+                "geneo_basis=%d geneo_weight=%e "
                 "geneo_rank_group=%dx%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
@@ -5202,6 +5286,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 preconditioner_cache.global_basis_count,
                 E->control.ala_global_coarse_weight,
                 E->control.ala_geneo_preconditioner ? "on" : "off",
+                E->control.ala_geneo_basis_type,
                 preconditioner_cache.geneo_basis_count,
                 E->control.ala_geneo_weight,
                 E->control.ala_geneo_rank_group_x,
@@ -5211,7 +5296,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
-                "global_weight=%e geneo=%s geneo_basis=%d geneo_weight=%e "
+                "global_weight=%e geneo=%s geneo_basis_type=%s "
+                "geneo_basis=%d geneo_weight=%e "
                 "geneo_rank_group=%dx%d\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
@@ -5225,6 +5311,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 preconditioner_cache.global_basis_count,
                 E->control.ala_global_coarse_weight,
                 E->control.ala_geneo_preconditioner ? "on" : "off",
+                E->control.ala_geneo_basis_type,
                 preconditioner_cache.geneo_basis_count,
                 E->control.ala_geneo_weight,
                 E->control.ala_geneo_rank_group_x,

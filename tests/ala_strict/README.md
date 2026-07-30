@@ -18,13 +18,15 @@ The phase test verifies:
 The production-architecture test also verifies:
 
 - the strict cfg changes only the reference-state inputs and the explicit
-  Stage 6c shallow velocity metric;
+  Stage 6d cross-rank aggregate experiment;
 - the eight-column strict reference-state order and pure fitted Tref endpoints;
 - `E->T` remains the sole temperature state and assimilation target;
 - no `DataT` cache or runtime strict-audit hook remains;
 - `Xref` uses `E->refstate.Tref` while dynamic `X` uses `E->T`;
 - the Stage 6c node-block shallow Schur map is constructed as an SPD Gram
   operator and retains the exact Stage 6b.3 diagonal rollback;
+- the Stage 6d basis consists of deterministic radial partitions on a
+  cross-rank aggregate and is solved with the fixed strict Galerkin operator;
 - PCG failure output contains absolute `N_M`, `Q`, and the original
   unaugmented momentum audit.
 

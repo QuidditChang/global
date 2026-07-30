@@ -201,6 +201,9 @@ class Incompressible(CitcomComponent):
             validator=prop.choice(["diagonal", "node_block"]))
         ala_geneo_preconditioner = prop.bool(
             "ala_geneo_preconditioner", default=False)
+        ala_geneo_basis_type = prop.str(
+            "ala_geneo_basis_type", default="spectral",
+            validator=prop.choice(["spectral", "radial_partition"]))
         ala_geneo_eigenvalue_threshold = prop.float(
             "ala_geneo_eigenvalue_threshold", default=0.20)
         ala_geneo_min_modes_per_rank = prop.int(

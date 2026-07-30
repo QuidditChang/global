@@ -1137,6 +1137,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_shallow_patch_velocity_solver, fp);
     getIntProperty(properties, "ala_geneo_preconditioner",
                    E->control.ala_geneo_preconditioner, fp);
+    getStringProperty(properties, "ala_geneo_basis_type",
+                      E->control.ala_geneo_basis_type, fp);
     getDoubleProperty(properties, "ala_geneo_eigenvalue_threshold",
                       E->control.ala_geneo_eigenvalue_threshold, fp);
     getIntProperty(properties, "ala_geneo_min_modes_per_rank",
@@ -1278,6 +1280,21 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                 "node_block");
     if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
         myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
+    if(strcmp(E->control.ala_geneo_basis_type,"spectral") != 0 &&
+       strcmp(E->control.ala_geneo_basis_type,"radial_partition") != 0)
+        myerror(E, "ala_geneo_basis_type must be spectral or "
+                "radial_partition");
+    if(strcmp(E->control.ala_geneo_basis_type,"radial_partition") == 0 &&
+       (E->control.ala_geneo_min_modes_per_rank
+          != E->control.ala_geneo_radial_bins ||
+        E->control.ala_geneo_max_modes_per_rank
+          != E->control.ala_geneo_radial_bins))
+        myerror(E, "radial_partition requires GenEO min/max modes equal "
+                "ala_geneo_radial_bins");
+    if(strcmp(E->control.ala_geneo_basis_type,"radial_partition") == 0 &&
+       E->control.ala_geneo_rank_group_x == 1 &&
+       E->control.ala_geneo_rank_group_y == 1)
+        myerror(E, "radial_partition requires a cross-rank GenEO group");
     if(E->control.ala_geneo_min_modes_per_rank < 1 ||
        E->control.ala_geneo_max_modes_per_rank <
          E->control.ala_geneo_min_modes_per_rank ||

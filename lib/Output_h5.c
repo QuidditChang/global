@@ -1730,6 +1730,8 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_shallow_patch_velocity_solver);
     status = set_attribute_int(input, "ala_geneo_preconditioner",
                                E->control.ala_geneo_preconditioner);
+    status = set_attribute_string(input, "ala_geneo_basis_type",
+                                  E->control.ala_geneo_basis_type);
     status = set_attribute_double(input, "ala_geneo_eigenvalue_threshold",
                                   E->control.ala_geneo_eigenvalue_threshold);
     status = set_attribute_int(input, "ala_geneo_min_modes_per_rank",

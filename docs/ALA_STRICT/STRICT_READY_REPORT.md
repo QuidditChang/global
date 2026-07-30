@@ -10,11 +10,14 @@ strict-only differences are:
 refstate_file = refstate_ALA_strict.txt
 ala_beta_element_source = interval
 ala_beta_interval_file = interval_ALA_strict.txt
-ala_shallow_patch_velocity_solver = node_block
+ala_shallow_patch_velocity_solver = diagonal
+ala_geneo_preconditioner = on
+ala_geneo_basis_type = radial_partition
 ```
 
 The first three select the phase-inclusive strict reference state.  The final
-key is the Stage 6c Schur-preconditioner experiment described below.  No
+three keys select the Stage 6d Schur-preconditioner experiment described
+below.  No
 energy-equation, phase-equation, boundary-condition, assimilation, timestep,
 or viscosity parameter is changed.
 
@@ -136,6 +139,40 @@ Every PCG iteration now reports the absolute pressure-mass continuity norm
 unaugmented momentum residual is audited before a failed continuity exit as
 well as after a successful solve.
 
+The 400-rank Stage 6c A/B run was numerically healthy but negative:
+`node_block` changed the best cancellation only from `0.01339024` to
+`0.01338443` at iteration 42 and ended at `0.01558697`.  It had zero node
+fallbacks, positive curvature, unit residual drift, and a `3.0e-14`
+preconditioner symmetry defect.  The strict production experiment therefore
+returns to the exact `diagonal` rollback.
+
+## G. Stage 6d cross-rank radial aggregate
+
+Stage 6d retains the Stage 6b.3 `6x6x2`, overlap-three shallow Schwarz map and
+adds a deterministic coarse space on each `2x2` horizontal MPI-rank group.
+With four bins per member rank and two radial bins, each processor aggregate
+has `8x8x2` selection bins and crosses four ranks.
+
+Unlike the earlier GenEO experiment, the two coarse shapes are not selected
+by an eigenvalue threshold.  They are the disjoint indicators of the two
+radial portions of the 0--410 km shallow layer.  Their span contains the
+complete aggregate constant while retaining an independent shallow/deep
+radial amplitude.  The supports form an exact disjoint partition across
+processor aggregates.  Diagonal-energy and final Euclidean normalization
+change only basis scaling.
+
+The coarse matrix remains
+
+```text
+S_c = P^T (D+C) Kfixed^-1 (D+C)^T P
+```
+
+and is assembled by the existing fixed strict-ALA Galerkin action, globally
+symmetrized, shifted, and Cholesky factored.  Consequently the additive
+coarse correction is fixed and SPD.  `ala_geneo_basis_type=spectral` is the
+legacy rollback; `radial_partition` requires a cross-rank group and exactly
+one configured mode per radial bin.
+
 ## Validation record
 
 - Strict generator: PASS.
@@ -146,7 +183,7 @@ well as after a successful solve.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 19/19 PASS.
+- strict static regressions: 20/20 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do
