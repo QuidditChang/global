@@ -1726,6 +1726,8 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_shallow_patch_regularization);
     status = set_attribute_int(input, "ala_shallow_patch_mpi_overlap",
                                E->control.ala_shallow_patch_mpi_overlap);
+    status = set_attribute_string(input, "ala_shallow_patch_velocity_solver",
+                                  E->control.ala_shallow_patch_velocity_solver);
     status = set_attribute_int(input, "ala_geneo_preconditioner",
                                E->control.ala_geneo_preconditioner);
     status = set_attribute_double(input, "ala_geneo_eigenvalue_threshold",

@@ -602,6 +602,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_shallow_patch_horizontal_stride),"2",m);
   input_int("ala_shallow_patch_mpi_overlap",
             &(E->control.ala_shallow_patch_mpi_overlap),"2",m);
+  input_string("ala_shallow_patch_velocity_solver",
+               E->control.ala_shallow_patch_velocity_solver,"diagonal",m);
   input_boolean("ala_geneo_preconditioner",
                 &(E->control.ala_geneo_preconditioner),"off",m);
   input_double("ala_geneo_eigenvalue_threshold",
@@ -740,6 +742,10 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_shallow_patch_horizontal_elements)
       myerror(E, "twice ala_shallow_patch_mpi_overlap must not exceed "
               "ala_shallow_patch_horizontal_elements");
+  if(strcmp(E->control.ala_shallow_patch_velocity_solver,"diagonal") != 0 &&
+     strcmp(E->control.ala_shallow_patch_velocity_solver,"node_block") != 0)
+      myerror(E, "ala_shallow_patch_velocity_solver must be diagonal or "
+              "node_block");
   if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
       myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
   if(E->control.ala_geneo_min_modes_per_rank < 1 ||
@@ -1386,6 +1392,7 @@ void global_default_values(E)
     E->control.ala_shallow_patch_horizontal_elements = 4;
     E->control.ala_shallow_patch_horizontal_stride = 2;
     E->control.ala_shallow_patch_mpi_overlap = 2;
+    strcpy(E->control.ala_shallow_patch_velocity_solver,"diagonal");
     E->control.ala_geneo_preconditioner = 0;
     E->control.ala_geneo_eigenvalue_threshold = 0.20;
     E->control.ala_geneo_min_modes_per_rank = 1;

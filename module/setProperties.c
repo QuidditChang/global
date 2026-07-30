@@ -1133,6 +1133,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_shallow_patch_horizontal_stride, fp);
     getIntProperty(properties, "ala_shallow_patch_mpi_overlap",
                    E->control.ala_shallow_patch_mpi_overlap, fp);
+    getStringProperty(properties, "ala_shallow_patch_velocity_solver",
+                      E->control.ala_shallow_patch_velocity_solver, fp);
     getIntProperty(properties, "ala_geneo_preconditioner",
                    E->control.ala_geneo_preconditioner, fp);
     getDoubleProperty(properties, "ala_geneo_eigenvalue_threshold",
@@ -1270,6 +1272,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_shallow_patch_horizontal_elements)
         myerror(E, "twice ala_shallow_patch_mpi_overlap must not exceed "
                 "ala_shallow_patch_horizontal_elements");
+    if(strcmp(E->control.ala_shallow_patch_velocity_solver,"diagonal") != 0 &&
+       strcmp(E->control.ala_shallow_patch_velocity_solver,"node_block") != 0)
+        myerror(E, "ala_shallow_patch_velocity_solver must be diagonal or "
+                "node_block");
     if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
         myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
     if(E->control.ala_geneo_min_modes_per_rank < 1 ||

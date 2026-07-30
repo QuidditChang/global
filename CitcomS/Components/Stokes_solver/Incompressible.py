@@ -196,6 +196,9 @@ class Incompressible(CitcomComponent):
             "ala_shallow_patch_horizontal_stride", default=2)
         ala_shallow_patch_mpi_overlap = prop.int(
             "ala_shallow_patch_mpi_overlap", default=2)
+        ala_shallow_patch_velocity_solver = prop.str(
+            "ala_shallow_patch_velocity_solver", default="diagonal",
+            validator=prop.choice(["diagonal", "node_block"]))
         ala_geneo_preconditioner = prop.bool(
             "ala_geneo_preconditioner", default=False)
         ala_geneo_eigenvalue_threshold = prop.float(

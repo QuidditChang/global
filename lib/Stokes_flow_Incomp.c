@@ -169,6 +169,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                                   &cancellation_l2);
     initial_term_strength = strict_ala_continuity_term_strength(
         E,r,div_u,lev);
+    term_strength = initial_term_strength;
     initial_velocity_norm = sqrt(max(global_vdot(E,V,V,lev),0.0));
     if(initial_rnorm<=1.0e-300)
         initial_rnorm=1.0;
@@ -417,7 +418,7 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_MPI_FACES 4
 #define ALA_PATCH_MAX_HORIZONTAL_ELEMENTS 8
 #define ALA_PATCH_MAX_MPI_OVERLAP 4
-#define ALA_HALO_ELEMENT_RECORD_DOUBLES 74
+#define ALA_HALO_ELEMENT_RECORD_DOUBLES 98
 #define ALA_COARSE_POWER_ITERATIONS 6
 #define ALA_VELOCITY_POWER_ITERATIONS 6
 #define ALA_GLOBAL_ANGULAR_BASIS 16
@@ -448,6 +449,8 @@ struct ala_pressure_preconditioner_cache {
     double *halo_send_records[NCS][ALA_PATCH_MPI_FACES];
     double *halo_recv_records[NCS][ALA_PATCH_MPI_FACES];
     unsigned short *halo_multiplicity[NCS][ALA_PATCH_MPI_FACES];
+    double *velocity_block_chol[NCS];
+    int velocity_block_fallbacks;
     double *coarse_bpi[NCS];
     double *global_basis[NCS];
     double *global_matrix;
@@ -633,10 +636,133 @@ static void apply_ala_galerkin_fixed_schur(struct All_variables *E,
 
 
 
+/* Build a fixed SPD velocity metric at every node.  The legacy path stores
+   sqrt(diag(K)); Stage 6c stores the Cholesky factor of the assembled 3x3
+   same-node velocity block.  Applying L^-1 to a pressure-gradient vector
+   gives a Gram representation of G Kblock^-1 G^T, so every local and
+   cross-rank pressure patch remains symmetric positive semidefinite before
+   its configured pressure shift. */
+static int ala_build_velocity_node_factor(struct All_variables *E,
+    int node, int lev, int m, double factor[9])
+{
+    int row,col,k,index,found,eq,loc0;
+    double matrix[9],sum,pivot,maxdiag,shift;
+    const int dims=E->mesh.nsd;
+    const int max_eqn=14*dims;
+
+    for(row=0;row<9;row++)
+        matrix[row]=factor[row]=0.0;
+    for(col=0;col<dims;col++) {
+        eq=E->ID[lev][m][node].doff[col+1];
+        loc0=(node-1)*max_eqn;
+        found=0;
+        for(k=0;k<max_eqn;k++)
+            if(E->Node_map[lev][m][loc0+k]==eq) {
+                index=loc0+k;
+                matrix[0*dims+col]=E->Eqn_k1[lev][m][index];
+                matrix[1*dims+col]=E->Eqn_k2[lev][m][index];
+                matrix[2*dims+col]=E->Eqn_k3[lev][m][index];
+                found=1;
+                break;
+            }
+        if(!found)
+            return(0);
+    }
+    for(row=0;row<dims;row++) {
+        eq=E->ID[lev][m][node].doff[row+1];
+        if(!isfinite(E->ALA_velocity_BI[lev][m][eq]) ||
+           E->ALA_velocity_BI[lev][m][eq]<=0.0)
+            return(0);
+        matrix[row*dims+row]=1.0/E->ALA_velocity_BI[lev][m][eq];
+        for(col=0;col<row;col++) {
+            sum=0.5*(matrix[row*dims+col]+matrix[col*dims+row]);
+            matrix[row*dims+col]=matrix[col*dims+row]=sum;
+        }
+    }
+    maxdiag=max(matrix[0],max(matrix[4],matrix[8]));
+    if(!isfinite(maxdiag) || maxdiag<=0.0)
+        return(0);
+    shift=E->control.ala_element_vanka_regularization*maxdiag;
+    for(row=0;row<dims;row++)
+        matrix[row*dims+row] += shift;
+    for(row=0;row<dims;row++)
+        for(col=0;col<=row;col++) {
+            sum=matrix[row*dims+col];
+            for(k=0;k<col;k++)
+                sum -= factor[row*dims+k]*factor[col*dims+k];
+            if(row==col) {
+                pivot=sum;
+                if(!isfinite(pivot) || pivot<=1.0e-14*maxdiag)
+                    return(0);
+                factor[row*dims+col]=sqrt(pivot);
+            }
+            else
+                factor[row*dims+col]=sum/factor[col*dims+col];
+        }
+    return(1);
+}
+
+
+static void ala_build_velocity_block_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev,
+    int *local_fallbacks)
+{
+    int m,node,d,eq,nno;
+    double *factor;
+    const int dims=E->mesh.nsd;
+
+    *local_fallbacks=0;
+    nno=E->lmesh.NNO[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        cache->velocity_block_chol[m]=(double *)calloc(
+            (size_t)(nno+1)*dims*dims,sizeof(double));
+        if(cache->velocity_block_chol[m]==NULL)
+            myerror(E,"Unable to allocate ALA shallow velocity-block cache");
+        for(node=1;node<=nno;node++) {
+            factor=cache->velocity_block_chol[m]+node*dims*dims;
+            if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                      "node_block")==0 &&
+               ala_build_velocity_node_factor(E,node,lev,m,factor))
+                continue;
+            if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                      "node_block")==0)
+                (*local_fallbacks)++;
+            for(d=0;d<dims;d++) {
+                eq=E->ID[lev][m][node].doff[d+1];
+                if(!isfinite(E->ALA_velocity_BI[lev][m][eq]) ||
+                   E->ALA_velocity_BI[lev][m][eq]<=0.0)
+                    myerror(E,"Invalid ALA velocity diagonal in patch cache");
+                factor[d*dims+d]
+                    =sqrt(1.0/E->ALA_velocity_BI[lev][m][eq]);
+            }
+        }
+    }
+}
+
+
+static void ala_velocity_node_feature(
+    struct ala_pressure_preconditioner_cache *cache,
+    int m, int node, int dims, const double gradient[3], double feature[3])
+{
+    int row,col;
+    double sum,*factor;
+
+    factor=cache->velocity_block_chol[m]+node*dims*dims;
+    for(row=0;row<dims;row++) {
+        sum=gradient[row];
+        for(col=0;col<row;col++)
+            sum -= factor[row*dims+col]*feature[col];
+        feature[row]=sum/factor[row*dims+row];
+    }
+}
+
+
 static void ala_fill_halo_element_record(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache,
     int e, int lev, int m, int normal_layer, double *record)
 {
-    int a,d,node,eqn,p;
+    int a,d,node,p,eq;
+    double gradient[3],feature[3];
     const int ends=enodes[E->mesh.nsd];
     const int dims=E->mesh.nsd;
 
@@ -647,21 +773,26 @@ static void ala_fill_halo_element_record(struct All_variables *E,
         for(d=1;d<=dims;d++) {
             p=(a-1)*dims+d-1;
             record[2+p]=E->X[lev][m][d][node];
-            record[26+p]=E->elt_del[lev][m][e].g[p][0];
+            gradient[d-1]=E->elt_del[lev][m][e].g[p][0];
             if(E->control.ala_pressure_buoyancy)
-                record[26+p] += E->elt_c[lev][m][e].c[p][0];
-            eqn=E->ID[lev][m][node].doff[d];
-            record[50+p]=E->ALA_velocity_BI[lev][m][eqn];
+                gradient[d-1] += E->elt_c[lev][m][e].c[p][0];
+            eq=E->ID[lev][m][node].doff[d];
+            record[26+p]=gradient[d-1];
+            record[50+p]=E->ALA_velocity_BI[lev][m][eq];
         }
+        ala_velocity_node_feature(cache,m,node,dims,gradient,feature);
+        for(d=0;d<dims;d++)
+            record[74+(a-1)*dims+d]=feature[d];
     }
 }
 
 
-static double ala_halo_record_coupling(const double *left,
+static double ala_halo_record_coupling(struct All_variables *E,
+                                        const double *left,
                                         const double *right)
 {
     int a,b,d,p1,p2;
-    double dx,dy,dz,distance2,value,bi;
+    double bi,dx,dy,dz,distance2,value;
     const double coordinate_tolerance2=1.0e-18;
 
     value=0.0;
@@ -676,8 +807,13 @@ static double ala_halo_record_coupling(const double *left,
             if(distance2>coordinate_tolerance2)
                 continue;
             for(d=0;d<3;d++) {
-                bi=0.5*(left[50+p1+d]+right[50+p2+d]);
-                value += left[26+p1+d]*bi*right[26+p2+d];
+                if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                          "node_block")==0)
+                    value += left[74+p1+d]*right[74+p2+d];
+                else {
+                    bi=0.5*(left[50+p1+d]+right[50+p2+d]);
+                    value += left[26+p1+d]*bi*right[26+p2+d];
+                }
             }
         }
     return(value);
@@ -787,12 +923,49 @@ static int ala_find_halo_record(const double *records, int count,
 }
 
 
-/* Build a pressure-space principal block of the complete strict-ALA
-   diagonal-velocity Schur approximation.  Larger pressure patches target the
-   shallow intermediate scales that a 2x2x2 velocity patch cannot represent.
-   Principal submatrices of G diag(K)^-1 G^T are symmetric positive
-   semidefinite; the configured diagonal shift makes every cached solve SPD. */
+static double ala_velocity_block_schur_entry(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache,
+    int e1, int e2, int lev, int m)
+{
+    int a,b,d,node1,node2,p1,p2;
+    double gradient1[3],gradient2[3],feature1[3],feature2[3],value;
+    const int ends=enodes[E->mesh.nsd];
+    const int dims=E->mesh.nsd;
+
+    value=0.0;
+    for(a=1;a<=ends;a++) {
+        node1=E->IEN[lev][m][e1].node[a];
+        for(b=1;b<=ends;b++) {
+            node2=E->IEN[lev][m][e2].node[b];
+            if(node1!=node2)
+                continue;
+            for(d=0;d<dims;d++) {
+                p1=(a-1)*dims+d;
+                p2=(b-1)*dims+d;
+                gradient1[d]=E->elt_del[lev][m][e1].g[p1][0];
+                gradient2[d]=E->elt_del[lev][m][e2].g[p2][0];
+                if(E->control.ala_pressure_buoyancy) {
+                    gradient1[d] += E->elt_c[lev][m][e1].c[p1][0];
+                    gradient2[d] += E->elt_c[lev][m][e2].c[p2][0];
+                }
+            }
+            ala_velocity_node_feature(cache,m,node1,dims,gradient1,feature1);
+            ala_velocity_node_feature(cache,m,node1,dims,gradient2,feature2);
+            for(d=0;d<dims;d++)
+                value += feature1[d]*feature2[d];
+        }
+    }
+    return(value);
+}
+
+
+/* Build a pressure-space principal block of the complete strict-ALA nodal
+   velocity-metric Schur approximation.  Stage 6c uses Gram operators
+   G Mv^-1 G^T, so its principal submatrices are symmetric positive
+   semidefinite before the configured pressure shift.  The diagonal choice
+   deliberately calls the Stage-6b.3 assembly unchanged. */
 static void ala_build_pressure_patch_schur(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache,
     const int *elements, int n, int lev, int m, double *schur)
 {
     int i,j,e1,e2,ex1,ey1,ez1,ex2,ey2,ez2;
@@ -811,6 +984,10 @@ static void ala_build_pressure_patch_schur(struct All_variables *E,
             ey2=(e2-1)/(elz*elx)+1;
             if(abs(ex1-ex2)>1 || abs(ey1-ey2)>1 || abs(ez1-ez2)>1)
                 schur[i*ALA_PATCH_MAX_ELEMENTS+j]=0.0;
+            else if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                           "node_block")==0)
+                schur[i*ALA_PATCH_MAX_ELEMENTS+j]
+                    =ala_velocity_block_schur_entry(E,cache,e1,e2,lev,m);
             else
                 schur[i*ALA_PATCH_MAX_ELEMENTS+j]
                     =assemble_Ahatp_jacobi_entry(E,e1,e2,lev,m);
@@ -825,7 +1002,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev)
 {
     int m,ex,ey,ez,dx,dy,dz,b,i,j,n,block_count;
-    int elx,ely,elz,shallow_min_ez,shallow_layers,e,npno;
+    int elx,ely,elz,shallow_min_ez,shallow_layers,e,npno,nno;
     int horizontal_elements,horizontal_stride;
     int patch_capacity,interface_capacity;
     int local_blocks,global_blocks,local_fallback,global_fallback;
@@ -836,6 +1013,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     int local_interface_blocks,global_interface_blocks;
     int local_interface_entries,global_interface_entries;
     int local_ghost_elements,global_ghost_elements,ghost_index;
+    int local_velocity_fallbacks,global_velocity_fallbacks;
     int ref,boundary_coordinate;
     int nrequest,target;
     int received_counts[ALA_PATCH_MPI_FACES];
@@ -864,6 +1042,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     ely=E->lmesh.ELY[lev];
     elz=E->lmesh.ELZ[lev];
     npno=E->lmesh.NPNO[lev];
+    nno=E->lmesh.NNO[lev];
     horizontal_elements=E->control.ala_shallow_patch_horizontal_elements;
     horizontal_stride=E->control.ala_shallow_patch_horizontal_stride;
     overlap=E->control.ala_shallow_patch_mpi_overlap;
@@ -907,6 +1086,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     local_ghost_elements=0;
     local_min_pivot_ratio=1.0e300;
     local_cache_bytes=0.0;
+    ala_build_velocity_block_cache(E,cache,lev,&local_velocity_fallbacks);
+    local_cache_bytes += E->sphere.caps_per_proc
+        *(double)(nno+1)*E->mesh.nsd*E->mesh.nsd*sizeof(double);
 
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         cache->blocks[m]=block_count;
@@ -955,7 +1137,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         for(j=0;j<n;j++)
                             matrix[i][j]=0.0;
                     ala_build_pressure_patch_schur(
-                        E,cache->elements[m]+b*patch_capacity,
+                        E,cache,cache->elements[m]+b*patch_capacity,
                         n,lev,m,&matrix[0][0]);
                     L=cache->chol[m]+(size_t)b*patch_capacity*patch_capacity;
                     if(!ala_factor_pressure_patch(E,matrix,n,L,patch_capacity,
@@ -1030,7 +1212,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         }
                         e=ez+(ex-1)*elz+(ey-1)*elz*elx;
                         cache->halo_send_elements[m][face][i]=e;
-                        ala_fill_halo_element_record(E,e,lev,m,q,
+                        ala_fill_halo_element_record(E,cache,e,lev,m,q,
                             cache->halo_send_records[m][face]
                                 +i*ALA_HALO_ELEMENT_RECORD_DOUBLES);
                         i++;
@@ -1139,7 +1321,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                     +(ey-1)*elz*elx;
                                 cache->interface_elements[m]
                                     [b*interface_capacity+n]=e;
-                                ala_fill_halo_element_record(E,e,lev,m,q,
+                                ala_fill_halo_element_record(E,cache,e,lev,m,q,
                                     patch_records[n]);
                                 n++;
                             }
@@ -1158,7 +1340,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 }
                                 e=(ez-dz)+(ex-1)*elz
                                     +(ey-1)*elz*elx;
-                                ala_fill_halo_element_record(E,e,lev,m,0,
+                                ala_fill_halo_element_record(E,cache,e,lev,m,0,
                                                              target_record);
                                 ala_halo_record_center(target_record,
                                                        target_center);
@@ -1191,9 +1373,16 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     cache->interface_face[m][b]=(unsigned char)face;
                     for(i=0;i<n;i++)
                         for(j=0;j<=i;j++) {
-                            matrix[i][j]=(i==j) ? patch_records[i][1]
-                                : ala_halo_record_coupling(
-                                    patch_records[i],patch_records[j]);
+                            if(strcmp(E->control
+                                      .ala_shallow_patch_velocity_solver,
+                                      "node_block")==0)
+                                matrix[i][j]=ala_halo_record_coupling(
+                                    E,patch_records[i],patch_records[j]);
+                            else if(i==j)
+                                matrix[i][j]=patch_records[i][1];
+                            else
+                                matrix[i][j]=ala_halo_record_coupling(
+                                    E,patch_records[i],patch_records[j]);
                             matrix[j][i]=matrix[i][j];
                         }
                     L=cache->interface_chol[m]
@@ -1294,6 +1483,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                   MPI_SUM,E->parallel.world);
     MPI_Allreduce(&local_ghost_elements,&global_ghost_elements,1,MPI_INT,
                   MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_velocity_fallbacks,&global_velocity_fallbacks,1,
+                  MPI_INT,MPI_SUM,E->parallel.world);
+    cache->velocity_block_fallbacks=global_velocity_fallbacks;
     MPI_Allreduce(&local_min_pivot_ratio,&global_min_pivot_ratio,1,MPI_DOUBLE,
                   MPI_MIN,E->parallel.world);
     MPI_Allreduce(&local_cache_bytes,&global_cache_bytes,1,MPI_DOUBLE,MPI_MAX,
@@ -1314,7 +1506,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
                 "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
-                "operator=principal((D+C)diag(K)^-1(D+C)^T) "
+                "velocity_solver=%s "
+                "operator=principal((D+C)Mv^-1(D+C)^T) "
+                "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
                 "valid_blocks=%d interface_blocks=%d "
@@ -1328,6 +1522,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 2*overlap,horizontal_elements,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
+                E->control.ala_shallow_patch_velocity_solver,
+                global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
                 global_interface_entries,global_ghost_elements,
@@ -1337,7 +1533,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
                 "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
-                "operator=principal((D+C)diag(K)^-1(D+C)^T) "
+                "velocity_solver=%s "
+                "operator=principal((D+C)Mv^-1(D+C)^T) "
+                "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
                 "valid_blocks=%d interface_blocks=%d "
@@ -1351,6 +1549,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 2*overlap,horizontal_elements,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
+                E->control.ala_shallow_patch_velocity_solver,
+                global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
                 global_interface_entries,global_ghost_elements,
@@ -1464,6 +1664,7 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->interface_face[m]);
         free((void *)cache->interface_elements[m]);
         free((void *)cache->interface_chol[m]);
+        free((void *)cache->velocity_block_chol[m]);
         for(face=0;face<ALA_PATCH_MPI_FACES;face++) {
             free((void *)cache->halo_send_elements[m][face]);
             free((void *)cache->halo_send_records[m][face]);
@@ -2657,6 +2858,7 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                                     +group_hbins_x*(rank_offset_y*hbins
                                     +min((ey1-1)*hbins/ely,hbins-1)));
                                 interface_value=ala_halo_record_coupling(
+                                    E,
                                     cache->halo_send_records[m][face]
                                       +(ez1-shallow_min_ez
                                         +(ey1-1)*shallow_layers)
@@ -2682,6 +2884,7 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                                     +group_hbins_x*(rank_offset_y*hbins
                                     +min((ey1-1)*hbins/ely,hbins-1)));
                                 interface_value=ala_halo_record_coupling(
+                                    E,
                                     cache->halo_send_records[m][face]
                                       +(ez1-shallow_min_ez
                                         +(ex1-1)*shallow_layers)
@@ -4786,6 +4989,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double initial_mass_norm, mass_norm, mass_relative_residual;
     double cancellation_l2;
     double initial_term_strength, term_strength;
+    double momentum_rms, momentum_relative;
     double inner_accuracy, inner_relative_accuracy;
     double local_bpi_min, local_bpi_max;
     double global_bpi_min, global_bpi_max;
@@ -4853,7 +5057,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     MPI_Allreduce(&local_invalid_bpi, &global_invalid_bpi, 1, MPI_INT, MPI_SUM,
                   E->parallel.world);
     local_invalid_velocity_bi=0;
-    if(E->control.ala_two_level_preconditioner ||
+    if(E->control.ala_shallow_patch_preconditioner ||
+       E->control.ala_two_level_preconditioner ||
        E->control.ala_geneo_preconditioner)
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=0;j<E->lmesh.NEQ[lev];j++)
@@ -5149,10 +5354,12 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                                    dvelocity, dpressure);
         fprintf(E->fp,
                 "ALA PCG continuity residuals: cancellation=%e "
-                "mass_relative=%e algebraic_relative=%e "
+                "mass_norm=%e mass_relative=%e algebraic_relative=%e "
+                "Q=%e Q_relative=%e "
                 "term_strength=%e term_strength_relative=%e\n",
-                cancellation_l2, mass_relative_residual,
-                relative_residual, initial_term_strength, 1.0);
+                cancellation_l2, mass_norm, mass_relative_residual,
+                relative_residual, initial_term_strength, 1.0,
+                initial_term_strength, 1.0);
     }
     strict_ala_depth_diagnostics(E, r, div_u, lev, count);
     strict_ala_beta_causal_diagnostics(
@@ -5355,13 +5562,15 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                                        dvelocity, dpressure);
             fprintf(E->fp,
                     "ALA PCG continuity residuals: cancellation=%e "
-                    "mass_relative=%e algebraic_relative=%e "
+                    "mass_norm=%e mass_relative=%e algebraic_relative=%e "
                     "recursive_algebraic=%e drift=%e inner_rel=%e "
-                    "curvature=%e term_strength=%e "
+                    "curvature=%e Q=%e Q_relative=%e term_strength=%e "
                     "term_strength_relative=%e\n",
-                    cancellation_l2, mass_relative_residual,
+                    cancellation_l2, mass_norm, mass_relative_residual,
                     relative_residual, recursive_relative_residual,
                     drift_ratio, inner_relative_accuracy, curvature,
+                    term_strength,
+                    term_strength/max(initial_term_strength,1.0e-300),
                     term_strength,
                     term_strength/max(initial_term_strength,1.0e-300));
             if(E->control.ala_hybrid_convergence)
@@ -5395,7 +5604,18 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         }
     }
 
+    strict_ala_momentum_residual_audit(
+        E,V,P,F,E->u1,lev,&momentum_rms,&momentum_relative);
+
     if(E->parallel.me == 0) {
+        fprintf(E->fp,
+                "ALA PCG momentum audit final iteration=%d rms=%e "
+                "relative=%e equation=unaugmented_Ku_plus_GtP_minus_f\n",
+                count,momentum_rms,momentum_relative);
+        fprintf(stderr,
+                "ALA PCG momentum audit final iteration=%d rms=%e "
+                "relative=%e equation=unaugmented_Ku_plus_GtP_minus_f\n",
+                count,momentum_rms,momentum_relative);
         fprintf(E->fp,
                 "ALA PCG operator audit: minimum_curvature=%e "
                 "nonpositive_curvature=%d iterations=%d "
@@ -5449,7 +5669,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fprintf(E->fp,
                     "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
                     "best_iteration=%d target=%e iterations=%d "
-                    "last_complete_window_reduction=%e\n",
+                    "last_complete_window_reduction=%e "
+                    "mass_norm=%e mass_relative=%e Q=%e Q_relative=%e "
+                    "momentum_relative=%e\n",
                     cancellation_l2 < E->control.tole_comp
                         ? "discrete_target_reached"
                         : (audit_stagnated
@@ -5457,7 +5679,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                            : "iteration_budget_exhausted_while_progressing"),
                     cancellation_l2,audit_best_cancellation,
                     audit_best_iteration,E->control.tole_comp,count,
-                    audit_window_reduction);
+                    audit_window_reduction,mass_norm,mass_relative_residual,
+                    term_strength,
+                    term_strength/max(initial_term_strength,1.0e-300),
+                    momentum_relative);
             fprintf(stderr,
                     "ALA_FEASIBILITY_SUMMARY status=%s final=%e best=%e "
                     "best_iteration=%d target=%e iterations=%d\n",

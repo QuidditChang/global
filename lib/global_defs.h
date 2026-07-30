@@ -516,6 +516,7 @@ struct CONTROL {
     int ala_shallow_patch_horizontal_elements;
     int ala_shallow_patch_horizontal_stride;
     int ala_shallow_patch_mpi_overlap;
+    char ala_shallow_patch_velocity_solver[20];
     int ala_geneo_preconditioner;
     double ala_geneo_eigenvalue_threshold;
     int ala_geneo_min_modes_per_rank;

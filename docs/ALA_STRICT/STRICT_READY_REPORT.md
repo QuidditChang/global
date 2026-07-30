@@ -2,15 +2,21 @@
 
 ## Status
 
-`runs/cmbhf_ALA_strict.cfg` is the production strict-ALA configuration. It is
-an exact physical-configuration copy of `runs/cmbhf_ALA.cfg` except for:
+`runs/cmbhf_ALA_strict.cfg` is the production strict-ALA configuration. Its
+physical inputs remain aligned with `runs/cmbhf_ALA.cfg`; the active
+strict-only differences are:
 
 ```text
 refstate_file = refstate_ALA_strict.txt
+ala_beta_element_source = interval
+ala_beta_interval_file = interval_ALA_strict.txt
+ala_shallow_patch_velocity_solver = node_block
 ```
 
-No Stokes, continuity, multigrid, energy-equation, phase-equation, boundary-
-condition, assimilation, timestep, or viscosity parameter is changed.
+The first three select the phase-inclusive strict reference state.  The final
+key is the Stage 6c Schur-preconditioner experiment described below.  No
+energy-equation, phase-equation, boundary-condition, assimilation, timestep,
+or viscosity parameter is changed.
 
 ## A. Reference-state source
 
@@ -103,11 +109,32 @@ The generator-reader contract is:
 | alpha | `alpha/alpha0` |
 | Cp | `Cp/Cp0` |
 | beta | `R0*beta_SI` |
-| Gamma_eff | `alpha*g/(Cp*beta)` using serialized fields |
+| Gamma_eff | `Di*alpha*g/(Cp*beta)` using serialized fields |
 | Ks | physical GPa, diagnostic storage only |
 
 The strict generator and validator report exact serialized-profile closure for
 rho, beta, Gamma_eff, and Ks.
+
+## F. Stage 6c shallow Schur experiment
+
+Stage 6b.3 used `G diag(K)^-1 G^T` inside every cached shallow pressure
+patch.  Stage 6c retains the same `6x6x2` patch geometry, overlap-three MPI
+halo, global partition of unity, pressure shift, and PCG outer iteration, but
+replaces the scalar velocity diagonal by assembled symmetric `3x3` same-node
+velocity blocks.
+
+Each node block is Cholesky factored as `K_n=L_n L_n^T`.  Pressure-gradient
+features are formed as `phi=L_n^-1 g`; patch entries are dot products
+`phi_i^T phi_j`.  Local and exchanged halo patches are therefore Gram
+matrices and remain positive semidefinite before the existing pressure shift.
+Nodes whose coupled factor cannot be formed fall back to the exact Stage 6b.3
+diagonal metric and are counted in `velocity_block_fallbacks`.  Setting
+`ala_shallow_patch_velocity_solver=diagonal` is the complete rollback.
+
+Every PCG iteration now reports the absolute pressure-mass continuity norm
+`mass_norm=N_M`, `Q`, and their relative scales.  The final original,
+unaugmented momentum residual is audited before a failed continuity exit as
+well as after a successful solve.
 
 ## Validation record
 
@@ -119,7 +146,7 @@ rho, beta, Gamma_eff, and Ks.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 12/12 PASS.
+- strict static regressions: 19/19 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do

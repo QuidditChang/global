@@ -39,13 +39,14 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_reference_inputs(self) -> None:
+    def test_cfg_changes_only_strict_inputs_and_stage6c_metric(self) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
             "refstate_file",
             "ala_beta_element_source",
             "ala_beta_interval_file",
+            "ala_shallow_patch_velocity_solver",
         )
         self.assertEqual(
             _without_cfg_keys(legacy, strict_keys),
@@ -64,6 +65,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             strict_text,
             r"(?m)^\s*ala_beta_interval_file\s*="
             r"\s*interval_ALA_strict\.txt\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_shallow_patch_velocity_solver\s*="
+            r"\s*node_block\s*$",
         )
 
     def test_strict_reference_schema_and_tref_endpoints(self) -> None:
@@ -202,6 +208,73 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn(
             "twice ala_shallow_patch_mpi_overlap must not exceed",
             properties,
+        )
+        self.assertIn(
+            'ala_shallow_patch_velocity_solver = prop.str(',
+            incompressible,
+        )
+        self.assertIn(
+            'getStringProperty(properties, '
+            '"ala_shallow_patch_velocity_solver"',
+            properties,
+        )
+
+    def test_stage6c_shallow_schur_is_spd_gram_with_rollback(self) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        instructions = (
+            GLOBAL_ROOT / "lib" / "Instructions.c"
+        ).read_text(encoding="utf-8")
+        definitions = (
+            GLOBAL_ROOT / "lib" / "global_defs.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ala_build_velocity_node_factor", stokes)
+        self.assertIn("ala_velocity_node_feature", stokes)
+        self.assertIn(
+            "value += left[74+p1+d]*right[74+p2+d];",
+            stokes,
+        )
+        self.assertIn(
+            "=assemble_Ahatp_jacobi_entry(E,e1,e2,lev,m);",
+            stokes,
+        )
+        self.assertIn("matrix[i][j]=patch_records[i][1];", stokes)
+        self.assertIn(
+            "bi=0.5*(left[50+p1+d]+right[50+p2+d]);",
+            stokes,
+        )
+        self.assertIn(
+            "operator=principal((D+C)Mv^-1(D+C)^T)",
+            stokes,
+        )
+        self.assertIn("velocity_block_fallbacks=%d", stokes)
+        self.assertIn(
+            'strcpy(E->control.ala_shallow_patch_velocity_solver,'
+            '"diagonal");',
+            instructions,
+        )
+        self.assertIn(
+            "char ala_shallow_patch_velocity_solver[20];",
+            definitions,
+        )
+
+    def test_stage6c_failure_path_audits_physical_scales_and_momentum(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        failure = stokes.index("Strict ALA PCG failed physical continuity")
+        final_audit = stokes.index("ALA PCG momentum audit final")
+        self.assertLess(final_audit, failure)
+        self.assertIn("mass_norm=%e", stokes)
+        self.assertIn("Q=%e Q_relative=%e", stokes)
+        self.assertIn(
+            "strict_ala_momentum_residual_audit(\n"
+            "        E,V,P,F,E->u1",
+            stokes,
         )
 
     def test_total_temperature_is_the_only_temperature_state(self) -> None:
