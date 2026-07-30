@@ -1125,6 +1125,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_shallow_patch_weight, fp);
     getDoubleProperty(properties, "ala_shallow_patch_regularization",
                       E->control.ala_shallow_patch_regularization, fp);
+    getIntProperty(properties, "ala_shallow_patch_horizontal_elements",
+                   E->control.ala_shallow_patch_horizontal_elements, fp);
+    getIntProperty(properties, "ala_shallow_patch_horizontal_stride",
+                   E->control.ala_shallow_patch_horizontal_stride, fp);
     getIntProperty(properties, "ala_shallow_patch_mpi_overlap",
                    E->control.ala_shallow_patch_mpi_overlap, fp);
     getIntProperty(properties, "ala_geneo_preconditioner",
@@ -1244,9 +1248,21 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_shallow_patch_regularization < 0.0 ||
        E->control.ala_shallow_patch_regularization > 0.1)
         myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
+    if(E->control.ala_shallow_patch_horizontal_elements < 2 ||
+       E->control.ala_shallow_patch_horizontal_elements > 8)
+        myerror(E, "ala_shallow_patch_horizontal_elements must be in [2,8]");
+    if(E->control.ala_shallow_patch_horizontal_stride < 1 ||
+       E->control.ala_shallow_patch_horizontal_stride >
+         E->control.ala_shallow_patch_horizontal_elements)
+        myerror(E, "ala_shallow_patch_horizontal_stride must be in "
+                "[1,ala_shallow_patch_horizontal_elements]");
     if(E->control.ala_shallow_patch_mpi_overlap < 1 ||
-       E->control.ala_shallow_patch_mpi_overlap > 2)
-        myerror(E, "ala_shallow_patch_mpi_overlap must be one or two");
+       E->control.ala_shallow_patch_mpi_overlap > 4)
+        myerror(E, "ala_shallow_patch_mpi_overlap must be in [1,4]");
+    if(2*E->control.ala_shallow_patch_mpi_overlap >
+       E->control.ala_shallow_patch_horizontal_elements)
+        myerror(E, "twice ala_shallow_patch_mpi_overlap must not exceed "
+                "ala_shallow_patch_horizontal_elements");
     if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
         myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
     if(E->control.ala_geneo_min_modes_per_rank < 1 ||
