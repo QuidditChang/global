@@ -150,6 +150,38 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("E->refstate.ala_beta[fine_nz] * dr", element)
         self.assertIn('"interval") != 0', instructions)
 
+    def test_pyre_bindings_cover_strict_runtime_options(self) -> None:
+        param = (
+            GLOBAL_ROOT / "CitcomS" / "Components" / "Param.py"
+        ).read_text()
+        incompressible = (
+            GLOBAL_ROOT
+            / "CitcomS"
+            / "Components"
+            / "Stokes_solver"
+            / "Incompressible.py"
+        ).read_text()
+        properties = (GLOBAL_ROOT / "module" / "setProperties.c").read_text()
+
+        self.assertIn('ala_beta_interval_file = pyre.inventory.str(', param)
+        self.assertIn('"interval"]))', incompressible)
+        for name in (
+            "ala_shallow_patch_horizontal_elements",
+            "ala_shallow_patch_horizontal_stride",
+        ):
+            self.assertIn(f'{name} = prop.int(', incompressible)
+            self.assertIn(f'getIntProperty(properties, "{name}"', properties)
+        self.assertIn(
+            'getStringProperty(properties, "ala_beta_interval_file"',
+            properties,
+        )
+        self.assertIn('"density_log_secant") != 0 &&', properties)
+        self.assertIn('"interval") != 0)', properties)
+        self.assertIn(
+            "twice ala_shallow_patch_mpi_overlap must not exceed",
+            properties,
+        )
+
     def test_total_temperature_is_the_only_temperature_state(self) -> None:
         definitions = (GLOBAL_ROOT / "lib" / "global_defs.h").read_text()
         instructions = (GLOBAL_ROOT / "lib" / "Instructions.c").read_text()

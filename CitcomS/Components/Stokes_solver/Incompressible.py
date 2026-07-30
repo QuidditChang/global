@@ -114,7 +114,8 @@ class Incompressible(CitcomComponent):
             "ala_augmented_lagrangian_gamma", default=0.0)
         ala_beta_element_source = prop.str(
             "ala_beta_element_source", default="supplied_average",
-            validator=prop.choice(["supplied_average", "density_log_secant"]))
+            validator=prop.choice(["supplied_average", "density_log_secant",
+                                   "interval"]))
         ala_inner_accuracy_max = prop.float("ala_inner_accuracy_max",
                                             default=1.0e-4)
         ala_inner_accuracy_factor = prop.float("ala_inner_accuracy_factor",
@@ -189,6 +190,10 @@ class Incompressible(CitcomComponent):
             "ala_shallow_patch_weight", default=0.25)
         ala_shallow_patch_regularization = prop.float(
             "ala_shallow_patch_regularization", default=1.0e-3)
+        ala_shallow_patch_horizontal_elements = prop.int(
+            "ala_shallow_patch_horizontal_elements", default=4)
+        ala_shallow_patch_horizontal_stride = prop.int(
+            "ala_shallow_patch_horizontal_stride", default=2)
         ala_shallow_patch_mpi_overlap = prop.int(
             "ala_shallow_patch_mpi_overlap", default=2)
         ala_geneo_preconditioner = prop.bool(
