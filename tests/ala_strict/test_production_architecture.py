@@ -388,6 +388,18 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev",
             fgmres,
         )
+        self.assertIn(
+            "tmpF[m]=(double *)calloc(neq+1,sizeof(double));",
+            fgmres,
+        )
+        self.assertIn(
+            "tmpU[m]=(double *)calloc(neq+1,sizeof(double));",
+            fgmres,
+        )
+        self.assertIn(
+            "ub[j][m]=(double *)calloc(neq+1,sizeof(double));",
+            fgmres,
+        )
         self.assertIn("if(converged || arnoldi_breakdown)", fgmres)
         self.assertLess(
             fgmres.rindex("ALA FGMRES momentum audit"),

@@ -144,8 +144,13 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     }
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         w[m]=(double *)calloc(levnpno+1,sizeof(double));
-        tmpF[m]=(double *)calloc(neq,sizeof(double));
-        tmpU[m]=(double *)calloc(neq,sizeof(double));
+        /*
+         * Nodal velocity assembly clears entries 0..neq and writes the
+         * constrained zero sentinel at neq.  FGMRES velocity work vectors
+         * therefore follow the legacy neq+1 velocity-vector convention.
+         */
+        tmpF[m]=(double *)calloc(neq+1,sizeof(double));
+        tmpU[m]=(double *)calloc(neq+1,sizeof(double));
         if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL)
             myerror(E,"Unable to allocate ALA FGMRES operator workspace");
         for(j=0;j<max_basis;j++) {
@@ -155,7 +160,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         }
         for(j=0;j<restart;j++) {
             zb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
-            ub[j][m]=(double *)calloc(neq,sizeof(double));
+            ub[j][m]=(double *)calloc(neq+1,sizeof(double));
             if(zb[j][m]==NULL || ub[j][m]==NULL)
                 myerror(E,"Unable to allocate ALA FGMRES flexible basis");
         }

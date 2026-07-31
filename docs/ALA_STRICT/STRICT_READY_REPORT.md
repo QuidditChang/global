@@ -230,6 +230,17 @@ the same cycle to move an already accepted state away from tolerance.  The
 run must compare these quantities and the restart momentum audit; cancellation
 remains the only physical stopping criterion.
 
+The first 400-rank Stage 7 run reached `cancellation=0.00992642` at iteration
+46.  Its recursive and explicit algebraic reductions were both
+`2.992918e-03`, `drift=1`, the velocity norm remained at `0.9965` of its
+initial value, and the final unaugmented momentum residual was
+`3.932077e-06` relative to its audited reference.  The process then aborted
+while releasing memory.  This was not an out-of-memory or convergence failure:
+nodal velocity assembly writes a zero sentinel at index `neq`, while the new
+FGMRES velocity work and correction-basis arrays had been allocated with only
+`neq` entries.  They now use the established `neq+1` velocity-vector layout,
+and the static regression checks that allocation contract.
+
 ## Validation record
 
 - Strict generator: PASS.
