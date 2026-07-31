@@ -39,7 +39,7 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_inputs_and_stage6e_restart(
+    def test_cfg_changes_only_strict_inputs_and_stage7_fgmres(
         self,
     ) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
@@ -50,6 +50,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
             "ala_pcg_restart_interval",
+            "ala_outer_solver",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
         )
@@ -78,7 +79,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pcg_restart_interval\s*=\s*10\s*$",
+            r"(?m)^\s*ala_pcg_restart_interval\s*=\s*20\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_outer_solver\s*=\s*fgmres\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -341,6 +346,53 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             instructions,
         )
         self.assertIn("char ala_geneo_basis_type[24];", definitions)
+
+    def test_stage7_fgmres_reconstruction_and_residual_audits(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        dispatch = stokes[
+            stokes.index(
+                'if(strcmp(E->control.ala_outer_solver,"fgmres")==0)'
+            ):
+            stokes.index(
+                "/* FF contains the current -C^T*P forcing.",
+            )
+        ]
+        self.assertLess(
+            dispatch.index("initial_vel_residual(E,V,P,F,imp);"),
+            dispatch.index("solve_ala_fgmres_core("),
+        )
+        fgmres = stokes[
+            stokes.index("static float solve_ala_fgmres_core"):
+            stokes.index("static float solve_Ahat_p_fhat_iterCG")
+        ]
+        self.assertIn(
+            "algebraic_relative=explicit_norm/initial_rnorm;",
+            fgmres,
+        )
+        self.assertIn(
+            "residual_drift=residual_est\n"
+            "                /max(algebraic_relative,1.0e-300);",
+            fgmres,
+        )
+        self.assertNotIn(
+            "residual_est/max(cancellation_l2,1.0e-300)",
+            fgmres,
+        )
+        self.assertIn("mass_norm=%e mass_relative=%e", fgmres)
+        self.assertIn("Q=%e Q_relative=%e", fgmres)
+        self.assertIn(
+            "strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev",
+            fgmres,
+        )
+        self.assertIn("if(converged || arnoldi_breakdown)", fgmres)
+        self.assertLess(
+            fgmres.rindex("ALA FGMRES momentum audit"),
+            fgmres.index("Strict ALA FGMRES failed physical continuity"),
+        )
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,

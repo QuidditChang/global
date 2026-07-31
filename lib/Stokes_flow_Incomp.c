@@ -103,6 +103,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     int m,j,i,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
     double beta,norm,inner_accuracy,relative_residual;
+    double algebraic_relative,residual_drift;
     double cancellation_l2,mass_norm,initial_mass_norm,mass_relative;
     double term_strength,initial_term_strength,velocity_norm;
     double initial_velocity_norm;
@@ -176,12 +177,23 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     mass_norm=initial_mass_norm;
     mass_relative=(initial_mass_norm>0.0) ? 1.0 : 0.0;
     residual=cancellation_l2;
+    residual_est=1.0;
+    algebraic_relative=1.0;
+    residual_drift=1.0;
     audit_best_cancellation=cancellation_l2;
     converged=(cancellation_l2<E->control.tole_comp);
     arnoldi_breakdown=0;
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA FGMRES startup restart=%d\n",restart);
         fprintf(stderr,"ALA FGMRES startup restart=%d\n",restart);
+        fprintf(E->fp,"ALA FGMRES continuity iteration=0 "
+                "cancellation=%e mass_norm=%e mass_relative=1.000000e+00 "
+                "algebraic_relative=1.000000e+00 "
+                "arnoldi_relative=1.000000e+00 drift=1.000000e+00 "
+                "Q=%e Q_relative=1.000000e+00 "
+                "term_strength=%e term_strength_relative=1.000000e+00 "
+                "velocity_relative=1.000000e+00\n",
+                cancellation_l2,mass_norm,term_strength,term_strength);
         fflush(E->fp);
         fflush(stderr);
     }
@@ -289,18 +301,26 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             mass_relative=(initial_mass_norm>0.0)
                 ? mass_norm/initial_mass_norm : 0.0;
             residual=cancellation_l2;
+            explicit_norm=sqrt(global_pdot(
+                E,explicit_r,explicit_r,lev));
+            algebraic_relative=explicit_norm/initial_rnorm;
             residual_est=fabs(g[j+1])/initial_rnorm;
+            residual_drift=residual_est
+                /max(algebraic_relative,1.0e-300);
             count++;
             if(cancellation_l2<audit_best_cancellation)
                 audit_best_cancellation=cancellation_l2;
             if(E->parallel.me==0) {
                 fprintf(E->fp,"ALA FGMRES continuity iteration=%d "
-                        "cancellation=%e mass_relative=%e "
-                        "arnoldi_relative=%e drift=%e "
+                        "cancellation=%e mass_norm=%e mass_relative=%e "
+                        "algebraic_relative=%e arnoldi_relative=%e "
+                        "drift=%e Q=%e Q_relative=%e "
                         "term_strength=%e term_strength_relative=%e "
                         "velocity_relative=%e\n",count,
-                        cancellation_l2,mass_relative,residual_est,
-                        residual_est/max(cancellation_l2,1.0e-300),
+                        cancellation_l2,mass_norm,mass_relative,
+                        algebraic_relative,residual_est,residual_drift,
+                        term_strength,
+                        term_strength/max(initial_term_strength,1.0e-300),
                         term_strength,
                         term_strength/max(initial_term_strength,1.0e-300),
                         velocity_norm/max(initial_velocity_norm,1.0e-300));
@@ -312,7 +332,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             strict_ala_coarse_residual_diagnostics(E,explicit_r,lev,count);
             if(cancellation_l2<E->control.tole_comp)
                 converged=1;
-            if(arnoldi_breakdown)
+            if(converged || arnoldi_breakdown)
                 break;
             for(i=0;i<used;i++)
                 y_old[i]=y[i];
@@ -335,14 +355,21 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     relative_residual=explicit_norm/initial_rnorm;
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA FGMRES operator audit restarts=%d iterations=%d "
-                "basis=%d final=%e best=%e algebraic_relative=%e\n",
+                "basis=%d final=%e best=%e algebraic_relative=%e "
+                "arnoldi_relative=%e drift=%e\n",
                 (count+restart-1)/restart,count,restart,residual,
-                audit_best_cancellation,relative_residual);
+                audit_best_cancellation,relative_residual,residual_est,
+                residual_est/max(relative_residual,1.0e-300));
         fprintf(E->fp,"ALA_FEASIBILITY_SUMMARY status=%s final=%e "
-                "best=%e target=%e iterations=%d\n",
+                "best=%e target=%e iterations=%d mass_norm=%e "
+                "mass_relative=%e Q=%e Q_relative=%e "
+                "momentum_relative=%e\n",
                 converged ? "discrete_target_reached"
                           : "iteration_budget_exhausted",
-                residual,audit_best_cancellation,E->control.tole_comp,count);
+                residual,audit_best_cancellation,E->control.tole_comp,count,
+                mass_norm,mass_relative,term_strength,
+                term_strength/max(initial_term_strength,1.0e-300),
+                momentum_relative);
         fflush(E->fp);
     }
     if(!converged) {

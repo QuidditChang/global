@@ -11,14 +11,15 @@ refstate_file = refstate_ALA_strict.txt
 ala_beta_element_source = interval
 ala_beta_interval_file = interval_ALA_strict.txt
 ala_shallow_patch_velocity_solver = diagonal
-ala_pcg_restart_interval = 10
+ala_pcg_restart_interval = 20
+ala_outer_solver = fgmres
 ala_geneo_preconditioner = off
 ala_geneo_basis_type = radial_partition
 ```
 
 The first three select the phase-inclusive strict reference state.  The final
-three retain the validated Stage 6b.3 Schwarz metric, select the Stage 6e
-restart experiment, and disable the negative Stage 6d coarse-space A/B.
+four retain the validated Stage 6b.3 Schwarz metric, select the Stage 7
+FGMRES experiment, and disable the negative Stage 6d coarse-space A/B.
 `radial_partition` remains configured only as an inert rollback.  No
 energy-equation, phase-equation, boundary-condition, assimilation, timestep,
 or viscosity parameter is changed.
@@ -202,6 +203,33 @@ target remains cancellation at most `0.01` within 30 iterations, with positive
 curvature, recursive/explicit drift near one, stable velocity norm, and no
 degradation of the unaugmented momentum residual.
 
+The completed run rejected this hypothesis.  Although the first iteration
+after each replacement improved, cancellation at iteration 30 increased from
+`0.029556` to `0.030423`; the best value degraded from `0.013390` to
+`0.015231`, and iteration 50 degraded from `0.015584` to `0.020312`.
+Consequently fixed ten-step replacement is not retained.
+
+## I. Stage 7 momentum-consistent FGMRES
+
+Stage 7 restores a restart length of 20, keeps GenEO disabled, and changes
+only the outer Krylov method to FGMRES.  Before Arnoldi starts, the solver
+applies the same momentum-consistent initial velocity correction as PCG.
+Every flexible pressure basis vector retains its matching velocity correction,
+so the reconstructed `P` and `V` remain coupled.  Each completed restart
+assembles the explicit strict continuity residual and audits the original
+unaugmented momentum equation using the existing FGMRES work vectors.
+
+The former `drift` diagnostic divided Arnoldi reduction by physical
+cancellation even though the two quantities have different denominators.
+Stage 7 now defines drift as Arnoldi recursive algebraic residual divided by
+the explicitly assembled algebraic residual.  Iteration records also include
+`mass_norm`, `mass_relative`, `Q`, `Q_relative`, term strength, and velocity
+norm.  Reaching the physical cancellation target now exits the active Arnoldi
+cycle immediately after its diagnostics instead of allowing later vectors in
+the same cycle to move an already accepted state away from tolerance.  The
+run must compare these quantities and the restart momentum audit; cancellation
+remains the only physical stopping criterion.
+
 ## Validation record
 
 - Strict generator: PASS.
@@ -212,7 +240,7 @@ degradation of the unaugmented momentum residual.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 20/20 PASS.
+- strict static regressions: 21/21 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do
