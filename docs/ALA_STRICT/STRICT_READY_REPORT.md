@@ -11,13 +11,15 @@ refstate_file = refstate_ALA_strict.txt
 ala_beta_element_source = interval
 ala_beta_interval_file = interval_ALA_strict.txt
 ala_shallow_patch_velocity_solver = diagonal
-ala_geneo_preconditioner = on
+ala_pcg_restart_interval = 10
+ala_geneo_preconditioner = off
 ala_geneo_basis_type = radial_partition
 ```
 
 The first three select the phase-inclusive strict reference state.  The final
-three keys select the Stage 6d Schur-preconditioner experiment described
-below.  No
+three retain the validated Stage 6b.3 Schwarz metric, select the Stage 6e
+restart experiment, and disable the negative Stage 6d coarse-space A/B.
+`radial_partition` remains configured only as an inert rollback.  No
 energy-equation, phase-equation, boundary-condition, assimilation, timestep,
 or viscosity parameter is changed.
 
@@ -182,6 +184,23 @@ symmetrized, shifted, and Cholesky factored.  Consequently the additive
 coarse correction is fixed and SPD.  `ala_geneo_basis_type=spectral` is the
 legacy rollback; `radial_partition` requires a cross-rank group and exactly
 one configured mode per radial bin.
+
+The completed 400-rank Stage 6d run constructed all 96 modes in 18.85 seconds
+and passed its MPI support, symmetry, Galerkin, and Cholesky audits.  It did
+not improve convergence: cancellation was `0.029719` at iteration 30,
+`0.013451` at the best iteration 42, and `0.015685` at iteration 50, compared
+with `0.029556`, `0.013390`, and `0.015584` for the Stage 6b.3 baseline.
+Consequently the production experiment disables this correction.
+
+## H. Stage 6e PCG residual-replacement interval
+
+In both Stage 6b.3 and Stage 6d, explicit PCG replacement produced the largest
+single-step improvements: `0.038063 -> 0.028689` after iteration 20 and
+`0.019184 -> 0.013780` after iteration 40 in Stage 6d.  Stage 6e changes only
+`ala_pcg_restart_interval`, from 20 to 10, with GenEO disabled.  The acceptance
+target remains cancellation at most `0.01` within 30 iterations, with positive
+curvature, recursive/explicit drift near one, stable velocity norm, and no
+degradation of the unaugmented momentum residual.
 
 ## Validation record
 

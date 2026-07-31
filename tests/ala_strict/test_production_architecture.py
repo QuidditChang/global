@@ -39,7 +39,7 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_inputs_and_stage6d_coarse_space(
+    def test_cfg_changes_only_strict_inputs_and_stage6e_restart(
         self,
     ) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
@@ -49,6 +49,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
+            "ala_pcg_restart_interval",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
         )
@@ -77,7 +78,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_geneo_preconditioner\s*=\s*on\s*$",
+            r"(?m)^\s*ala_pcg_restart_interval\s*=\s*10\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_geneo_preconditioner\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
