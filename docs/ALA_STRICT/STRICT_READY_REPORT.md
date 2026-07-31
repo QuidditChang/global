@@ -165,6 +165,12 @@ Rayleigh quotient may suppress a radial indicator.  The authoritative
 validity checks are complete cross-rank support after transfer and the final
 Galerkin Cholesky factorization.
 
+Processor groups are separated by radial rank coordinate.  Only groups whose
+local radial interval intersects the configured 0--410 km shallow layer own
+these two modes.  Deeper groups have zero shallow coarse modes; requiring a
+nonzero radial indicator on them would manufacture an identically zero basis
+vector.
+
 The coarse matrix remains
 
 ```text

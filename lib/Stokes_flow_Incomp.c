@@ -3014,10 +3014,16 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             }
             if(strcmp(E->control.ala_geneo_basis_type,
                       "radial_partition")==0) {
-                desired_modes=rbins;
-                accepted=ala_build_radial_partition_shapes(
-                    aggregate,nbins,rbins,selected_shapes[m],
-                    selected_values[m]);
+                /* Processor groups are also split by the radial rank
+                   coordinate.  Only the upper radial groups intersect the
+                   configured shallow layer; deep groups must own no shallow
+                   coarse modes rather than two identically zero modes. */
+                desired_modes=(shallow_layers>0) ? rbins : 0;
+                accepted=(desired_modes>0)
+                    ? ala_build_radial_partition_shapes(
+                        aggregate,nbins,rbins,selected_shapes[m],
+                        selected_values[m])
+                    : 0;
             }
             else {
                 desired_modes=0;

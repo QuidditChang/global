@@ -306,7 +306,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             radial_builder,
         )
         self.assertIn(
-            "accepted=ala_build_radial_partition_shapes(",
+            "? ala_build_radial_partition_shapes(",
+            stokes,
+        )
+        self.assertIn(
+            "desired_modes=(shallow_layers>0) ? rbins : 0;",
+            stokes,
+        )
+        self.assertIn(
+            "accepted=(desired_modes>0)",
             stokes,
         )
         collective = stokes.index(
