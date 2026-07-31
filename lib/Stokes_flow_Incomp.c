@@ -2148,45 +2148,37 @@ static int ala_geneo_bin(int ex, int ey, int ez, int elx, int ely,
    complete shallow constant mode.  Final normalization is performed after
    transfer to the Galerkin pressure level. */
 static int ala_build_radial_partition_shapes(const double *aggregate,
-    const int *active_map, int nbins, int rbins,
-    double *selected_shapes, double *selected_values)
+    int nbins, int rbins, double *selected_shapes,
+    double *selected_values)
 {
-    int mode,i,j,support;
+    int mode,i,j;
     double rayleigh_numerator,rayleigh_denominator;
 
     for(mode=0;mode<rbins;mode++) {
-        support=0;
         for(j=0;j<nbins;j++) {
-            selected_shapes[mode*nbins+j]=0.0;
-            if(active_map[j]>=0 && j%rbins==mode) {
-                selected_shapes[mode*nbins+j]=1.0;
-                support++;
-            }
+            selected_shapes[mode*nbins+j]
+                =(j%rbins==mode) ? 1.0 : 0.0;
         }
-        /* Only the indicator support matters here: the basis is normalized
-           again after it is transferred to the Galerkin pressure level.
-           Avoid selection-operator scaling, whose dimensional diagonal can
-           legitimately underflow an absolute threshold at production scale. */
-        if(support<=0)
-            return(-(mode+1));
+        /* These are geometric indicators, not selected GenEO modes.  Their
+           existence must not depend on the selection operator's active map
+           or dimensional scale.  The transferred pressure-level support and
+           the final Galerkin Cholesky are the authoritative validity tests. */
         rayleigh_numerator=0.0;
         rayleigh_denominator=0.0;
-        for(i=0;i<nbins;i++)
-            if(active_map[i]>=0) {
-                rayleigh_denominator += aggregate[i*nbins+i]
-                    *selected_shapes[mode*nbins+i]
-                    *selected_shapes[mode*nbins+i];
-                for(j=0;j<nbins;j++)
-                    if(active_map[j]>=0)
-                        rayleigh_numerator +=
-                            selected_shapes[mode*nbins+i]
-                            *aggregate[i*nbins+j]
-                            *selected_shapes[mode*nbins+j];
-            }
-        selected_values[mode]=rayleigh_numerator
-            /max(rayleigh_denominator,1.0e-300);
-        if(!isfinite(selected_values[mode]))
-            return(-(rbins+mode+1));
+        for(i=0;i<nbins;i++) {
+            rayleigh_denominator += aggregate[i*nbins+i]
+                *selected_shapes[mode*nbins+i]
+                *selected_shapes[mode*nbins+i];
+            for(j=0;j<nbins;j++)
+                rayleigh_numerator += selected_shapes[mode*nbins+i]
+                    *aggregate[i*nbins+j]
+                    *selected_shapes[mode*nbins+j];
+        }
+        selected_values[mode]
+            =(isfinite(rayleigh_numerator)
+              && isfinite(rayleigh_denominator)
+              && fabs(rayleigh_denominator)>1.0e-300)
+            ? rayleigh_numerator/rayleigh_denominator : 0.0;
     }
     return(rbins);
 }
@@ -3024,8 +3016,8 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                       "radial_partition")==0) {
                 desired_modes=rbins;
                 accepted=ala_build_radial_partition_shapes(
-                    aggregate,active_map,nbins,rbins,
-                    selected_shapes[m],selected_values[m]);
+                    aggregate,nbins,rbins,selected_shapes[m],
+                    selected_values[m]);
             }
             else {
                 desired_modes=0;

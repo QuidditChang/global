@@ -295,14 +295,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("ala_build_radial_partition_shapes", stokes)
-        self.assertIn("active_map[j]>=0 && j%rbins==mode", stokes)
-        self.assertIn("if(support<=0)", stokes)
+        self.assertIn("(j%rbins==mode) ? 1.0 : 0.0", stokes)
+        radial_builder = stokes[
+            stokes.index("ala_build_radial_partition_shapes"):
+            stokes.index("ala_geneo_jacobi_eigensolve")
+        ]
+        self.assertNotIn("active_map", radial_builder)
         self.assertNotIn(
             "if(!isfinite(denominator) || denominator<=1.0e-30)",
-            stokes[
-                stokes.index("ala_build_radial_partition_shapes"):
-                stokes.index("ala_geneo_jacobi_eigensolve")
-            ],
+            radial_builder,
         )
         self.assertIn(
             "accepted=ala_build_radial_partition_shapes(",

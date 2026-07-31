@@ -159,8 +159,11 @@ radial portions of the 0--410 km shallow layer.  Their span contains the
 complete aggregate constant while retaining an independent shallow/deep
 radial amplitude.  The supports form an exact disjoint partition across
 processor aggregates.  Normalization is deliberately deferred until after
-transfer to the Galerkin pressure level; the selection-stage dimensional
-diagonal is not used as an absolute validity threshold.
+transfer to the Galerkin pressure level.  Construction is purely geometric
+on all `8x8x2` bins: neither the legacy GenEO `active_map` nor a selection
+Rayleigh quotient may suppress a radial indicator.  The authoritative
+validity checks are complete cross-rank support after transfer and the final
+Galerkin Cholesky factorization.
 
 The coarse matrix remains
 
