@@ -296,10 +296,26 @@ class StrictProductionArchitectureTest(unittest.TestCase):
 
         self.assertIn("ala_build_radial_partition_shapes", stokes)
         self.assertIn("active_map[j]>=0 && j%rbins==mode", stokes)
+        self.assertIn("if(support<=0)", stokes)
+        self.assertNotIn(
+            "if(!isfinite(denominator) || denominator<=1.0e-30)",
+            stokes[
+                stokes.index("ala_build_radial_partition_shapes"):
+                stokes.index("ala_geneo_jacobi_eigensolve")
+            ],
+        )
         self.assertIn(
             "accepted=ala_build_radial_partition_shapes(",
             stokes,
         )
+        collective = stokes.index(
+            "MPI_Bcast(&group_modes[m],1,MPI_INT,0,group_comm[m]);"
+        )
+        synchronized_error = stokes.index(
+            "ALA Stage 6d radial partition basis is incomplete",
+            collective,
+        )
+        self.assertLess(collective, synchronized_error)
         self.assertIn("geometric_radial_partition", stokes)
         self.assertIn(
             "mpi_overlap_schwarz_plus_cross_rank_radial_aggregate",

@@ -158,8 +158,9 @@ by an eigenvalue threshold.  They are the disjoint indicators of the two
 radial portions of the 0--410 km shallow layer.  Their span contains the
 complete aggregate constant while retaining an independent shallow/deep
 radial amplitude.  The supports form an exact disjoint partition across
-processor aggregates.  Diagonal-energy and final Euclidean normalization
-change only basis scaling.
+processor aggregates.  Normalization is deliberately deferred until after
+transfer to the Galerkin pressure level; the selection-stage dimensional
+diagonal is not used as an absolute validity threshold.
 
 The coarse matrix remains
 

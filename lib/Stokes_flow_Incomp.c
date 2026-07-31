@@ -2145,29 +2145,30 @@ static int ala_geneo_bin(int ex, int ey, int ez, int elx, int ely,
 
 /* Stage 6d deterministic coarse space.  The radial-bin indicators are
    disjoint on each cross-rank processor aggregate and together span its
-   complete shallow constant mode.  Diagonal-energy normalization changes
-   only the basis scaling, not that partition space. */
+   complete shallow constant mode.  Final normalization is performed after
+   transfer to the Galerkin pressure level. */
 static int ala_build_radial_partition_shapes(const double *aggregate,
     const int *active_map, int nbins, int rbins,
     double *selected_shapes, double *selected_values)
 {
-    int mode,i,j;
-    double denominator,rayleigh_numerator,rayleigh_denominator;
+    int mode,i,j,support;
+    double rayleigh_numerator,rayleigh_denominator;
 
     for(mode=0;mode<rbins;mode++) {
-        denominator=0.0;
+        support=0;
         for(j=0;j<nbins;j++) {
             selected_shapes[mode*nbins+j]=0.0;
             if(active_map[j]>=0 && j%rbins==mode) {
                 selected_shapes[mode*nbins+j]=1.0;
-                denominator += aggregate[j*nbins+j];
+                support++;
             }
         }
-        if(!isfinite(denominator) || denominator<=1.0e-30)
-            return(0);
-        denominator=sqrt(denominator);
-        for(j=0;j<nbins;j++)
-            selected_shapes[mode*nbins+j] /= denominator;
+        /* Only the indicator support matters here: the basis is normalized
+           again after it is transferred to the Galerkin pressure level.
+           Avoid selection-operator scaling, whose dimensional diagonal can
+           legitimately underflow an absolute threshold at production scale. */
+        if(support<=0)
+            return(-(mode+1));
         rayleigh_numerator=0.0;
         rayleigh_denominator=0.0;
         for(i=0;i<nbins;i++)
@@ -2185,7 +2186,7 @@ static int ala_build_radial_partition_shapes(const double *aggregate,
         selected_values[mode]=rayleigh_numerator
             /max(rayleigh_denominator,1.0e-300);
         if(!isfinite(selected_values[mode]))
-            return(0);
+            return(-(rbins+mode+1));
     }
     return(rbins);
 }
@@ -3025,9 +3026,6 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                 accepted=ala_build_radial_partition_shapes(
                     aggregate,active_map,nbins,rbins,
                     selected_shapes[m],selected_values[m]);
-                if(accepted!=desired_modes)
-                    myerror(E,
-                        "ALA Stage 6d radial partition basis is incomplete");
             }
             else {
                 desired_modes=0;
@@ -3143,12 +3141,15 @@ static void build_ala_cross_rank_geneo_coarse_cache(
                     accepted++;
                 }
             }
-            if(accepted<desired_modes)
-                myerror(E,
-                    "ALA cross-rank GenEO could not build independent modes");
-            local_modes=accepted;
-            group_modes[m]=local_modes;
-            if(local_modes>0) {
+            if(accepted<desired_modes) {
+                group_modes[m]=(accepted<0) ? accepted : -1;
+                local_modes=0;
+            }
+            else {
+                local_modes=accepted;
+                group_modes[m]=local_modes;
+            }
+            if(group_modes[m]>0) {
                 for(i=0;i<local_modes;i++) {
                     local_eigen_min=min(local_eigen_min,
                                         selected_values[m][i]);
@@ -3170,6 +3171,20 @@ static void build_ala_cross_rank_geneo_coarse_cache(
             }
         }
         MPI_Bcast(&group_modes[m],1,MPI_INT,0,group_comm[m]);
+        if(group_modes[m]<0) {
+            if(group_rank==0) {
+                fprintf(stderr,
+                    "ALA cross-rank basis construction failed cap=%d "
+                    "failure_code=%d basis_type=%s\n",
+                    E->sphere.capid[m],group_modes[m],
+                    E->control.ala_geneo_basis_type);
+                fflush(stderr);
+            }
+            myerror(E,strcmp(E->control.ala_geneo_basis_type,
+                            "radial_partition")==0
+                    ? "ALA Stage 6d radial partition basis is incomplete"
+                    : "ALA cross-rank GenEO basis is incomplete");
+        }
         MPI_Bcast(selected_values[m],
                   E->control.ala_geneo_max_modes_per_rank,
                   MPI_DOUBLE,0,group_comm[m]);
