@@ -27,11 +27,14 @@ void ala_block_vector_axpy(struct All_variables *E, double scale,
                            const struct ala_block_vector *source,
                            struct ala_block_vector *destination);
 
-/* Positive caller-supplied weights define the block residual metric. Velocity
- * uses the duplicate-aware equation dot product.  The continuity component
- * is an integrated P0 constraint and therefore uses the dual pressure mass,
- * sum(r_e*s_e/V_e), matching the physical strict-ALA mass residual.  Both
- * components are reduced in one MPI collective.  The API
+/* Positive caller-supplied weights define the algebraic Krylov metric.
+ * Velocity uses the duplicate-aware equation dot product and pressure uses
+ * the Euclidean P0 coefficient dot product, matching the inner product under
+ * which the assembled Schur operator and its preconditioner are symmetric.
+ * The physical continuity dual norm sum(r_e^2/V_e) remains a separate audit
+ * and stopping metric; using it for Arnoldi makes the algebraic Schur map
+ * strongly non-normal.  Both components are reduced in one MPI collective.
+ * The API
  * intentionally does not remove a pressure mean: with G=D+C, C^T generally
  * makes a constant dynamic pressure observable.  A legacy incompressible
  * pressure-nullspace projection is valid only for an operator that actually
@@ -48,6 +51,6 @@ double ala_block_vector_norm(struct All_variables *E,
 void ala_block_vector_component_norms(struct All_variables *E,
                                       const struct ala_block_vector *vector,
                                       double *velocity_norm,
-                                      double *pressure_dual_norm);
+                                      double *pressure_algebraic_norm);
 
 #endif

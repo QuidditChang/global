@@ -195,13 +195,8 @@ static void ala_block_vector_component_dot(
             duplicate += left->velocity[m][E->parallel.Skip_id[level][m][i]]
                        * right->velocity[m][E->parallel.Skip_id[level][m][i]];
         local[0] -= duplicate;
-        for(i=1;i<=npno;i++) {
-            if(E->ECO[level][m][i].area<=0.0)
-                myerror(E,"Nonpositive pressure volume in strict-ALA "
-                          "block residual metric");
-            local[1] += left->pressure[m][i]*right->pressure[m][i]
-                       /E->ECO[level][m][i].area;
-        }
+        for(i=1;i<=npno;i++)
+            local[1] += left->pressure[m][i]*right->pressure[m][i];
     }
     MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
     component_dot[0]=global[0];
@@ -246,16 +241,16 @@ double ala_block_vector_norm(struct All_variables *E,
 void ala_block_vector_component_norms(struct All_variables *E,
                                       const struct ala_block_vector *vector,
                                       double *velocity_norm,
-                                      double *pressure_dual_norm)
+                                      double *pressure_algebraic_norm)
 {
     double component_dot[2];
 
-    if(velocity_norm==NULL || pressure_dual_norm==NULL)
+    if(velocity_norm==NULL || pressure_algebraic_norm==NULL)
         myerror(E,"Missing strict-ALA block component norm output");
     ala_block_vector_component_dot(E,vector,vector,component_dot);
     if(!isfinite(component_dot[0]) || component_dot[0]<0.0 ||
        !isfinite(component_dot[1]) || component_dot[1]<0.0)
         myerror(E,"Invalid strict-ALA block component norm");
     *velocity_norm=sqrt(component_dot[0]);
-    *pressure_dual_norm=sqrt(component_dot[1]);
+    *pressure_algebraic_norm=sqrt(component_dot[1]);
 }

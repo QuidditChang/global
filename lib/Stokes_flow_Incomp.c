@@ -184,7 +184,7 @@ static float solve_ala_coupled_fgmres_core(
     int neq,npno;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
     double beta,norm,sum,delta,residual_est,explicit_norm,block_relative;
-    double velocity_component,pressure_component,component_scale;
+    double velocity_component,pressure_component;
     double velocity_weight,pressure_weight,initial_block_norm;
     double mass_norm,initial_mass_norm,cancellation_l2,best_cancellation;
     double momentum_rms,momentum_relative,augmented_momentum_relative;
@@ -227,12 +227,13 @@ static float solve_ala_coupled_fgmres_core(
         E,V,P,rhs,r,w,operator_work,lev);
     ala_block_vector_component_norms(
         E,r,&velocity_component,&pressure_component);
-    component_scale=max(max(velocity_component*velocity_component,
-                            pressure_component*pressure_component),1.0e-300);
-    velocity_weight=1.0/max(velocity_component*velocity_component,
-                            1.0e-12*component_scale);
-    pressure_weight=1.0/max(pressure_component*pressure_component,
-                            1.0e-12*component_scale);
+    /* The augmented momentum residual already satisfies the configured
+     * velocity solve to about 1e-6 of the external force.  Scaling it by its
+     * own tiny initial value would make that hard tail half of the Arnoldi
+     * objective forever.  Use the physical force scale instead; normalize
+     * the active algebraic continuity residual independently. */
+    velocity_weight=1.0/max(force_norm*force_norm,1.0e-300);
+    pressure_weight=1.0/max(pressure_component*pressure_component,1.0e-300);
     initial_block_norm=ala_block_vector_norm(
         E,r,velocity_weight,pressure_weight);
     if(initial_block_norm<=1.0e-300)
@@ -264,7 +265,7 @@ static float solve_ala_coupled_fgmres_core(
                 "preconditioner=upper_block_triangular "
                 "inner_relative_tolerance=%e inner_max_cycles=%d "
                 "inner_progress_interval=%d "
-                "metric_weights=(velocity:%e,continuity_dual_mass:%e) "
+                "metric_weights=(velocity_force:%e,pressure_algebraic:%e) "
                 "block_norm=%e momentum_component=%e "
                 "continuity_component=%e cancellation=%e "
                 "raw_momentum_relative=%e\n",restart,
