@@ -121,6 +121,22 @@ void general_stokes_solver(struct All_variables *E)
     get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
     velocities_conform_bcs(E,E->U);
     construct_stiffness_B_matrix(E);
+
+    /* assemble_forces() includes nonzero velocity-boundary terms formed
+       with the element stiffness.  A viscosity update changes that
+       stiffness, so the force assembled above is stale for K_gamma.  Refresh
+       only the active AL strict-ALA path; gamma=0 and legacy paths retain
+       their historical call sequence. */
+    if(E->control.ala_pressure_buoyancy &&
+       E->control.ala_augmented_lagrangian_gamma > 0.0) {
+      assemble_forces(E,0);
+      if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA strict force reassembled after stiffness update "
+                "cycle=%d gamma=%e\n",E->monitor.solution_cycles,
+                E->control.ala_augmented_lagrangian_gamma);
+        fflush(E->fp);
+      }
+    }
   }
 
   solve_constrained_flow_iterative(E);

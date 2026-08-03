@@ -335,6 +335,43 @@ global field.  Candidate acceptance retains the cheaper raw audit; the full
 decomposition runs only at startup and restart boundaries.  It changes no
 equation, Krylov update, preconditioner, threshold, or cfg value.
 
+## M. Stage 7d force/stiffness consistency repair
+
+The Stage 7c production run made the warm-start failure unambiguous.  The
+initial solve started with raw and penalty relative residuals of
+`2.739295e-3`, an augmented relative residual of `9.865294e-7`, and a split
+defect of `1.736952e-14`; it reached joint acceptance at iteration 46.  The
+next Stokes solve instead started with raw and augmented relative residuals
+both near `2.76855e-2`, while the penalty relative residual was only
+`3.727995e-4`.  By restart 40 the penalty had fallen to `1.727965e-6`, but
+the raw and augmented defects remained `2.76855e-2`.  The split defect stayed
+below `5.5e-11`.  The Schur iteration was therefore reducing continuity while
+preserving a different, internally consistent momentum right-hand side.
+
+The cause was the call order in `general_stokes_solver()`.  `assemble_forces()`
+ran before a permitted viscosity update and before
+`construct_stiffness_B_matrix()`.  The assembled force contains nonzero
+velocity-boundary contributions formed from the element stiffness.  Updating
+viscosity and rebuilding `K_gamma` consequently paired a stale force with the
+new operator during `initial_vel_residual()`.  The Stage 7c audit reassembled
+the current force and exposed the resulting fixed augmented residual.
+
+Stage 7d refreshes the force immediately after a stiffness rebuild only when
+strict pressure buoyancy and positive augmented-Lagrangian gamma are active.
+The refresh precedes `solve_constrained_flow_iterative()` and emits:
+
+```text
+ALA strict force reassembled after stiffness update cycle=... gamma=...
+```
+
+The guard deliberately preserves the historical call sequence for legacy
+solvers, TALA, `gamma=0`, and cycles with no stiffness rebuild.  It adds no
+configuration parameter and changes no stopping threshold.  On the next HPC
+run, a corrected warm start should have augmented relative residual near the
+inner velocity tolerance; raw residual should be explained predominantly by
+the AL penalty.  Joint convergence in 20--30 iterations remains a runtime
+acceptance requirement, not a result inferred from the static repair.
+
 ## Validation record
 
 - Strict generator: PASS.
@@ -345,7 +382,7 @@ equation, Krylov update, preconditioner, threshold, or cfg value.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 22/22 PASS.
+- strict static regressions: 23/23 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do

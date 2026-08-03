@@ -473,6 +473,39 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertNotIn("calloc", decomposition)
         self.assertNotIn("malloc", decomposition)
 
+    def test_stage7d_refreshes_strict_force_after_stiffness_update(
+        self,
+    ) -> None:
+        drive = (GLOBAL_ROOT / "lib" / "Drive_solvers.c").read_text(
+            encoding="utf-8"
+        )
+        solver_start = drive.index(
+            "void general_stokes_solver(struct All_variables *E)"
+        )
+        solver = drive[
+            solver_start:
+            drive.index("void general_stokes_solver_pseudo_surf", solver_start)
+        ]
+        stiffness = solver.index("construct_stiffness_B_matrix(E);")
+        strict_guard = solver.index(
+            "if(E->control.ala_pressure_buoyancy &&", stiffness
+        )
+        gamma_guard = solver.index(
+            "E->control.ala_augmented_lagrangian_gamma > 0.0",
+            strict_guard,
+        )
+        refreshed_force = solver.index("assemble_forces(E,0);", gamma_guard)
+        solve = solver.index("solve_constrained_flow_iterative(E);")
+        self.assertLess(stiffness, strict_guard)
+        self.assertLess(strict_guard, gamma_guard)
+        self.assertLess(gamma_guard, refreshed_force)
+        self.assertLess(refreshed_force, solve)
+        self.assertEqual(solver.count("assemble_forces(E,0);"), 2)
+        self.assertIn(
+            "ALA strict force reassembled after stiffness update",
+            solver,
+        )
+
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,
     ) -> None:
