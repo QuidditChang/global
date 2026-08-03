@@ -48,8 +48,9 @@ foundation:
 - velocity and element-pressure fields share one level-tagged lifetime;
 - the nodal `neq` and pressure-index-zero sentinels are preserved;
 - copy, scale and AXPY reject cross-level use;
-- the block metric combines a duplicate-aware velocity dot product with the
-  P0 pressure-volume mass in one MPI reduction and explicit positive weights;
+- the block residual metric combines a duplicate-aware velocity dot product
+  with the P0 dual pressure mass `sum(r_e^2/V_e)`, identical to the physical
+  strict-ALA mass norm, in one MPI reduction with explicit positive weights;
 - no incompressible pressure-mean projection is silently applied to strict
   ALA, where `C^T` generally makes a constant dynamic pressure observable.
 

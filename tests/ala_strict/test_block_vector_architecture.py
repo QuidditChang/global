@@ -39,10 +39,11 @@ class BlockVectorArchitectureTest(unittest.TestCase):
             self.source,
         )
 
-    def test_metric_uses_one_mpi_reduction_and_pressure_mass(self) -> None:
+    def test_metric_uses_one_mpi_reduction_and_pressure_dual_mass(self) -> None:
         self.assertIn("E->parallel.Skip_neq[level][m]", self.source)
         self.assertIn("E->parallel.Skip_id[level][m][i]", self.source)
-        self.assertIn("E->ECO[level][m][i].area", self.source)
+        self.assertIn("/E->ECO[level][m][i].area", self.source)
+        self.assertIn("Nonpositive pressure volume", self.source)
         self.assertIn(
             "MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM", self.source
         )

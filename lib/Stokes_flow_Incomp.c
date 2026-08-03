@@ -264,7 +264,7 @@ static float solve_ala_coupled_fgmres_core(
                 "preconditioner=upper_block_triangular "
                 "inner_relative_tolerance=%e inner_max_cycles=%d "
                 "inner_progress_interval=%d "
-                "metric_weights=(velocity:%e,pressure_mass:%e) "
+                "metric_weights=(velocity:%e,continuity_dual_mass:%e) "
                 "block_norm=%e momentum_component=%e "
                 "continuity_component=%e cancellation=%e "
                 "raw_momentum_relative=%e\n",restart,

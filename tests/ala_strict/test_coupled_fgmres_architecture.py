@@ -50,6 +50,11 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("rhs->velocity[m][i]", residual)
         self.assertIn("residual->pressure[m][e]=-action->pressure[m][e]", residual)
 
+    def test_arnoldi_continuity_metric_matches_physical_dual_mass(self) -> None:
+        vectors = (LIB_ROOT / "ALA_block_vector.c").read_text()
+        self.assertIn("/E->ECO[level][m][i].area", vectors)
+        self.assertIn("continuity_dual_mass", self.core)
+
     def test_right_preconditioner_is_pressure_first_triangular(self) -> None:
         preconditioner = _between(
             self.stokes,
