@@ -372,6 +372,48 @@ inner velocity tolerance; raw residual should be explained predominantly by
 the AL penalty.  Joint convergence in 20--30 iterations remains a runtime
 acceptance requirement, not a result inferred from the static repair.
 
+The subsequent 400-rank Stage 7d run verified the repair.  The initialization
+solve retained its 46-iteration trajectory, while four completed evolving
+Stokes solves reached joint acceptance in 11, 13, 12, and 11 iterations.
+Their startup augmented momentum relative residuals were `9.7e-7` to
+`9.9e-7`; raw residuals of `2.0e-4` to `3.6e-4` aligned with the AL penalty.
+Accepted unaugmented momentum relative residuals were `2.4e-6` to `5.7e-6`.
+The production convergence objective is therefore achieved for these warm
+steps.
+
+## N. Stage 8 recursive pressure multigrid A/B
+
+Stage 8 is a performance experiment motivated by the one-to-two pressure
+iterations of the former incompressible EBA Stokes solve.  It does not replace
+the successful Stage 7d FGMRES baseline.  The new preconditioner traverses the
+existing five distributed pressure grids recursively.  At level `l` it
+applies the inexpensive complete strict-ALA Gram approximation
+
+```text
+A_l = (D_l+C_l) diag(K_gamma,l)^-1 (D_l+C_l)^T.
+```
+
+Two damped Jacobi pre- and post-sweeps use the existing level BPI.  Residual
+restriction is the sum `P^T` over each `2x2x2` parent, prolongation is the
+matching constant `P`, and the lowest `2x2x2` local pressure grid receives 20
+Jacobi steps.  Unlike the former two-level Galerkin polynomial, a coarse
+operator application stays on its own mesh level and never invokes a fine
+velocity MG solve.  Persistent pressure and velocity workspaces avoid
+per-iteration global allocation.
+
+The V-cycle is blended at weight `0.5` with the Stage-6b.3 MPI-overlap Schwarz
+baseline and is available only to strict ALA with positive gamma and FGMRES.
+The latter restriction avoids asserting PCG symmetry for the rediscretized
+hierarchy.  Every application audits `r^T z_mg`; a non-finite or nonpositive
+value emits `ALA_PRESSURE_MG_ROLLBACK` and preserves the Schwarz result.  At
+diagnostic iterations, `ALA_PRESSURE_MG` reports V-cycle/base energy, the
+approximate residual reduction, weight, and cumulative level-operator count.
+
+The first HPC A/B must compare both iteration count and wall time against the
+verified 11--13 iteration baseline.  Fewer pressure iterations alone is not a
+win if the added level operators increase total Stokes time.  The cfg rollback
+is a single change: `ala_pressure_multigrid=off`.
+
 ## Validation record
 
 - Strict generator: PASS.
@@ -382,7 +424,7 @@ acceptance requirement, not a result inferred from the static repair.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 23/23 PASS.
+- strict static regressions: 24/24 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do

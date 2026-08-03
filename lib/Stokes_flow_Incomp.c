@@ -558,6 +558,15 @@ struct ala_pressure_preconditioner_cache {
     double coarse_eigenvalue_max;
     double velocity_eigenvalue_min;
     double velocity_eigenvalue_max;
+    double *pressure_mg_rhs[MAX_LEVELS][NCS];
+    double *pressure_mg_x[MAX_LEVELS][NCS];
+    double *pressure_mg_residual[MAX_LEVELS][NCS];
+    double *pressure_mg_Ax[MAX_LEVELS][NCS];
+    double *pressure_mg_velocity[NCS];
+    double *pressure_mg_velocity_rhs[NCS];
+    int pressure_mg_min_level;
+    int pressure_mg_max_level;
+    int pressure_mg_operator_applications;
 };
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
@@ -569,6 +578,8 @@ static void build_ala_two_level_cache(struct All_variables *E,
 static void calibrate_ala_two_level_spectrum(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void calibrate_ala_velocity_spectrum(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev);
+static void build_ala_pressure_multigrid_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void build_ala_global_coarse_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
@@ -1743,10 +1754,264 @@ static void build_ala_two_level_cache(struct All_variables *E,
 }
 
 
+/* Stage 8 pressure multigrid uses the existing distributed pressure grids.
+   Its level operator is the complete strict-ALA Gram approximation
+
+       A_l = (D_l+C_l) diag(K_gamma,l)^-1 (D_l+C_l)^T.
+
+   This is deliberately cheaper than the legacy two-level Galerkin
+   experiment: no pressure smoothing step invokes a velocity MG solve or
+   prolongs back to the finest grid.  FGMRES contains the resulting
+   rediscretized, mildly nonsymmetric V-cycle safely. */
+static void build_ala_pressure_multigrid_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache, int lev)
+{
+    int level,m,npno,neq;
+
+    cache->pressure_mg_min_level=
+        E->control.ala_pressure_multigrid_min_level;
+    cache->pressure_mg_max_level=lev;
+    cache->pressure_mg_operator_applications=0;
+    for(level=cache->pressure_mg_min_level;level<=lev;level++) {
+        npno=E->lmesh.NPNO[level];
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            cache->pressure_mg_rhs[level][m]=
+                (double *)calloc(npno+1,sizeof(double));
+            cache->pressure_mg_x[level][m]=
+                (double *)calloc(npno+1,sizeof(double));
+            cache->pressure_mg_residual[level][m]=
+                (double *)calloc(npno+1,sizeof(double));
+            cache->pressure_mg_Ax[level][m]=
+                (double *)calloc(npno+1,sizeof(double));
+            if(cache->pressure_mg_rhs[level][m]==NULL ||
+               cache->pressure_mg_x[level][m]==NULL ||
+               cache->pressure_mg_residual[level][m]==NULL ||
+               cache->pressure_mg_Ax[level][m]==NULL)
+                myerror(E,"Unable to allocate ALA pressure multigrid level");
+        }
+    }
+    neq=E->lmesh.NEQ[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        cache->pressure_mg_velocity[m]=
+            (double *)calloc(neq+1,sizeof(double));
+        cache->pressure_mg_velocity_rhs[m]=
+            (double *)calloc(neq+1,sizeof(double));
+        if(cache->pressure_mg_velocity[m]==NULL ||
+           cache->pressure_mg_velocity_rhs[m]==NULL)
+            myerror(E,"Unable to allocate ALA pressure multigrid velocity work");
+    }
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA pressure multigrid hierarchy levels=%d range=%d:%d "
+                "smooth=(pre:%d,post:%d,coarse:%d) damping=%e weight=%e "
+                "operator=(D+C)diag(Kgamma)^-1(D+C)^T "
+                "transfer=constant_P/sum_Pt\n",
+                lev-cache->pressure_mg_min_level+1,
+                cache->pressure_mg_min_level,lev,
+                E->control.ala_pressure_multigrid_pre_smooth,
+                E->control.ala_pressure_multigrid_post_smooth,
+                E->control.ala_pressure_multigrid_coarse_iterations,
+                E->control.ala_pressure_multigrid_damping,
+                E->control.ala_pressure_multigrid_weight);
+        fflush(E->fp);
+    }
+}
+
+
+static void apply_ala_pressure_multigrid_operator(
+    struct All_variables *E, double **p, double **Ap, int level,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int m,j,neq;
+    void assemble_grad_rho_p();
+    void assemble_div_rho_u();
+
+    neq=E->lmesh.NEQ[level];
+    assemble_grad_rho_p(E,p,cache->pressure_mg_velocity_rhs,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(j=0;j<neq;j++)
+            cache->pressure_mg_velocity[m][j]=
+                E->ALA_velocity_BI[level][m][j]
+                *cache->pressure_mg_velocity_rhs[m][j];
+        cache->pressure_mg_velocity[m][neq]=0.0;
+    }
+    assemble_div_rho_u(E,cache->pressure_mg_velocity,Ap,level);
+    cache->pressure_mg_operator_applications++;
+}
+
+
+static void smooth_ala_pressure_multigrid_level(
+    struct All_variables *E, int level, int sweeps,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int sweep,m,e,npno;
+    double damping;
+    double **rhs,**x,**Ax;
+
+    npno=E->lmesh.NPNO[level];
+    damping=E->control.ala_pressure_multigrid_damping;
+    rhs=cache->pressure_mg_rhs[level];
+    x=cache->pressure_mg_x[level];
+    Ax=cache->pressure_mg_Ax[level];
+    for(sweep=0;sweep<sweeps;sweep++) {
+        apply_ala_pressure_multigrid_operator(E,x,Ax,level,cache);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++)
+                x[m][e] += damping*E->BPI[level][m][e]
+                    *(rhs[m][e]-Ax[m][e]);
+    }
+}
+
+
+static void ala_pressure_multigrid_vcycle(struct All_variables *E, int level,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int m,e,ex,ey,ez,cx,cy,cz,ce;
+    int npno,cnpno,elx,ely,elz,celx,celz;
+    double **rhs,**x,**residual,**Ax,**coarse_rhs,**coarse_x;
+
+    rhs=cache->pressure_mg_rhs[level];
+    x=cache->pressure_mg_x[level];
+    residual=cache->pressure_mg_residual[level];
+    Ax=cache->pressure_mg_Ax[level];
+    npno=E->lmesh.NPNO[level];
+    if(level==cache->pressure_mg_min_level) {
+        smooth_ala_pressure_multigrid_level(
+            E,level,E->control.ala_pressure_multigrid_coarse_iterations,
+            cache);
+        return;
+    }
+
+    smooth_ala_pressure_multigrid_level(
+        E,level,E->control.ala_pressure_multigrid_pre_smooth,cache);
+    apply_ala_pressure_multigrid_operator(E,x,Ax,level,cache);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++)
+            residual[m][e]=rhs[m][e]-Ax[m][e];
+
+    coarse_rhs=cache->pressure_mg_rhs[level-1];
+    coarse_x=cache->pressure_mg_x[level-1];
+    cnpno=E->lmesh.NPNO[level-1];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ce=1;ce<=cnpno;ce++) {
+            coarse_rhs[m][ce]=0.0;
+            coarse_x[m][ce]=0.0;
+        }
+    elx=E->lmesh.ELX[level];
+    ely=E->lmesh.ELY[level];
+    elz=E->lmesh.ELZ[level];
+    celx=E->lmesh.ELX[level-1];
+    celz=E->lmesh.ELZ[level-1];
+    if(elx!=2*celx || ely!=2*E->lmesh.ELY[level-1] ||
+       elz!=2*celz)
+        myerror(E,"ALA pressure multigrid requires factor-two mesh levels");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/2+1;
+                    cy=(ey-1)/2+1;
+                    cz=(ez-1)/2+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    coarse_rhs[m][ce] += residual[m][e];
+                }
+
+    ala_pressure_multigrid_vcycle(E,level-1,cache);
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/2+1;
+                    cy=(ey-1)/2+1;
+                    cz=(ez-1)/2+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    x[m][e] += coarse_x[m][ce];
+                }
+    smooth_ala_pressure_multigrid_level(
+        E,level,E->control.ala_pressure_multigrid_post_smooth,cache);
+}
+
+
+static void apply_ala_pressure_multigrid_correction(
+    struct All_variables *E, double **r, double **z, int lev, int iteration,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int level,m,e,npno;
+    double weight;
+    double local[4],global[4];
+    double **fine_rhs,**fine_x,**fine_Ax;
+
+    weight=E->control.ala_pressure_multigrid_weight;
+    for(level=cache->pressure_mg_min_level;level<=lev;level++) {
+        npno=E->lmesh.NPNO[level];
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++) {
+                cache->pressure_mg_rhs[level][m][e]=0.0;
+                cache->pressure_mg_x[level][m][e]=0.0;
+                cache->pressure_mg_residual[level][m][e]=0.0;
+                cache->pressure_mg_Ax[level][m][e]=0.0;
+            }
+    }
+    fine_rhs=cache->pressure_mg_rhs[lev];
+    fine_x=cache->pressure_mg_x[lev];
+    fine_Ax=cache->pressure_mg_Ax[lev];
+    npno=E->lmesh.NPNO[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++)
+            fine_rhs[m][e]=r[m][e];
+    ala_pressure_multigrid_vcycle(E,lev,cache);
+
+    local[0]=local[1]=local[2]=local[3]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++) {
+            local[0] += r[m][e]*z[m][e];
+            local[1] += r[m][e]*fine_x[m][e];
+        }
+    MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    if(!isfinite(global[1]) || global[1]<=0.0) {
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA_PRESSURE_MG_ROLLBACK iteration=%d "
+                    "base_energy=%e vcycle_energy=%e reason=nonpositive\n",
+                    iteration,global[0],global[1]);
+            fflush(E->fp);
+        }
+        return;
+    }
+    if(iteration==0 ||
+       iteration%E->control.ala_coarse_residual_interval==0) {
+        apply_ala_pressure_multigrid_operator(E,fine_x,fine_Ax,lev,cache);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++) {
+                local[2] += r[m][e]*r[m][e];
+                local[3] += (r[m][e]-fine_Ax[m][e])
+                    *(r[m][e]-fine_Ax[m][e]);
+            }
+        MPI_Allreduce(local+2,global+2,2,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA_PRESSURE_MG iteration=%d levels=%d "
+                    "base_energy=%e vcycle_energy=%e "
+                    "vcycle_to_base=%e residual_reduction=%e weight=%e "
+                    "operator_applications_total=%d\n",iteration,
+                    lev-cache->pressure_mg_min_level+1,global[0],global[1],
+                    global[1]/max(global[0],1.0e-300),
+                    sqrt(global[3]/max(global[2],1.0e-300)),weight,
+                    cache->pressure_mg_operator_applications);
+            fflush(E->fp);
+        }
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++)
+            z[m][e]=(1.0-weight)*z[m][e]+weight*fine_x[m][e];
+}
+
+
 static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache)
 {
-    int m,face;
+    int m,face,level;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         free((void *)cache->size[m]);
         free((void *)cache->multiplicity[m]);
@@ -1766,6 +2031,14 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->coarse_bpi[m]);
         free((void *)cache->global_basis[m]);
         free((void *)cache->geneo_basis[m]);
+        free((void *)cache->pressure_mg_velocity[m]);
+        free((void *)cache->pressure_mg_velocity_rhs[m]);
+        for(level=0;level<MAX_LEVELS;level++) {
+            free((void *)cache->pressure_mg_rhs[level][m]);
+            free((void *)cache->pressure_mg_x[level][m]);
+            free((void *)cache->pressure_mg_residual[level][m]);
+            free((void *)cache->pressure_mg_Ax[level][m]);
+        }
     }
     free((void *)cache->global_chol);
     free((void *)cache->global_matrix);
@@ -4029,6 +4302,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     if(E->control.ala_geneo_preconditioner)
         apply_ala_geneo_correction(E,r,z,lev,iteration,cache);
 
+    if(E->control.ala_pressure_multigrid)
+        apply_ala_pressure_multigrid_correction(
+            E,r,z,lev,iteration,cache);
+
     if(!E->control.ala_two_level_preconditioner)
         return;
 
@@ -5250,7 +5527,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     double global_vdot(), global_pdot();
     double CPU_time0();
 
-    int npno, neq, lev, coarse_lev, coarse_factor;
+    int npno, neq, lev, coarse_lev, coarse_factor, validation_level;
     int m, j, count, valid;
     int restart_search;
     int hybrid_consecutive_count, hybrid_converged;
@@ -5303,6 +5580,16 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
            E->lmesh.ELZ[lev]!=coarse_factor*E->lmesh.ELZ[coarse_lev])
             myerror(E,"ALA two-level pressure transfer does not match mesh hierarchy");
     }
+    if(E->control.ala_pressure_multigrid)
+        for(validation_level=E->control.ala_pressure_multigrid_min_level+1;
+            validation_level<=lev;validation_level++)
+            if(E->lmesh.ELX[validation_level]
+                 !=2*E->lmesh.ELX[validation_level-1] ||
+               E->lmesh.ELY[validation_level]
+                 !=2*E->lmesh.ELY[validation_level-1] ||
+               E->lmesh.ELZ[validation_level]
+                 !=2*E->lmesh.ELZ[validation_level-1])
+                myerror(E,"ALA pressure multigrid hierarchy is not factor two");
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         F[m] = (double *)malloc(neq*sizeof(double));
@@ -5322,15 +5609,21 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     local_bpi_min = 1.0e300;
     local_bpi_max = 0.0;
     local_invalid_bpi = 0;
-    for(m=1; m<=E->sphere.caps_per_proc; m++)
-        for(j=1; j<=npno; j++) {
-            if(!isfinite(E->BPI[lev][m][j]) || E->BPI[lev][m][j] <= 0.0)
-                local_invalid_bpi++;
-            else {
-                local_bpi_min = min(local_bpi_min, E->BPI[lev][m][j]);
-                local_bpi_max = max(local_bpi_max, E->BPI[lev][m][j]);
+    for(validation_level=E->control.ala_pressure_multigrid
+            ? E->control.ala_pressure_multigrid_min_level : lev;
+        validation_level<=lev;validation_level++)
+        for(m=1; m<=E->sphere.caps_per_proc; m++)
+            for(j=1; j<=E->lmesh.NPNO[validation_level]; j++) {
+                if(!isfinite(E->BPI[validation_level][m][j]) ||
+                   E->BPI[validation_level][m][j] <= 0.0)
+                    local_invalid_bpi++;
+                else {
+                    local_bpi_min=min(local_bpi_min,
+                        E->BPI[validation_level][m][j]);
+                    local_bpi_max=max(local_bpi_max,
+                        E->BPI[validation_level][m][j]);
+                }
             }
-        }
     MPI_Allreduce(&local_bpi_min, &global_bpi_min, 1, MPI_DOUBLE, MPI_MIN,
                   E->parallel.world);
     MPI_Allreduce(&local_bpi_max, &global_bpi_max, 1, MPI_DOUBLE, MPI_MAX,
@@ -5340,12 +5633,16 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     local_invalid_velocity_bi=0;
     if(E->control.ala_shallow_patch_preconditioner ||
        E->control.ala_two_level_preconditioner ||
-       E->control.ala_geneo_preconditioner)
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(j=0;j<E->lmesh.NEQ[lev];j++)
-                if(!isfinite(E->ALA_velocity_BI[lev][m][j]) ||
-                   E->ALA_velocity_BI[lev][m][j]<=0.0)
-                    local_invalid_velocity_bi++;
+       E->control.ala_geneo_preconditioner ||
+       E->control.ala_pressure_multigrid)
+        for(validation_level=E->control.ala_pressure_multigrid
+                ? E->control.ala_pressure_multigrid_min_level : lev;
+            validation_level<=lev;validation_level++)
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(j=0;j<E->lmesh.NEQ[validation_level];j++)
+                    if(!isfinite(E->ALA_velocity_BI[validation_level][m][j]) ||
+                       E->ALA_velocity_BI[validation_level][m][j]<=0.0)
+                        local_invalid_velocity_bi++;
     MPI_Allreduce(&local_invalid_velocity_bi,&global_invalid_velocity_bi,
                   1,MPI_INT,MPI_SUM,E->parallel.world);
     if(E->parallel.me==0 &&
@@ -5371,6 +5668,17 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         build_ala_shallow_patch_cache(E,&preconditioner_cache,lev);
         if(E->parallel.me==0) {
             fprintf(stderr,"ALA preconditioner startup stage=shallow_patch_build_complete\n");
+            fflush(stderr);
+        }
+    }
+    if(E->control.ala_pressure_multigrid) {
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=pressure_multigrid_build_begin\n");
+            fflush(stderr);
+        }
+        build_ala_pressure_multigrid_cache(E,&preconditioner_cache,lev);
+        if(E->parallel.me==0) {
+            fprintf(stderr,"ALA preconditioner startup stage=pressure_multigrid_build_complete\n");
             fflush(stderr);
         }
     }
@@ -5444,7 +5752,11 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(E->control.ala_shallow_patch_preconditioner)
         audit_ala_shallow_patch_preconditioner(
             E,&preconditioner_cache,lev);
-    if(E->control.ala_geneo_preconditioner)
+    if(E->control.ala_pressure_multigrid)
+        preconditioner_mode=E->control.ala_shallow_patch_preconditioner
+            ? "mpi_overlap_schwarz_plus_pressure_vcycle"
+            : "pressure_vcycle";
+    else if(E->control.ala_geneo_preconditioner)
         preconditioner_mode=
             (E->control.ala_geneo_rank_group_x>1 ||
              E->control.ala_geneo_rank_group_y>1)
@@ -5537,6 +5849,30 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     E->control.ala_feasibility_window,
                     E->control.ala_feasibility_min_reduction);
         }
+        if(E->control.ala_pressure_multigrid) {
+            fprintf(E->fp,"ALA pressure V-cycle levels=%d range=%d:%d "
+                    "pre_smooth=%d post_smooth=%d coarse_iterations=%d "
+                    "damping=%e blend_weight=%e "
+                    "level_operator=G*diag(Kgamma)^-1*Gt\n",
+                    lev-E->control.ala_pressure_multigrid_min_level+1,
+                    E->control.ala_pressure_multigrid_min_level,lev,
+                    E->control.ala_pressure_multigrid_pre_smooth,
+                    E->control.ala_pressure_multigrid_post_smooth,
+                    E->control.ala_pressure_multigrid_coarse_iterations,
+                    E->control.ala_pressure_multigrid_damping,
+                    E->control.ala_pressure_multigrid_weight);
+            fprintf(stderr,"ALA pressure V-cycle levels=%d range=%d:%d "
+                    "pre_smooth=%d post_smooth=%d coarse_iterations=%d "
+                    "damping=%e blend_weight=%e "
+                    "level_operator=G*diag(Kgamma)^-1*Gt\n",
+                    lev-E->control.ala_pressure_multigrid_min_level+1,
+                    E->control.ala_pressure_multigrid_min_level,lev,
+                    E->control.ala_pressure_multigrid_pre_smooth,
+                    E->control.ala_pressure_multigrid_post_smooth,
+                    E->control.ala_pressure_multigrid_coarse_iterations,
+                    E->control.ala_pressure_multigrid_damping,
+                    E->control.ala_pressure_multigrid_weight);
+        }
         if(E->control.ala_two_level_preconditioner) {
             fprintf(E->fp,
                     "ALA two-level pressure correction offset=%d level=%d "
@@ -5602,6 +5938,16 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         residual=solve_ala_fgmres_core(
             E,V,P,steps_max,lev,&preconditioner_cache,r,
             explicit_r,div_u,preconditioner_work);
+        if(E->control.ala_pressure_multigrid && E->parallel.me==0) {
+            fprintf(E->fp,"ALA_PRESSURE_MG_COST "
+                    "operator_applications=%d levels=%d\n",
+                    preconditioner_cache.pressure_mg_operator_applications,
+                    lev-preconditioner_cache.pressure_mg_min_level+1);
+            fprintf(stderr,"ALA_PRESSURE_MG_COST "
+                    "operator_applications=%d levels=%d\n",
+                    preconditioner_cache.pressure_mg_operator_applications,
+                    lev-preconditioner_cache.pressure_mg_min_level+1);
+        }
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             free((void *)F[m]);
             free((void *)r[m]);
@@ -5614,7 +5960,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         }
         if(E->control.ala_shallow_patch_preconditioner ||
            E->control.ala_two_level_preconditioner ||
-           E->control.ala_geneo_preconditioner)
+           E->control.ala_geneo_preconditioner ||
+           E->control.ala_pressure_multigrid)
             free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
         return(residual);
     }
@@ -6034,7 +6381,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     }
     if(E->control.ala_shallow_patch_preconditioner ||
        E->control.ala_two_level_preconditioner ||
-       E->control.ala_geneo_preconditioner)
+       E->control.ala_geneo_preconditioner ||
+       E->control.ala_pressure_multigrid)
         free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
 
     *steps_max = count;

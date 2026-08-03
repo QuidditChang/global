@@ -39,7 +39,7 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_inputs_and_stage7_fgmres(
+    def test_cfg_changes_only_strict_inputs_stage7_and_stage8(
         self,
     ) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
@@ -54,6 +54,13 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
+            "ala_pressure_multigrid",
+            "ala_pressure_multigrid_min_level",
+            "ala_pressure_multigrid_pre_smooth",
+            "ala_pressure_multigrid_post_smooth",
+            "ala_pressure_multigrid_coarse_iterations",
+            "ala_pressure_multigrid_damping",
+            "ala_pressure_multigrid_weight",
         )
         self.assertEqual(
             _without_cfg_keys(legacy, strict_keys),
@@ -98,6 +105,14 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             strict_text,
             r"(?m)^\s*ala_geneo_basis_type\s*="
             r"\s*radial_partition\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_pressure_multigrid\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_pressure_multigrid_min_level\s*=\s*0\s*$",
         )
 
     def test_strict_reference_schema_and_tref_endpoints(self) -> None:
@@ -262,6 +277,56 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             'getDoubleProperty(properties, '
             '"ala_unaugmented_momentum_tolerance"',
             properties,
+        )
+        for name in (
+            "ala_pressure_multigrid",
+            "ala_pressure_multigrid_min_level",
+            "ala_pressure_multigrid_pre_smooth",
+            "ala_pressure_multigrid_post_smooth",
+            "ala_pressure_multigrid_coarse_iterations",
+        ):
+            self.assertIn(f'{name} = prop.', incompressible)
+            self.assertIn(f'getIntProperty(properties, "{name}"', properties)
+        for name in (
+            "ala_pressure_multigrid_damping",
+            "ala_pressure_multigrid_weight",
+        ):
+            self.assertIn(f'{name} = prop.float(', incompressible)
+            self.assertIn(
+                f'getDoubleProperty(properties, "{name}"', properties
+            )
+
+    def test_stage8_pressure_multigrid_is_recursive_strict_ala(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        instructions = (
+            GLOBAL_ROOT / "lib" / "Instructions.c"
+        ).read_text(encoding="utf-8")
+
+        operator = stokes[
+            stokes.index("apply_ala_pressure_multigrid_operator"):
+            stokes.index("smooth_ala_pressure_multigrid_level")
+        ]
+        self.assertIn("assemble_grad_rho_p", operator)
+        self.assertIn("E->ALA_velocity_BI[level]", operator)
+        self.assertIn("assemble_div_rho_u", operator)
+        vcycle = stokes[
+            stokes.index("static void ala_pressure_multigrid_vcycle"):
+            stokes.index("static void apply_ala_pressure_multigrid_correction")
+        ]
+        self.assertIn("ala_pressure_multigrid_vcycle(E,level-1,cache);", vcycle)
+        self.assertIn("coarse_rhs[m][ce] += residual[m][e];", vcycle)
+        self.assertIn("x[m][e] += coarse_x[m][ce];", vcycle)
+        self.assertIn("ala_pressure_multigrid_post_smooth", vcycle)
+        self.assertIn(
+            "mpi_overlap_schwarz_plus_pressure_vcycle", stokes
+        )
+        self.assertIn(
+            "ala_pressure_multigrid requires precond=on, strict ALA",
+            instructions,
         )
 
     def test_stage6c_shallow_schur_is_spd_gram_with_rollback(self) -> None:

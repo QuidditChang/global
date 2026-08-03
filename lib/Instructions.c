@@ -584,6 +584,20 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_two_level_velocity_eigenvalue_min),"0.01",m);
   input_double("ala_two_level_velocity_eigenvalue_max",
                &(E->control.ala_two_level_velocity_eigenvalue_max),"4.0",m);
+  input_boolean("ala_pressure_multigrid",
+                &(E->control.ala_pressure_multigrid),"off",m);
+  input_int("ala_pressure_multigrid_min_level",
+            &(E->control.ala_pressure_multigrid_min_level),"0",m);
+  input_int("ala_pressure_multigrid_pre_smooth",
+            &(E->control.ala_pressure_multigrid_pre_smooth),"2",m);
+  input_int("ala_pressure_multigrid_post_smooth",
+            &(E->control.ala_pressure_multigrid_post_smooth),"2",m);
+  input_int("ala_pressure_multigrid_coarse_iterations",
+            &(E->control.ala_pressure_multigrid_coarse_iterations),"20",m);
+  input_double("ala_pressure_multigrid_damping",
+               &(E->control.ala_pressure_multigrid_damping),"0.04",m);
+  input_double("ala_pressure_multigrid_weight",
+               &(E->control.ala_pressure_multigrid_weight),"0.5",m);
   input_boolean("ala_global_coarse_preconditioner",
                 &(E->control.ala_global_coarse_preconditioner),"off",m);
   input_double("ala_global_coarse_weight",
@@ -723,6 +737,25 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_two_level_velocity_eigenvalue_max <=
        E->control.ala_two_level_velocity_eigenvalue_min)
       myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
+  if(E->control.ala_pressure_multigrid &&
+     (E->control.ala_pressure_multigrid_min_level < E->mesh.gridmin ||
+      E->control.ala_pressure_multigrid_min_level > E->mesh.levmax))
+      myerror(E, "ala_pressure_multigrid_min_level is outside the mesh hierarchy");
+  if(E->control.ala_pressure_multigrid &&
+     (E->control.ala_pressure_multigrid_pre_smooth < 1 ||
+      E->control.ala_pressure_multigrid_post_smooth < 1))
+      myerror(E, "ALA pressure multigrid smoothing counts must be positive");
+  if(E->control.ala_pressure_multigrid &&
+     E->control.ala_pressure_multigrid_coarse_iterations < 1)
+      myerror(E, "ALA pressure multigrid coarse iterations must be positive");
+  if(E->control.ala_pressure_multigrid &&
+     (E->control.ala_pressure_multigrid_damping <= 0.0 ||
+      E->control.ala_pressure_multigrid_damping >= 2.0/27.0))
+      myerror(E, "ala_pressure_multigrid_damping must be in (0,2/27)");
+  if(E->control.ala_pressure_multigrid &&
+     (E->control.ala_pressure_multigrid_weight <= 0.0 ||
+      E->control.ala_pressure_multigrid_weight > 1.0))
+      myerror(E, "ala_pressure_multigrid_weight must be in (0,1]");
   if(E->control.ala_global_coarse_weight <= 0.0 ||
      E->control.ala_global_coarse_weight > 1.0)
       myerror(E, "ala_global_coarse_weight must be in (0,1]");
@@ -867,6 +900,17 @@ void read_initial_settings(struct All_variables *E)
      !E->control.ala_two_level_preconditioner)
       myerror(E, "ala_global_coarse_preconditioner requires "
               "ala_two_level_preconditioner=on");
+  if(E->control.ala_pressure_multigrid &&
+     (!E->control.precondition ||
+      !E->control.ala_pressure_buoyancy ||
+      E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
+      strcmp(E->control.ala_outer_solver,"fgmres") != 0))
+      myerror(E, "ala_pressure_multigrid requires precond=on, strict ALA, "
+              "positive gamma, and ala_outer_solver=fgmres");
+  if(E->control.ala_pressure_multigrid &&
+     E->control.ala_two_level_preconditioner)
+      myerror(E, "ALA pressure multigrid and legacy two-level "
+              "preconditioners are mutually exclusive");
   if(E->control.ala_shallow_patch_preconditioner &&
      (!E->control.precondition ||
       !E->control.ala_pressure_buoyancy ||
@@ -1408,6 +1452,13 @@ void global_default_values(E)
     E->control.ala_two_level_velocity_iterations = 16;
     E->control.ala_two_level_velocity_eigenvalue_min = 0.01;
     E->control.ala_two_level_velocity_eigenvalue_max = 4.0;
+    E->control.ala_pressure_multigrid = 0;
+    E->control.ala_pressure_multigrid_min_level = 0;
+    E->control.ala_pressure_multigrid_pre_smooth = 2;
+    E->control.ala_pressure_multigrid_post_smooth = 2;
+    E->control.ala_pressure_multigrid_coarse_iterations = 20;
+    E->control.ala_pressure_multigrid_damping = 0.04;
+    E->control.ala_pressure_multigrid_weight = 0.5;
     E->control.ala_global_coarse_preconditioner = 0;
     E->control.ala_global_coarse_weight = 1.0;
     E->control.ala_global_coarse_regularization = 1.0e-10;

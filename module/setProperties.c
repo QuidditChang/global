@@ -1115,6 +1115,20 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_velocity_eigenvalue_min, fp);
     getDoubleProperty(properties, "ala_two_level_velocity_eigenvalue_max",
                       E->control.ala_two_level_velocity_eigenvalue_max, fp);
+    getIntProperty(properties, "ala_pressure_multigrid",
+                   E->control.ala_pressure_multigrid, fp);
+    getIntProperty(properties, "ala_pressure_multigrid_min_level",
+                   E->control.ala_pressure_multigrid_min_level, fp);
+    getIntProperty(properties, "ala_pressure_multigrid_pre_smooth",
+                   E->control.ala_pressure_multigrid_pre_smooth, fp);
+    getIntProperty(properties, "ala_pressure_multigrid_post_smooth",
+                   E->control.ala_pressure_multigrid_post_smooth, fp);
+    getIntProperty(properties, "ala_pressure_multigrid_coarse_iterations",
+                   E->control.ala_pressure_multigrid_coarse_iterations, fp);
+    getDoubleProperty(properties, "ala_pressure_multigrid_damping",
+                      E->control.ala_pressure_multigrid_damping, fp);
+    getDoubleProperty(properties, "ala_pressure_multigrid_weight",
+                      E->control.ala_pressure_multigrid_weight, fp);
     getIntProperty(properties, "ala_global_coarse_preconditioner",
                    E->control.ala_global_coarse_preconditioner, fp);
     getDoubleProperty(properties, "ala_global_coarse_weight",
@@ -1253,6 +1267,25 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_two_level_velocity_eigenvalue_max <=
          E->control.ala_two_level_velocity_eigenvalue_min)
         myerror(E, "ALA two-level velocity Chebyshev eigenvalue interval is invalid");
+    if(E->control.ala_pressure_multigrid &&
+       (E->control.ala_pressure_multigrid_min_level < E->mesh.gridmin ||
+        E->control.ala_pressure_multigrid_min_level > E->mesh.levmax))
+        myerror(E, "ala_pressure_multigrid_min_level is outside the mesh hierarchy");
+    if(E->control.ala_pressure_multigrid &&
+       (E->control.ala_pressure_multigrid_pre_smooth < 1 ||
+        E->control.ala_pressure_multigrid_post_smooth < 1))
+        myerror(E, "ALA pressure multigrid smoothing counts must be positive");
+    if(E->control.ala_pressure_multigrid &&
+       E->control.ala_pressure_multigrid_coarse_iterations < 1)
+        myerror(E, "ALA pressure multigrid coarse iterations must be positive");
+    if(E->control.ala_pressure_multigrid &&
+       (E->control.ala_pressure_multigrid_damping <= 0.0 ||
+        E->control.ala_pressure_multigrid_damping >= 2.0/27.0))
+        myerror(E, "ala_pressure_multigrid_damping must be in (0,2/27)");
+    if(E->control.ala_pressure_multigrid &&
+       (E->control.ala_pressure_multigrid_weight <= 0.0 ||
+        E->control.ala_pressure_multigrid_weight > 1.0))
+        myerror(E, "ala_pressure_multigrid_weight must be in (0,1]");
     if(E->control.ala_global_coarse_weight <= 0.0 ||
        E->control.ala_global_coarse_weight > 1.0)
         myerror(E, "ala_global_coarse_weight must be in (0,1]");
@@ -1388,6 +1421,17 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_radial_line_preconditioner)
         myerror(E, "ALA two-level and radial-line preconditioners are "
                 "mutually exclusive");
+    if(E->control.ala_pressure_multigrid &&
+       (!E->control.precondition ||
+        !E->control.ala_pressure_buoyancy ||
+        E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
+        strcmp(E->control.ala_outer_solver,"fgmres") != 0))
+        myerror(E, "ala_pressure_multigrid requires precond=on, strict ALA, "
+                "positive gamma, and ala_outer_solver=fgmres");
+    if(E->control.ala_pressure_multigrid &&
+       E->control.ala_two_level_preconditioner)
+        myerror(E, "ALA pressure multigrid and legacy two-level "
+                "preconditioners are mutually exclusive");
     if(E->control.ala_global_coarse_preconditioner &&
        !E->control.ala_two_level_preconditioner)
         myerror(E, "ala_global_coarse_preconditioner requires "

@@ -1716,6 +1716,21 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_element_vanka_damping);
     status = set_attribute_double(input, "ala_element_vanka_regularization",
                                   E->control.ala_element_vanka_regularization);
+    status = set_attribute_int(input, "ala_pressure_multigrid",
+                               E->control.ala_pressure_multigrid);
+    status = set_attribute_int(input, "ala_pressure_multigrid_min_level",
+                               E->control.ala_pressure_multigrid_min_level);
+    status = set_attribute_int(input, "ala_pressure_multigrid_pre_smooth",
+                               E->control.ala_pressure_multigrid_pre_smooth);
+    status = set_attribute_int(input, "ala_pressure_multigrid_post_smooth",
+                               E->control.ala_pressure_multigrid_post_smooth);
+    status = set_attribute_int(input,
+                               "ala_pressure_multigrid_coarse_iterations",
+                               E->control.ala_pressure_multigrid_coarse_iterations);
+    status = set_attribute_double(input, "ala_pressure_multigrid_damping",
+                                  E->control.ala_pressure_multigrid_damping);
+    status = set_attribute_double(input, "ala_pressure_multigrid_weight",
+                                  E->control.ala_pressure_multigrid_weight);
     status = set_attribute_int(input, "ala_shallow_patch_preconditioner",
                                E->control.ala_shallow_patch_preconditioner);
     status = set_attribute_double(input, "ala_shallow_patch_depth_km",

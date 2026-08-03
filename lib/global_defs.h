@@ -507,6 +507,13 @@ struct CONTROL {
     int ala_two_level_velocity_iterations;
     double ala_two_level_velocity_eigenvalue_min;
     double ala_two_level_velocity_eigenvalue_max;
+    int ala_pressure_multigrid;
+    int ala_pressure_multigrid_min_level;
+    int ala_pressure_multigrid_pre_smooth;
+    int ala_pressure_multigrid_post_smooth;
+    int ala_pressure_multigrid_coarse_iterations;
+    double ala_pressure_multigrid_damping;
+    double ala_pressure_multigrid_weight;
     int ala_global_coarse_preconditioner;
     double ala_global_coarse_weight;
     double ala_global_coarse_regularization;

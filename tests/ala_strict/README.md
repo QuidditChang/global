@@ -18,7 +18,8 @@ The phase test verifies:
 The production-architecture test also verifies:
 
 - the strict cfg changes only the reference-state inputs and the explicit
-  Stage 6d cross-rank aggregate experiment;
+  Stage 6d cross-rank aggregate experiment, Stage 8 recursive pressure
+  multigrid transfer/operator wiring;
 - the eight-column strict reference-state order and pure fitted Tref endpoints;
 - `E->T` remains the sole temperature state and assimilation target;
 - no `DataT` cache or runtime strict-audit hook remains;
