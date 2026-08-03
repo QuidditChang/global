@@ -56,9 +56,11 @@ libCitcomS_la_LDFLAGS = -release $(VERSION)
 libCitcomS_la_SOURCES = $(sources)
 
 sources = \
+	ALA_block_vector.c \
 	Advection_diffusion.c \
 	advection_diffusion.h \
 	advection.h \
+	ala_block_vector.h \
 	ala_coupled_operator.h \
 	BC_util.c \
 	Checkpoints.c \

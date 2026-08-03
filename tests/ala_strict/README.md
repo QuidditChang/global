@@ -43,5 +43,16 @@ foundation without selecting it in production:
 - Stage 7d/Stage 8 remain the only runtime paths until a coupled Krylov method
   is added and validated.
 
+The block-vector architecture test verifies the Stage 9c mixed-vector
+foundation:
+
+- velocity and element-pressure fields share one level-tagged lifetime;
+- the nodal `neq` and pressure-index-zero sentinels are preserved;
+- copy, scale and AXPY reject cross-level use;
+- the block metric combines a duplicate-aware velocity dot product with the
+  P0 pressure-volume mass in one MPI reduction and explicit positive weights;
+- no incompressible pressure-mean projection is silently applied to strict
+  ALA, where `C^T` generally makes a constant dynamic pressure observable.
+
 Future test groups remain reserved for operator adjoint, energy-budget, and
 multigrid/Galerkin validation.
