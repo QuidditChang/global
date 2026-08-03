@@ -51,6 +51,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_velocity_solver",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
+            "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
         )
@@ -84,6 +85,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_outer_solver\s*=\s*fgmres\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_unaugmented_momentum_tolerance\s*=\s*1e-3\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -249,6 +254,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             'getStringProperty(properties, "ala_geneo_basis_type"',
             properties,
         )
+        self.assertIn(
+            'ala_unaugmented_momentum_tolerance = prop.float(',
+            incompressible,
+        )
+        self.assertIn(
+            'getDoubleProperty(properties, '
+            '"ala_unaugmented_momentum_tolerance"',
+            properties,
+        )
 
     def test_stage6c_shallow_schur_is_spd_gram_with_rollback(self) -> None:
         stokes = (
@@ -400,10 +414,23 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ub[j][m]=(double *)calloc(neq+1,sizeof(double));",
             fgmres,
         )
+        candidate = fgmres.index(
+            "if(continuity_converged && momentum_gate)"
+        )
+        candidate_audit = fgmres.index(
+            "strict_ala_momentum_residual_audit(", candidate
+        )
+        joint_acceptance = fgmres.index(
+            "converged=(continuity_converged && momentum_converged);",
+            candidate_audit,
+        )
+        self.assertLess(candidate_audit, joint_acceptance)
+        self.assertIn("momentum_target_not_reached", fgmres)
+        self.assertIn("joint_target_reached", fgmres)
         self.assertIn("if(converged || arnoldi_breakdown)", fgmres)
         self.assertLess(
             fgmres.rindex("ALA FGMRES momentum audit"),
-            fgmres.index("Strict ALA FGMRES failed physical continuity"),
+            fgmres.index("Strict ALA FGMRES failed joint acceptance"),
         )
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(

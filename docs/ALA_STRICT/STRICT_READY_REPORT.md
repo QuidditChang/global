@@ -13,13 +13,15 @@ ala_beta_interval_file = interval_ALA_strict.txt
 ala_shallow_patch_velocity_solver = diagonal
 ala_pcg_restart_interval = 20
 ala_outer_solver = fgmres
+ala_unaugmented_momentum_tolerance = 1e-3
 ala_geneo_preconditioner = off
 ala_geneo_basis_type = radial_partition
 ```
 
 The first three select the phase-inclusive strict reference state.  The final
-four retain the validated Stage 6b.3 Schwarz metric, select the Stage 7
-FGMRES experiment, and disable the negative Stage 6d coarse-space A/B.
+five retain the validated Stage 6b.3 Schwarz metric, select the Stage 7
+FGMRES path, require Stage 7b joint momentum/continuity acceptance, and
+disable the negative Stage 6d coarse-space A/B.
 `radial_partition` remains configured only as an inert rollback.  No
 energy-equation, phase-equation, boundary-condition, assimilation, timestep,
 or viscosity parameter is changed.
@@ -240,6 +242,64 @@ nodal velocity assembly writes a zero sentinel at index `neq`, while the new
 FGMRES velocity work and correction-basis arrays had been allocated with only
 `neq` entries.  They now use the established `neq+1` velocity-vector layout,
 and the static regression checks that allocation contract.
+
+## J. Stage 7b joint saddle-point acceptance
+
+The first post-fix evolving run completed the initialization solve and at
+least two subsequent Stokes solves without the former allocator abort.  The
+initial solve reached cancellation `0.00992642` in 46 iterations with
+unaugmented momentum relative residual `3.932077e-06`.  Warm-started solves
+then reached cancellation `0.00991258` and `0.00972404` in only 10 and 13
+iterations, but their unaugmented momentum residuals remained `2.768549e-02`
+and `2.182796e-02`.  Recursive and explicit Schur residuals still agreed and
+velocity norms remained stable; the failure was cancellation-only acceptance,
+not Arnoldi drift or velocity collapse.
+
+The cause is the state-dependent denominator
+`Q=|| |D|+|C| ||`: its relative value was `0.230881` at the end of the
+initial solve but `0.932805` and `0.851919` in the warm-started solves.  A
+fixed cancellation ratio therefore admitted very different absolute `Gu`
+errors and, with `gamma=10`, left a visible augmented-to-unaugmented momentum
+defect.
+
+Stage 7b retains `cancellation < 1e-2` and requires the existing audited
+unaugmented momentum relative residual to be at most `1e-3`.  Its numerator is
+the original-equation defect `||Ku+G^Tp-f||`; its established normalization is
+the assembled strict-force norm `||f-C^Tp||`.  FGMRES performs the expensive
+original-momentum audit only after cancellation first qualifies.  A failed
+momentum candidate continues the current Arnoldi cycle; it is no longer
+reported as a converged Stokes state.  The new parameter defaults to zero, so
+legacy and `gamma=0` configurations retain their previous stopping behavior
+unless they explicitly enable the gate.
+
+## K. Current thresholds, evidence, and production target
+
+The active Stage 7b numerical controls are:
+
+| Control | Value | Role |
+|---|---:|---|
+| `tole_compressibility` | `1e-2` | physical `D+C` cancellation target |
+| `ala_unaugmented_momentum_tolerance` | `1e-3` | original momentum acceptance gate |
+| `ala_inner_accuracy_max` | `1e-4` | fixed upper bound for velocity solves |
+| `ala_inner_accuracy_factor` | `1e-2` | adaptive inner/outer forcing factor |
+| `ala_pcg_restart_interval` | `20` | FGMRES Arnoldi basis length |
+| `piterations` | `50` | current diagnostic outer budget |
+| `ala_schur_symmetry_tolerance` | `1e-3` | fatal SPD symmetry guard |
+| `ala_feasibility_window` | `20` | progress-audit window, not acceptance |
+| `ala_feasibility_min_reduction` | `0.02` | progress-audit floor, not acceptance |
+
+The observed Schwarz symmetry defect remains about `1e-14`, recursive and
+explicit FGMRES residuals agree to reported precision, drift is one, and the
+velocity norm is stable.  The remaining open result is performance under the
+new joint gate: the initialization solve already satisfies both equations but
+requires 46 iterations, while the former 10--13 iteration warm-start results
+must now continue because their momentum defects exceed `1e-3`.
+
+Production acceptance requires both equations to meet their thresholds in
+20--30 pressure iterations, positive curvature/SPD diagnostics, recursive and
+explicit residual agreement, drift near one, stable velocity scale, auditable
+unaugmented momentum balance, and no behavior change when the new gate is zero
+or the augmented-Lagrangian path is disabled.
 
 ## Validation record
 

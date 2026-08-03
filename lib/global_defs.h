@@ -480,6 +480,7 @@ struct CONTROL {
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
     char ala_outer_solver[20];
+    double ala_unaugmented_momentum_tolerance;
     int ala_feasibility_audit;
     int ala_feasibility_window;
     double ala_feasibility_min_reduction;

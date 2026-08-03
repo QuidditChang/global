@@ -102,6 +102,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double global_vdot();
     int m,j,i,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
+    int momentum_gate,continuity_converged,momentum_converged;
     double beta,norm,inner_accuracy,relative_residual;
     double algebraic_relative,residual_drift;
     double cancellation_l2,mass_norm,initial_mass_norm,mass_relative;
@@ -115,6 +116,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double **w,**tmpF,**tmpU;
     double ***vb,***zb,***ub;
     int max_basis;
+    const char *acceptance_status;
 
     levnpno=E->lmesh.NPNO[lev];
     neq=E->lmesh.NEQ[lev];
@@ -186,7 +188,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     algebraic_relative=1.0;
     residual_drift=1.0;
     audit_best_cancellation=cancellation_l2;
-    converged=(cancellation_l2<E->control.tole_comp);
+    momentum_gate=(E->control.ala_unaugmented_momentum_tolerance>0.0);
+    continuity_converged=(cancellation_l2<E->control.tole_comp);
+    momentum_converged=!momentum_gate;
+    converged=0;
     arnoldi_breakdown=0;
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA FGMRES startup restart=%d\n",restart);
@@ -204,9 +209,20 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     }
     strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev,
                                        &momentum_rms,&momentum_relative);
+    momentum_converged=(!momentum_gate ||
+        momentum_relative<=E->control.ala_unaugmented_momentum_tolerance);
+    converged=(continuity_converged && momentum_converged);
     if(E->parallel.me==0)
         fprintf(E->fp,"ALA FGMRES momentum audit restart=0 "
                 "rms=%e relative=%e\n",momentum_rms,momentum_relative);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA FGMRES joint acceptance "
+                "cancellation_target=%e momentum_gate=%s "
+                "momentum_target=%e\n",E->control.tole_comp,
+                momentum_gate ? "on" : "off",
+                E->control.ala_unaugmented_momentum_tolerance);
+        fflush(E->fp);
+    }
 
     while(count<*steps_max && !converged) {
         for(j=0;j<65;j++) {
@@ -335,8 +351,28 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             strict_ala_beta_causal_diagnostics(
                 E,V,explicit_r,preconditioner_work,div_u,lev,count);
             strict_ala_coarse_residual_diagnostics(E,explicit_r,lev,count);
-            if(cancellation_l2<E->control.tole_comp)
-                converged=1;
+            continuity_converged=(cancellation_l2<E->control.tole_comp);
+            if(continuity_converged && momentum_gate) {
+                strict_ala_momentum_residual_audit(
+                    E,V,P,tmpF,tmpU,lev,&momentum_rms,&momentum_relative);
+                momentum_converged=(momentum_relative<=
+                    E->control.ala_unaugmented_momentum_tolerance);
+                if(E->parallel.me==0) {
+                    fprintf(E->fp,"ALA FGMRES acceptance audit iteration=%d "
+                            "cancellation=%e target=%e momentum_rms=%e "
+                            "momentum_relative=%e momentum_target=%e "
+                            "status=%s\n",count,cancellation_l2,
+                            E->control.tole_comp,momentum_rms,
+                            momentum_relative,
+                            E->control.ala_unaugmented_momentum_tolerance,
+                            momentum_converged ? "accepted"
+                                               : "continue");
+                    fflush(E->fp);
+                }
+            }
+            else if(!momentum_gate)
+                momentum_converged=1;
+            converged=(continuity_converged && momentum_converged);
             if(converged || arnoldi_breakdown)
                 break;
             for(i=0;i<used;i++)
@@ -358,6 +394,16 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     }
     explicit_norm=sqrt(global_pdot(E,explicit_r,explicit_r,lev));
     relative_residual=explicit_norm/initial_rnorm;
+    continuity_converged=(residual<E->control.tole_comp);
+    momentum_converged=(!momentum_gate ||
+        momentum_relative<=E->control.ala_unaugmented_momentum_tolerance);
+    if(converged)
+        acceptance_status=momentum_gate ? "joint_target_reached"
+                                        : "discrete_target_reached";
+    else if(continuity_converged && !momentum_converged)
+        acceptance_status="momentum_target_not_reached";
+    else
+        acceptance_status="iteration_budget_exhausted";
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA FGMRES operator audit restarts=%d iterations=%d "
                 "basis=%d final=%e best=%e algebraic_relative=%e "
@@ -368,25 +414,31 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fprintf(E->fp,"ALA_FEASIBILITY_SUMMARY status=%s final=%e "
                 "best=%e target=%e iterations=%d mass_norm=%e "
                 "mass_relative=%e Q=%e Q_relative=%e "
-                "momentum_relative=%e\n",
-                converged ? "discrete_target_reached"
-                          : "iteration_budget_exhausted",
+                "momentum_relative=%e momentum_target=%e\n",
+                acceptance_status,
                 residual,audit_best_cancellation,E->control.tole_comp,count,
                 mass_norm,mass_relative,term_strength,
                 term_strength/max(initial_term_strength,1.0e-300),
-                momentum_relative);
+                momentum_relative,
+                E->control.ala_unaugmented_momentum_tolerance);
         fflush(E->fp);
     }
     if(!converged) {
         if(E->parallel.me==0) {
-            fprintf(E->fp,"Strict ALA FGMRES failed physical continuity: "
-                    "cancellation=%e tolerance=%e iterations=%d "
+            fprintf(E->fp,"Strict ALA FGMRES failed joint acceptance: "
+                    "cancellation=%e tolerance=%e momentum_relative=%e "
+                    "momentum_tolerance=%e iterations=%d "
                     "arnoldi_breakdown=%d\n",residual,
-                    E->control.tole_comp,count,arnoldi_breakdown);
-            fprintf(stderr,"Strict ALA FGMRES failed physical continuity: "
-                    "cancellation=%e tolerance=%e iterations=%d "
+                    E->control.tole_comp,momentum_relative,
+                    E->control.ala_unaugmented_momentum_tolerance,count,
+                    arnoldi_breakdown);
+            fprintf(stderr,"Strict ALA FGMRES failed joint acceptance: "
+                    "cancellation=%e tolerance=%e momentum_relative=%e "
+                    "momentum_tolerance=%e iterations=%d "
                     "arnoldi_breakdown=%d\n",residual,
-                    E->control.tole_comp,count,arnoldi_breakdown);
+                    E->control.tole_comp,momentum_relative,
+                    E->control.ala_unaugmented_momentum_tolerance,count,
+                    arnoldi_breakdown);
             fflush(E->fp);
         }
         parallel_process_termination();

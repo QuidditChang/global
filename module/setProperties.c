@@ -1061,6 +1061,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_pcg_restart_interval, fp);
     getStringProperty(properties, "ala_outer_solver",
                       E->control.ala_outer_solver, fp);
+    getDoubleProperty(properties, "ala_unaugmented_momentum_tolerance",
+                      E->control.ala_unaugmented_momentum_tolerance, fp);
     getIntProperty(properties, "ala_feasibility_audit",
                    E->control.ala_feasibility_audit, fp);
     getIntProperty(properties, "ala_feasibility_window",
@@ -1197,6 +1199,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
        strcmp(E->control.ala_outer_solver,"fgmres") != 0)
         myerror(E, "ala_outer_solver must be pcg or fgmres");
+    if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
+        myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
+    if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&
+       strcmp(E->control.ala_outer_solver,"fgmres") != 0)
+        myerror(E, "ala_unaugmented_momentum_tolerance requires "
+                "ala_outer_solver=fgmres");
     if(E->control.ala_feasibility_window < 1)
         myerror(E, "ala_feasibility_window must be at least one");
     if(E->control.ala_feasibility_min_reduction < 0.0 ||
