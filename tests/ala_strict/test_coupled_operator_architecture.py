@@ -84,12 +84,14 @@ class CoupledOperatorArchitectureTest(unittest.TestCase):
         self.assertIn("force[m][i]-=velocity_work[m][i];", body)
         self.assertLess(body.index(full_gradient), body.index(ordinary_gradient))
 
-    def test_existing_production_solver_does_not_select_new_path(self) -> None:
+    def test_coupled_operator_has_an_explicit_independent_selector(self) -> None:
         stokes = (LIB_ROOT / "Stokes_flow_Incomp.c").read_text()
         drive = (LIB_ROOT / "Drive_solvers.c").read_text()
-        self.assertNotIn("apply_ala_coupled_operator", stokes)
+        self.assertIn('"coupled_fgmres"', stokes)
+        self.assertIn("apply_ala_coupled_operator", stokes)
+        self.assertIn("assemble_ala_pressure_independent_force", stokes)
+        self.assertIn("solve_ala_fgmres_core", stokes)
         self.assertNotIn("apply_ala_coupled_operator", drive)
-        self.assertNotIn("assemble_ala_pressure_independent_force", stokes)
         self.assertNotIn("assemble_ala_pressure_independent_force", drive)
 
 

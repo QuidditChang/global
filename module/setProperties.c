@@ -1211,14 +1211,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_pcg_restart_interval < 1)
         myerror(E, "ala_pcg_restart_interval must be at least one");
     if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
-       strcmp(E->control.ala_outer_solver,"fgmres") != 0)
-        myerror(E, "ala_outer_solver must be pcg or fgmres");
+       strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+        myerror(E, "ala_outer_solver must be pcg, fgmres, or coupled_fgmres");
     if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
         myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
     if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&
-       strcmp(E->control.ala_outer_solver,"fgmres") != 0)
+       strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
         myerror(E, "ala_unaugmented_momentum_tolerance requires "
-                "ala_outer_solver=fgmres");
+                "ala_outer_solver=fgmres or coupled_fgmres");
     if(E->control.ala_feasibility_window < 1)
         myerror(E, "ala_feasibility_window must be at least one");
     if(E->control.ala_feasibility_min_reduction < 0.0 ||
@@ -1400,9 +1402,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         else
             myerror(E, "Error: unknown Uzawa iteration");
     }
-    if(strcmp(E->control.ala_outer_solver,"fgmres") == 0 &&
+    if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
+        strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&
        strcmp(E->control.uzawa,"ala_cg") != 0)
-        myerror(E, "ala_outer_solver=fgmres requires uzawa=ala_cg");
+        myerror(E, "ALA FGMRES outer solvers require uzawa=ala_cg");
     if(E->control.ala_radial_line_preconditioner &&
        (!E->control.precondition ||
         !E->control.ala_pressure_buoyancy ||
@@ -1425,9 +1428,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        (!E->control.precondition ||
         !E->control.ala_pressure_buoyancy ||
         E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
-        strcmp(E->control.ala_outer_solver,"fgmres") != 0))
+        (strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
+         strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)))
         myerror(E, "ala_pressure_multigrid requires precond=on, strict ALA, "
-                "positive gamma, and ala_outer_solver=fgmres");
+                "positive gamma, and an FGMRES outer solver");
     if(E->control.ala_pressure_multigrid &&
        E->control.ala_two_level_preconditioner)
         myerror(E, "ALA pressure multigrid and legacy two-level "

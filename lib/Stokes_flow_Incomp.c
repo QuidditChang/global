@@ -33,6 +33,8 @@
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "ala_block_vector.h"
+#include "ala_coupled_operator.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -87,6 +89,360 @@ static void strict_ala_beta_causal_diagnostics(
     double **alternate_r, double **div_u, int lev, int iteration);
 static void strict_ala_coarse_residual_diagnostics(
     struct All_variables *E, double **r, int lev, int iteration);
+
+
+static void assemble_ala_coupled_residual(
+    struct All_variables *E, double **V, double **P,
+    const struct ala_block_vector *rhs, struct ala_block_vector *residual,
+    struct ala_block_vector *action, struct ala_block_vector *operator_work,
+    int lev)
+{
+    int m,i,e,neq,npno;
+
+    neq=E->lmesh.NEQ[lev];
+    npno=E->lmesh.NPNO[lev];
+    apply_ala_coupled_operator(E,V,P,action->velocity,action->pressure,
+                               operator_work->velocity,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<neq;i++)
+            residual->velocity[m][i]=rhs->velocity[m][i]
+                                      -action->velocity[m][i];
+        residual->velocity[m][neq]=0.0;
+        residual->pressure[m][0]=0.0;
+        for(e=1;e<=npno;e++)
+            residual->pressure[m][e]=-action->pressure[m][e];
+    }
+}
+
+
+static void apply_ala_coupled_block_preconditioner(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    struct ala_block_vector *correction, double **pressure_work, int lev,
+    int iteration, struct ala_pressure_preconditioner_cache *cache)
+{
+    int m,e,valid,npno;
+    double inner_accuracy;
+    int solve_del2_u();
+    void strip_bcs_from_residual();
+    void parallel_process_termination();
+
+    npno=E->lmesh.NPNO[lev];
+    ala_block_vector_zero(E,correction);
+    inner_accuracy=strict_ala_inner_accuracy(
+        E,residual->velocity,lev,E->control.ala_inner_accuracy_max);
+    valid=solve_del2_u(E,correction->velocity,residual->velocity,
+                       inner_accuracy,lev);
+    if(!valid)
+        parallel_process_termination();
+    strip_bcs_from_residual(E,correction->velocity,lev);
+
+    /* The (2,2) block of the exact inverse is -S^-1 for
+     * A=[K_gamma G^T; G 0].  The existing pressure preconditioner
+     * approximates the positive S^-1 and therefore enters with a minus. */
+    apply_ala_pressure_preconditioner(
+        E,residual->pressure,correction->pressure,pressure_work,lev,
+        iteration,cache);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++)
+            correction->pressure[m][e]=-correction->pressure[m][e];
+}
+
+
+/* First monolithic strict-ALA prototype.  It solves the complete augmented
+ * saddle-point block with right-preconditioned restarted FGMRES.  The block
+ * diagonal preconditioner reuses one velocity solve and the proven pressure
+ * BPI/Schwarz map; coupled Vanka and coupled multigrid are later stages.
+ * Explicit block residual replacement is performed at every candidate so the
+ * initial A/B prioritizes algebraic correctness over final performance. */
+static float solve_ala_coupled_fgmres_core(
+    struct All_variables *E, double **V, double **P, int *steps_max, int lev,
+    struct ala_pressure_preconditioner_cache *cache,
+    double **pressure_work)
+{
+    int m,i,j,e,count,restart,max_basis,used,breakdown,converged;
+    int momentum_gate,continuity_converged,momentum_converged;
+    int neq,npno;
+    double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
+    double beta,norm,sum,delta,residual_est,explicit_norm,block_relative;
+    double velocity_component,pressure_component,component_scale;
+    double velocity_weight,pressure_weight,initial_block_norm;
+    double mass_norm,initial_mass_norm,cancellation_l2,best_cancellation;
+    double momentum_rms,momentum_relative,augmented_momentum_relative;
+    double force_norm,velocity_norm,initial_velocity_norm;
+    double global_vdot();
+    void assemble_div_u();
+    void parallel_process_termination();
+    struct ala_block_vector *rhs,*r,*explicit_r,*w,*operator_work;
+    struct ala_block_vector **vb,**zb;
+    const char *acceptance_status;
+
+    neq=E->lmesh.NEQ[lev];
+    npno=E->lmesh.NPNO[lev];
+    restart=E->control.ala_pcg_restart_interval;
+    if(restart<1 || restart>64)
+        myerror(E,"ALA coupled FGMRES restart must be between 1 and 64");
+    max_basis=restart+1;
+    rhs=ala_block_vector_create(E,lev);
+    r=ala_block_vector_create(E,lev);
+    explicit_r=ala_block_vector_create(E,lev);
+    w=ala_block_vector_create(E,lev);
+    operator_work=ala_block_vector_create(E,lev);
+    vb=(struct ala_block_vector **)calloc(
+        max_basis,sizeof(struct ala_block_vector *));
+    zb=(struct ala_block_vector **)calloc(
+        restart,sizeof(struct ala_block_vector *));
+    if(vb==NULL || zb==NULL)
+        myerror(E,"Unable to allocate ALA coupled FGMRES basis tables");
+    for(j=0;j<max_basis;j++)
+        vb[j]=ala_block_vector_create(E,lev);
+    for(j=0;j<restart;j++)
+        zb[j]=ala_block_vector_create(E,lev);
+
+    ala_block_vector_zero(E,rhs);
+    assemble_ala_pressure_independent_force(
+        E,rhs->velocity,operator_work->velocity,lev);
+    force_norm=sqrt(max(global_vdot(
+        E,rhs->velocity,rhs->velocity,lev),1.0e-300));
+    assemble_ala_coupled_residual(
+        E,V,P,rhs,r,w,operator_work,lev);
+    ala_block_vector_component_norms(
+        E,r,&velocity_component,&pressure_component);
+    component_scale=max(max(velocity_component*velocity_component,
+                            pressure_component*pressure_component),1.0e-300);
+    velocity_weight=1.0/max(velocity_component*velocity_component,
+                            1.0e-12*component_scale);
+    pressure_weight=1.0/max(pressure_component*pressure_component,
+                            1.0e-12*component_scale);
+    initial_block_norm=ala_block_vector_norm(
+        E,r,velocity_weight,pressure_weight);
+    if(initial_block_norm<=1.0e-300)
+        initial_block_norm=1.0;
+
+    assemble_div_u(E,V,operator_work->pressure,lev);
+    strict_ala_continuity_metrics(
+        E,V,w->pressure,operator_work->pressure,lev,
+        &initial_mass_norm,&cancellation_l2);
+    mass_norm=initial_mass_norm;
+    best_cancellation=cancellation_l2;
+    initial_velocity_norm=sqrt(max(global_vdot(E,V,V,lev),1.0e-300));
+    strict_ala_momentum_residual_audit(
+        E,V,P,w->velocity,operator_work->velocity,lev,
+        &momentum_rms,&momentum_relative);
+    momentum_gate=(E->control.ala_unaugmented_momentum_tolerance>0.0);
+    continuity_converged=(cancellation_l2<E->control.tole_comp);
+    momentum_converged=(!momentum_gate || momentum_relative<=
+        E->control.ala_unaugmented_momentum_tolerance);
+    converged=(continuity_converged && momentum_converged);
+    count=0;
+    breakdown=0;
+    residual_est=1.0;
+    explicit_norm=initial_block_norm;
+    block_relative=1.0;
+    augmented_momentum_relative=velocity_component/force_norm;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
+                "metric_weights=(velocity:%e,pressure_mass:%e) "
+                "block_norm=%e momentum_component=%e "
+                "continuity_component=%e cancellation=%e "
+                "raw_momentum_relative=%e\n",restart,velocity_weight,
+                pressure_weight,initial_block_norm,velocity_component,
+                pressure_component,cancellation_l2,momentum_relative);
+        fprintf(stderr,"ALA COUPLED FGMRES startup restart=%d "
+                "block_norm=%e cancellation=%e raw_momentum_relative=%e\n",
+                restart,initial_block_norm,cancellation_l2,momentum_relative);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+
+    while(count<*steps_max && !converged) {
+        for(j=0;j<65;j++) {
+            g[j]=0.0;
+            for(i=0;i<64;i++)
+                h[j][i]=0.0;
+        }
+        for(j=0;j<64;j++) {
+            cs[j]=0.0;
+            sn[j]=0.0;
+            y[j]=0.0;
+            y_old[j]=0.0;
+        }
+        beta=ala_block_vector_norm(E,r,velocity_weight,pressure_weight);
+        if(!isfinite(beta) || beta<=1.0e-300)
+            break;
+        g[0]=beta;
+        ala_block_vector_copy(E,r,vb[0]);
+        ala_block_vector_scale(E,1.0/beta,vb[0]);
+        used=0;
+        for(j=0;j<restart && count<*steps_max;j++) {
+            apply_ala_coupled_block_preconditioner(
+                E,vb[j],zb[j],pressure_work,lev,count,cache);
+            apply_ala_coupled_operator(
+                E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
+                operator_work->velocity,lev);
+            for(i=0;i<=j;i++) {
+                h[i][j]=ala_block_vector_dot(
+                    E,w,vb[i],velocity_weight,pressure_weight);
+                ala_block_vector_axpy(E,-h[i][j],vb[i],w);
+            }
+            h[j+1][j]=ala_block_vector_norm(
+                E,w,velocity_weight,pressure_weight);
+            if(h[j+1][j]>1.0e-300) {
+                ala_block_vector_copy(E,w,vb[j+1]);
+                ala_block_vector_scale(E,1.0/h[j+1][j],vb[j+1]);
+            }
+            else {
+                breakdown=1;
+                h[j+1][j]=0.0;
+            }
+            for(i=0;i<j;i++) {
+                sum=cs[i]*h[i][j]+sn[i]*h[i+1][j];
+                h[i+1][j]=-sn[i]*h[i][j]+cs[i]*h[i+1][j];
+                h[i][j]=sum;
+            }
+            norm=sqrt(h[j][j]*h[j][j]+h[j+1][j]*h[j+1][j]);
+            if(norm<=1.0e-300) {
+                cs[j]=1.0;
+                sn[j]=0.0;
+            }
+            else {
+                cs[j]=h[j][j]/norm;
+                sn[j]=h[j+1][j]/norm;
+            }
+            h[j][j]=cs[j]*h[j][j]+sn[j]*h[j+1][j];
+            h[j+1][j]=0.0;
+            sum=cs[j]*g[j]+sn[j]*g[j+1];
+            g[j+1]=-sn[j]*g[j]+cs[j]*g[j+1];
+            g[j]=sum;
+            used=j+1;
+            for(i=used-1;i>=0;i--) {
+                sum=g[i];
+                for(e=i+1;e<used;e++)
+                    sum-=h[i][e]*y[e];
+                if(fabs(h[i][i])<=1.0e-300) {
+                    breakdown=1;
+                    y[i]=0.0;
+                }
+                else
+                    y[i]=sum/h[i][i];
+            }
+            for(i=0;i<used;i++) {
+                delta=y[i]-y_old[i];
+                if(delta==0.0)
+                    continue;
+                for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                    for(e=0;e<neq;e++)
+                        V[m][e] += delta*zb[i]->velocity[m][e];
+                    for(e=1;e<=npno;e++)
+                        P[m][e] += delta*zb[i]->pressure[m][e];
+                }
+                y_old[i]=y[i];
+            }
+
+            assemble_ala_coupled_residual(
+                E,V,P,rhs,explicit_r,w,operator_work,lev);
+            explicit_norm=ala_block_vector_norm(
+                E,explicit_r,velocity_weight,pressure_weight);
+            block_relative=explicit_norm/initial_block_norm;
+            residual_est=fabs(g[j+1])/initial_block_norm;
+            ala_block_vector_component_norms(
+                E,explicit_r,&velocity_component,&pressure_component);
+            augmented_momentum_relative=velocity_component/force_norm;
+            assemble_div_u(E,V,operator_work->pressure,lev);
+            strict_ala_continuity_metrics(
+                E,V,w->pressure,operator_work->pressure,lev,
+                &mass_norm,&cancellation_l2);
+            velocity_norm=sqrt(max(global_vdot(E,V,V,lev),0.0));
+            count++;
+            if(cancellation_l2<best_cancellation)
+                best_cancellation=cancellation_l2;
+            continuity_converged=(cancellation_l2<E->control.tole_comp);
+            if(continuity_converged && momentum_gate) {
+                strict_ala_momentum_residual_audit(
+                    E,V,P,w->velocity,operator_work->velocity,lev,
+                    &momentum_rms,&momentum_relative);
+                momentum_converged=(momentum_relative<=
+                    E->control.ala_unaugmented_momentum_tolerance);
+            }
+            else if(!momentum_gate)
+                momentum_converged=1;
+            converged=(continuity_converged && momentum_converged);
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"ALA COUPLED FGMRES iteration=%d "
+                        "block_relative=%e arnoldi_relative=%e drift=%e "
+                        "augmented_momentum_relative=%e "
+                        "continuity_mass=%e continuity_component=%e "
+                        "cancellation=%e velocity_relative=%e "
+                        "raw_momentum_relative_last_audit=%e status=%s\n",count,
+                        block_relative,residual_est,
+                        residual_est/max(block_relative,1.0e-300),
+                        augmented_momentum_relative,mass_norm,
+                        pressure_component,cancellation_l2,
+                        velocity_norm/max(initial_velocity_norm,1.0e-300),
+                        momentum_relative,
+                        converged ? "accepted" : "continue");
+                fflush(E->fp);
+            }
+            if(converged || breakdown)
+                break;
+            for(i=0;i<used;i++)
+                y_old[i]=y[i];
+        }
+        ala_block_vector_copy(E,explicit_r,r);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA COUPLED FGMRES restart count=%d "
+                    "block_relative=%e cancellation=%e breakdown=%d\n",
+                    count,explicit_norm/initial_block_norm,
+                    cancellation_l2,breakdown);
+            fflush(E->fp);
+        }
+        if(breakdown)
+            break;
+    }
+
+    if(converged)
+        acceptance_status="joint_target_reached";
+    else if(continuity_converged && !momentum_converged)
+        acceptance_status="momentum_target_not_reached";
+    else
+        acceptance_status="iteration_budget_exhausted";
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA_COUPLED_FEASIBILITY_SUMMARY status=%s "
+                "iterations=%d cancellation=%e best=%e target=%e "
+                "augmented_momentum_relative=%e raw_momentum_relative=%e "
+                "momentum_target=%e arnoldi_relative=%e\n",
+                acceptance_status,count,cancellation_l2,best_cancellation,
+                E->control.tole_comp,augmented_momentum_relative,
+                momentum_relative,E->control.ala_unaugmented_momentum_tolerance,
+                residual_est);
+        fflush(E->fp);
+    }
+    if(!converged) {
+        if(E->parallel.me==0) {
+            fprintf(stderr,"Strict ALA coupled FGMRES failed acceptance: "
+                    "cancellation=%e momentum_relative=%e iterations=%d "
+                    "breakdown=%d\n",cancellation_l2,momentum_relative,
+                    count,breakdown);
+            fflush(stderr);
+        }
+        parallel_process_termination();
+    }
+
+    *steps_max=count;
+    for(j=0;j<max_basis;j++)
+        ala_block_vector_destroy(E,vb[j]);
+    for(j=0;j<restart;j++)
+        ala_block_vector_destroy(E,zb[j]);
+    free(vb);
+    free(zb);
+    ala_block_vector_destroy(E,rhs);
+    ala_block_vector_destroy(E,r);
+    ala_block_vector_destroy(E,explicit_r);
+    ala_block_vector_destroy(E,w);
+    ala_block_vector_destroy(E,operator_work);
+    return((float)cancellation_l2);
+}
+
+
 /* Restarted flexible GMRES for the strict-ALA Schur equation.  The basis
  * stores both the preconditioned pressure vectors and their velocity
  * corrections, so the original coupled (P,V) iterate is updated with the
@@ -5938,14 +6294,20 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         for(j=0; j<neq; j++)
             F[m][j] = FF[m][j];
 
-    if(strcmp(E->control.ala_outer_solver,"fgmres")==0) {
+    if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0) {
         /* Start from the same momentum-consistent velocity used by PCG.
          * Skipping this correction makes Gu small without solving the
          * coupled strict-ALA momentum equation. */
         initial_vel_residual(E,V,P,F,imp);
-        residual=solve_ala_fgmres_core(
-            E,V,P,steps_max,lev,&preconditioner_cache,r,
-            explicit_r,div_u,preconditioner_work);
+        if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0)
+            residual=solve_ala_coupled_fgmres_core(
+                E,V,P,steps_max,lev,&preconditioner_cache,
+                preconditioner_work);
+        else
+            residual=solve_ala_fgmres_core(
+                E,V,P,steps_max,lev,&preconditioner_cache,r,
+                explicit_r,div_u,preconditioner_work);
         if(E->control.ala_pressure_multigrid && E->parallel.me==0) {
             fprintf(E->fp,"ALA_PRESSURE_MG_COST "
                     "operator_applications=%d levels=%d\n",

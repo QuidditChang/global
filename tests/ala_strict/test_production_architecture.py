@@ -39,7 +39,7 @@ def _cfg_scalar(path: Path, name: str) -> float:
 
 
 class StrictProductionArchitectureTest(unittest.TestCase):
-    def test_cfg_changes_only_strict_inputs_stage7_and_stage8(
+    def test_cfg_changes_only_strict_inputs_through_stage9d(
         self,
     ) -> None:
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
@@ -91,7 +91,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_outer_solver\s*=\s*fgmres\s*$",
+            r"(?m)^\s*ala_outer_solver\s*=\s*coupled_fgmres\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -108,7 +108,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_multigrid\s*=\s*on\s*$",
+            r"(?m)^\s*ala_pressure_multigrid\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -454,7 +454,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         dispatch = stokes[
             stokes.index(
-                'if(strcmp(E->control.ala_outer_solver,"fgmres")==0)'
+                'if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||'
             ):
             stokes.index(
                 "/* FF contains the current -C^T*P forcing.",
