@@ -33,6 +33,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
+#include "ala_coupled_operator.h"
 
 void myerror(struct All_variables *,char *);
 
@@ -1678,6 +1679,76 @@ void assemble_unaugmented_del2_u(struct All_variables *E, double **u,
             Au[m][i] -= aug[m][i];
         free(aug[m]);
     }
+}
+
+
+/* Apply the complete homogeneous strict-ALA velocity-pressure block.  This
+ * is deliberately independent of assemble_forces(): pressure is an operator
+ * unknown here, never a cached buoyancy contribution.  Keeping this action
+ * allocation-free makes it suitable for a future coupled Krylov method and
+ * coupled multigrid on every existing level.
+ *
+ * The caller owns five distinct fields.  In particular, velocity_work cannot
+ * alias velocity or momentum because the nodal K_gamma action uses the neq
+ * sentinel in its input and assemble_grad_rho_p() overwrites its output. */
+void apply_ala_coupled_operator(struct All_variables *E,
+                                double **velocity, double **pressure,
+                                double **momentum, double **continuity,
+                                double **velocity_work, int level)
+{
+    int m,i;
+    const int neq=E->lmesh.NEQ[level];
+    void assemble_del2_u();
+
+    if(velocity==momentum || velocity==velocity_work ||
+       momentum==velocity_work || pressure==continuity)
+        myerror(E,"Aliased field in strict-ALA coupled operator");
+
+    assemble_del2_u(E,velocity,momentum,level,1);
+    assemble_grad_rho_p(E,pressure,velocity_work,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            momentum[m][i] += velocity_work[m][i];
+    assemble_div_rho_u(E,velocity,continuity,level);
+}
+
+
+/* Recover the pressure-independent force needed by a monolithic block solve.
+ * The legacy finest-level assembly satisfies
+ *
+ *     E->F = f_external - C^T p.
+ *
+ * Since (D+C)^T p-D^T p=C^T p, the expression below reconstructs
+ * f_external without mutating the current pressure or changing the legacy
+ * E->F contract.  A later coupled solver can assemble this once per operator
+ * lifecycle and then keep pressure entirely on the left-hand side. */
+void assemble_ala_pressure_independent_force(struct All_variables *E,
+                                             double **force,
+                                             double **velocity_work,
+                                             int level)
+{
+    int m,i;
+    const int neq=E->lmesh.NEQ[level];
+    void assemble_forces();
+    void assemble_grad_p();
+    void strip_bcs_from_residual();
+
+    if(level!=E->mesh.levmax)
+        myerror(E,"ALA pressure-independent force requires finest level");
+    if(force==velocity_work || force==E->F || velocity_work==E->F)
+        myerror(E,"Aliased field in ALA pressure-independent force");
+
+    assemble_forces(E,0);
+    assemble_grad_rho_p(E,E->P,velocity_work,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            force[m][i]=E->F[m][i]+velocity_work[m][i];
+
+    assemble_grad_p(E,E->P,velocity_work,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            force[m][i]-=velocity_work[m][i];
+    strip_bcs_from_residual(E,force,level);
 }
 
 

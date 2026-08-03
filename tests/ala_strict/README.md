@@ -31,5 +31,17 @@ The production-architecture test also verifies:
 - PCG failure output contains absolute `N_M`, `Q`, and the original
   unaugmented momentum audit.
 
+The coupled-operator architecture test verifies the first monolithic-solver
+foundation without selecting it in production:
+
+- one allocation-free action returns `K_gamma*u+(D+C)^T*p` and `(D+C)*u`;
+- the block action never assembles or consumes the pressure-dependent legacy
+  force;
+- a finest-level helper reconstructs the pressure-independent momentum RHS as
+  `E->F + (D+C)^T*p - D^T*p`;
+- destructive field aliases are rejected; and
+- Stage 7d/Stage 8 remain the only runtime paths until a coupled Krylov method
+  is added and validated.
+
 Future test groups remain reserved for operator adjoint, energy-budget, and
 multigrid/Galerkin validation.

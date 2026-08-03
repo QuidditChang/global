@@ -59,6 +59,7 @@ sources = \
 	Advection_diffusion.c \
 	advection_diffusion.h \
 	advection.h \
+	ala_coupled_operator.h \
 	BC_util.c \
 	Checkpoints.c \
 	checkpoints.h \
