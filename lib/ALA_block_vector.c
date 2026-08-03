@@ -254,3 +254,20 @@ void ala_block_vector_component_norms(struct All_variables *E,
     *velocity_norm=sqrt(component_dot[0]);
     *pressure_algebraic_norm=sqrt(component_dot[1]);
 }
+
+
+void ala_block_vector_component_products(
+    struct All_variables *E, const struct ala_block_vector *left,
+    const struct ala_block_vector *right, double *velocity_product,
+    double *pressure_algebraic_product)
+{
+    double component_dot[2];
+
+    if(velocity_product==NULL || pressure_algebraic_product==NULL)
+        myerror(E,"Missing strict-ALA block component product output");
+    ala_block_vector_component_dot(E,left,right,component_dot);
+    if(!isfinite(component_dot[0]) || !isfinite(component_dot[1]))
+        myerror(E,"Invalid strict-ALA block component product");
+    *velocity_product=component_dot[0];
+    *pressure_algebraic_product=component_dot[1];
+}

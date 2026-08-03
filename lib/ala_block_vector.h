@@ -52,5 +52,9 @@ void ala_block_vector_component_norms(struct All_variables *E,
                                       const struct ala_block_vector *vector,
                                       double *velocity_norm,
                                       double *pressure_algebraic_norm);
+void ala_block_vector_component_products(
+    struct All_variables *E, const struct ala_block_vector *left,
+    const struct ala_block_vector *right, double *velocity_product,
+    double *pressure_algebraic_product);
 
 #endif

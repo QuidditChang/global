@@ -66,6 +66,12 @@ The coupled-FGMRES architecture test verifies the Stage 9d feasibility path:
 - acceptance requires both physical continuity cancellation and the original
   unaugmented momentum residual when its audit gate is enabled.
 
+Stage 9d.4 refreshes the original momentum decomposition at every coupled
+restart and before any final summary.  Sparse block-action audits report the
+velocity and pressure components of `r`, `z`, and `Az`, their componentwise
+defects, and alignment, so a restarted-FGMRES tail can be assigned to a block
+without changing the Krylov recurrence.
+
 Stage 9d.1 additionally verifies that the coupled preconditioner is an upper
 block-triangular pressure-first map, and that only its velocity MG call uses a
 bounded, periodically reported cycle budget.  The historical velocity-solver

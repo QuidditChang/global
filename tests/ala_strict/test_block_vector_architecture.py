@@ -53,6 +53,8 @@ class BlockVectorArchitectureTest(unittest.TestCase):
         self.assertIn("pressure_weight*component_dot[1]", self.source)
         self.assertIn("metric weights must be positive", self.source)
         self.assertIn("ala_block_vector_component_norms", self.source)
+        self.assertIn("ala_block_vector_component_products", self.source)
+        self.assertIn("ala_block_vector_component_products", self.header)
 
     def test_legacy_makefile_template_links_new_module(self) -> None:
         makefile = (LIB_ROOT / "Makefile.in").read_text()

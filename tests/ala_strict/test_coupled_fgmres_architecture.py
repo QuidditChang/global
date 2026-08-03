@@ -112,6 +112,24 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ALA_COUPLED_FEASIBILITY_SUMMARY", self.core)
         self.assertIn("parallel_process_termination()", self.core)
 
+    def test_restart_and_final_momentum_audits_are_current(self) -> None:
+        self.assertIn('"coupled_restart"', self.core)
+        self.assertIn('"coupled_final"', self.core)
+        self.assertIn("raw_momentum_relative=%e breakdown=%d", self.core)
+
+    def test_preconditioned_block_action_is_audited(self) -> None:
+        audit = _between(
+            self.stokes,
+            "static void strict_ala_coupled_preconditioner_audit(",
+            "static float solve_ala_coupled_fgmres_core(",
+        )
+        self.assertIn("r_components=(velocity:%e,pressure:%e)", audit)
+        self.assertIn("z_components=(velocity:%e,pressure:%e)", audit)
+        self.assertIn("Az_components=(velocity:%e,pressure:%e)", audit)
+        self.assertIn("defect_to_r=(velocity:%e,pressure:%e)", audit)
+        self.assertIn("cosine=(velocity:%e,pressure:%e,block:%e)", audit)
+        self.assertIn("strict_ala_coupled_preconditioner_audit(", self.core)
+
     def test_active_cfg_is_isolated_stage9d_ab(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = coupled_fgmres", cfg)

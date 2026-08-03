@@ -168,6 +168,50 @@ static void apply_ala_coupled_block_preconditioner(
 }
 
 
+static void strict_ala_coupled_preconditioner_audit(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    const struct ala_block_vector *correction,
+    const struct ala_block_vector *action, double velocity_weight,
+    double pressure_weight, int iteration)
+{
+    double rv,rp,zv,zp,av,ap,rav,rap;
+    double velocity_cosine,pressure_cosine,block_cosine;
+    double velocity_defect,pressure_defect,block_rnorm,block_anorm;
+
+    ala_block_vector_component_norms(E,residual,&rv,&rp);
+    ala_block_vector_component_norms(E,correction,&zv,&zp);
+    ala_block_vector_component_norms(E,action,&av,&ap);
+    ala_block_vector_component_products(
+        E,residual,action,&rav,&rap);
+    velocity_cosine=rav/max(rv*av,1.0e-300);
+    pressure_cosine=rap/max(rp*ap,1.0e-300);
+    block_rnorm=sqrt(max(velocity_weight*rv*rv+
+                         pressure_weight*rp*rp,0.0));
+    block_anorm=sqrt(max(velocity_weight*av*av+
+                         pressure_weight*ap*ap,0.0));
+    block_cosine=(velocity_weight*rav+pressure_weight*rap)
+        /max(block_rnorm*block_anorm,1.0e-300);
+    velocity_defect=sqrt(max(rv*rv+av*av-2.0*rav,0.0))
+        /max(rv,1.0e-300);
+    pressure_defect=sqrt(max(rp*rp+ap*ap-2.0*rap,0.0))
+        /max(rp,1.0e-300);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA COUPLED PRECONDITIONER AUDIT iteration=%d "
+                "r_components=(velocity:%e,pressure:%e) "
+                "z_components=(velocity:%e,pressure:%e) "
+                "Az_components=(velocity:%e,pressure:%e) "
+                "Az_to_r=(velocity:%e,pressure:%e) "
+                "defect_to_r=(velocity:%e,pressure:%e) "
+                "cosine=(velocity:%e,pressure:%e,block:%e)\n",
+                iteration,rv,rp,zv,zp,av,ap,
+                av/max(rv,1.0e-300),ap/max(rp,1.0e-300),
+                velocity_defect,pressure_defect,
+                velocity_cosine,pressure_cosine,block_cosine);
+        fflush(E->fp);
+    }
+}
+
+
 /* First monolithic strict-ALA prototype.  It solves the complete augmented
  * saddle-point block with right-preconditioned restarted FGMRES.  The block
  * triangular preconditioner reuses one velocity solve and the proven pressure
@@ -312,6 +356,9 @@ static float solve_ala_coupled_fgmres_core(
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);
+            if(count==0 || ((count+1)%5)==0 || j==restart-1)
+                strict_ala_coupled_preconditioner_audit(
+                    E,vb[j],zb[j],w,velocity_weight,pressure_weight,count+1);
             for(i=0;i<=j;i++) {
                 h[i][j]=ala_block_vector_dot(
                     E,w,vb[i],velocity_weight,pressure_weight);
@@ -421,16 +468,31 @@ static float solve_ala_coupled_fgmres_core(
                 y_old[i]=y[i];
         }
         ala_block_vector_copy(E,explicit_r,r);
+        strict_ala_momentum_decomposition_audit(
+            E,V,P,w->velocity,operator_work->velocity,lev,"coupled_restart",
+            count,&momentum_rms,&momentum_relative);
+        momentum_converged=(!momentum_gate || momentum_relative<=
+            E->control.ala_unaugmented_momentum_tolerance);
+        converged=(continuity_converged && momentum_converged);
         if(E->parallel.me==0) {
             fprintf(E->fp,"ALA COUPLED FGMRES restart count=%d "
-                    "block_relative=%e cancellation=%e breakdown=%d\n",
+                    "block_relative=%e cancellation=%e "
+                    "raw_momentum_relative=%e breakdown=%d\n",
                     count,explicit_norm/initial_block_norm,
-                    cancellation_l2,breakdown);
+                    cancellation_l2,momentum_relative,breakdown);
             fflush(E->fp);
         }
         if(breakdown)
             break;
     }
+
+    strict_ala_momentum_decomposition_audit(
+        E,V,P,w->velocity,operator_work->velocity,lev,"coupled_final",
+        count,&momentum_rms,&momentum_relative);
+    continuity_converged=(cancellation_l2<E->control.tole_comp);
+    momentum_converged=(!momentum_gate || momentum_relative<=
+        E->control.ala_unaugmented_momentum_tolerance);
+    converged=(continuity_converged && momentum_converged);
 
     if(converged)
         acceptance_status="joint_target_reached";
