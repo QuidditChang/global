@@ -111,7 +111,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_defect_corrections\s*=\s*1\s*$",
+            r"(?m)^\s*ala_coupled_defect_corrections\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,

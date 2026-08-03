@@ -165,8 +165,25 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn(
             "ala_coupled_inner_progress_interval = 20", cfg
         )
-        self.assertIn("ala_coupled_defect_corrections       = 1", cfg)
+        self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
+
+    def test_coupled_path_owns_its_cold_momentum_residual(self) -> None:
+        dispatch = _between(
+            self.stokes,
+            'if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||',
+            "/* FF contains the current -C^T*P forcing.",
+        )
+        coupled = _between(
+            dispatch,
+            'if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0)',
+            "else {",
+        )
+        legacy = dispatch[dispatch.index("else {"):]
+        self.assertIn("initial_velocity_solve=skipped", coupled)
+        self.assertNotIn("initial_vel_residual(", coupled)
+        self.assertIn("initial_vel_residual(E,V,P,F,imp);", legacy)
+        self.assertIn("solve_ala_fgmres_core(", legacy)
 
 
 if __name__ == "__main__":

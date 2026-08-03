@@ -6445,18 +6445,31 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
 
     if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||
        strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0) {
-        /* Start from the same momentum-consistent velocity used by PCG.
-         * Skipping this correction makes Gu small without solving the
-         * coupled strict-ALA momentum equation. */
-        initial_vel_residual(E,V,P,F,imp);
-        if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0)
+        if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0) {
+            /* The monolithic residual contains both momentum and continuity,
+             * and its force-scaled velocity metric lets FGMRES reduce a cold
+             * momentum defect directly.  A separate K_gamma^-1 momentum solve
+             * duplicates that work and dominated the Stage 9d startup cost. */
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"ALA COUPLED FGMRES direct block startup "
+                        "initial_velocity_solve=skipped\n");
+                fprintf(stderr,"ALA COUPLED FGMRES direct block startup "
+                        "initial_velocity_solve=skipped\n");
+                fflush(E->fp);
+                fflush(stderr);
+            }
             residual=solve_ala_coupled_fgmres_core(
                 E,V,P,steps_max,lev,&preconditioner_cache,
                 preconditioner_work);
-        else
+        }
+        else {
+            /* The pressure-only Stage 7 path still requires the historical
+             * momentum-consistent velocity before forming its Schur RHS. */
+            initial_vel_residual(E,V,P,F,imp);
             residual=solve_ala_fgmres_core(
                 E,V,P,steps_max,lev,&preconditioner_cache,r,
                 explicit_r,div_u,preconditioner_work);
+        }
         if(E->control.ala_pressure_multigrid && E->parallel.me==0) {
             fprintf(E->fp,"ALA_PRESSURE_MG_COST "
                     "operator_applications=%d levels=%d\n",

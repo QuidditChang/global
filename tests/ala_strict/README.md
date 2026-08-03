@@ -77,6 +77,11 @@ Stage 9d.5 optionally refines the complete triangular block inverse with
 retains all `D+C` cross terms; setting the correction count to zero reproduces
 the Stage 9d.4 preconditioner exactly.
 
+Stage 9e removes the separate initial `K_gamma` momentum solve only from the
+monolithic path.  Coupled FGMRES starts from the supplied `(u,p)` and reduces
+the force-scaled momentum and continuity components together.  The Stage 7
+pressure-only FGMRES retains its momentum-consistent initialization.
+
 Stage 9d.1 additionally verifies that the coupled preconditioner is an upper
 block-triangular pressure-first map, and that only its velocity MG call uses a
 bounded, periodically reported cycle budget.  The historical velocity-solver
