@@ -38,6 +38,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
+int solve_del2_u_bounded(struct All_variables *,double **,double **,double,
+                         int,int,int);
+
 void myerror(struct All_variables *,char *);
 double assemble_Ahatp_jacobi_entry(struct All_variables *,int,int,int,int);
 
@@ -117,40 +121,56 @@ static void assemble_ala_coupled_residual(
 
 static void apply_ala_coupled_block_preconditioner(
     struct All_variables *E, const struct ala_block_vector *residual,
-    struct ala_block_vector *correction, double **pressure_work, int lev,
-    int iteration, struct ala_pressure_preconditioner_cache *cache)
+    struct ala_block_vector *correction, double **pressure_work,
+    double **velocity_work, int lev, int iteration,
+    struct ala_pressure_preconditioner_cache *cache)
 {
-    int m,e,valid,npno;
+    int m,e,i,valid,npno,neq;
     double inner_accuracy;
-    int solve_del2_u();
-    void strip_bcs_from_residual();
     void parallel_process_termination();
 
     npno=E->lmesh.NPNO[lev];
+    neq=E->lmesh.NEQ[lev];
     ala_block_vector_zero(E,correction);
-    inner_accuracy=strict_ala_inner_accuracy(
-        E,residual->velocity,lev,E->control.ala_inner_accuracy_max);
-    valid=solve_del2_u(E,correction->velocity,residual->velocity,
-                       inner_accuracy,lev);
-    if(!valid)
-        parallel_process_termination();
-    strip_bcs_from_residual(E,correction->velocity,lev);
 
-    /* The (2,2) block of the exact inverse is -S^-1 for
-     * A=[K_gamma G^T; G 0].  The existing pressure preconditioner
-     * approximates the positive S^-1 and therefore enters with a minus. */
+    /* Upper block-triangular inverse approximation:
+     *
+     *   dp = -Sapprox^-1 rp,
+     *   du = K_gamma^-1 (ru-G^T dp).
+     *
+     * Pressure is deliberately handled first.  A diagonal block map would
+     * ask velocity MG to solve the tiny, slow-to-smooth tail left by the
+     * momentum initialization before using the much larger continuity
+     * defect.  The triangular map makes that pressure coupling part of the
+     * velocity right-hand side and retains one K_gamma solve per Arnoldi
+     * application. */
     apply_ala_pressure_preconditioner(
         E,residual->pressure,correction->pressure,pressure_work,lev,
         iteration,cache);
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=npno;e++)
             correction->pressure[m][e]=-correction->pressure[m][e];
+
+    assemble_grad_rho_p(E,correction->pressure,velocity_work,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            velocity_work[m][i]=residual->velocity[m][i]
+                                  -velocity_work[m][i];
+    inner_accuracy=strict_ala_inner_accuracy(
+        E,velocity_work,lev,
+        E->control.ala_coupled_inner_relative_tolerance);
+    valid=solve_del2_u_bounded(
+        E,correction->velocity,velocity_work,inner_accuracy,lev,
+        E->control.ala_coupled_inner_max_cycles,
+        E->control.ala_coupled_inner_progress_interval);
+    if(!valid)
+        parallel_process_termination();
 }
 
 
 /* First monolithic strict-ALA prototype.  It solves the complete augmented
  * saddle-point block with right-preconditioned restarted FGMRES.  The block
- * diagonal preconditioner reuses one velocity solve and the proven pressure
+ * triangular preconditioner reuses one velocity solve and the proven pressure
  * BPI/Schwarz map; coupled Vanka and coupled multigrid are later stages.
  * Explicit block residual replacement is performed at every candidate so the
  * initial A/B prioritizes algebraic correctness over final performance. */
@@ -241,15 +261,26 @@ static float solve_ala_coupled_fgmres_core(
     augmented_momentum_relative=velocity_component/force_norm;
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
+                "preconditioner=upper_block_triangular "
+                "inner_relative_tolerance=%e inner_max_cycles=%d "
+                "inner_progress_interval=%d "
                 "metric_weights=(velocity:%e,pressure_mass:%e) "
                 "block_norm=%e momentum_component=%e "
                 "continuity_component=%e cancellation=%e "
-                "raw_momentum_relative=%e\n",restart,velocity_weight,
-                pressure_weight,initial_block_norm,velocity_component,
+                "raw_momentum_relative=%e\n",restart,
+                E->control.ala_coupled_inner_relative_tolerance,
+                E->control.ala_coupled_inner_max_cycles,
+                E->control.ala_coupled_inner_progress_interval,
+                velocity_weight,pressure_weight,initial_block_norm,velocity_component,
                 pressure_component,cancellation_l2,momentum_relative);
         fprintf(stderr,"ALA COUPLED FGMRES startup restart=%d "
-                "block_norm=%e cancellation=%e raw_momentum_relative=%e\n",
-                restart,initial_block_norm,cancellation_l2,momentum_relative);
+                "preconditioner=upper_block_triangular "
+                "inner_relative_tolerance=%e inner_max_cycles=%d "
+                "block_norm=%e cancellation=%e "
+                "raw_momentum_relative=%e\n",restart,
+                E->control.ala_coupled_inner_relative_tolerance,
+                E->control.ala_coupled_inner_max_cycles,initial_block_norm,
+                cancellation_l2,momentum_relative);
         fflush(E->fp);
         fflush(stderr);
     }
@@ -275,7 +306,8 @@ static float solve_ala_coupled_fgmres_core(
         used=0;
         for(j=0;j<restart && count<*steps_max;j++) {
             apply_ala_coupled_block_preconditioner(
-                E,vb[j],zb[j],pressure_work,lev,count,cache);
+                E,vb[j],zb[j],pressure_work,operator_work->velocity,
+                lev,count,cache);
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);

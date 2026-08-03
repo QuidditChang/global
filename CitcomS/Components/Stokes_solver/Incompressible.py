@@ -126,6 +126,12 @@ class Incompressible(CitcomComponent):
                                     validator=prop.choice(
                                         ["pcg", "fgmres",
                                          "coupled_fgmres"]))
+        ala_coupled_inner_relative_tolerance = prop.float(
+            "ala_coupled_inner_relative_tolerance", default=1.0e-2)
+        ala_coupled_inner_max_cycles = prop.int(
+            "ala_coupled_inner_max_cycles", default=200)
+        ala_coupled_inner_progress_interval = prop.int(
+            "ala_coupled_inner_progress_interval", default=20)
         ala_unaugmented_momentum_tolerance = prop.float(
             "ala_unaugmented_momentum_tolerance", default=0.0)
         ala_feasibility_audit = prop.bool("ala_feasibility_audit",

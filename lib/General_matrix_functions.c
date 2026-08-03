@@ -30,6 +30,8 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 
+void myerror(struct All_variables *,char *);
+
 #ifdef _UNICOS
 #include <fortran.h>
 #endif
@@ -187,12 +189,9 @@ void vcopy(A,B,a,b)
     Iterative solver also using multigrid  ........
     ===========================================================  */
 
-int solve_del2_u(E,d0,F,acc,high_lev)
-     struct All_variables *E;
-     double **d0;
-     double **F;
-     double acc;
-     int high_lev;
+static int solve_del2_u_internal(struct All_variables *E, double **d0,
+                                 double **F, double acc, int high_lev,
+                                 int max_cycles, int progress_interval)
 {
   void assemble_del2_u();
   void e_assemble_del2_u();
@@ -232,6 +231,8 @@ int solve_del2_u(E,d0,F,acc,high_lev)
 
   if (!(E->control.NMULTIGRID || E->control.EMULTIGRID)) {
     cycles = E->control.v_steps_low;
+    if(max_cycles>0)
+      cycles=min(cycles,max_cycles);
     residual = conj_grad(E,d0,F,acc,&cycles,high_lev);
     valid = (residual < acc)? 1:0;
   }
@@ -254,7 +255,18 @@ int solve_del2_u(E,d0,F,acc,high_lev)
 	record(E,message);
 	report(E,message);
       }
-    }  while (!valid);
+      if(max_cycles>0 && progress_interval>0 &&
+         (counts%progress_interval)==0 && E->parallel.me==0) {
+        fprintf(E->fp,"ALA COUPLED INNER VELOCITY progress cycles=%d "
+                "residual=%e target=%e relative=%e\n",counts,residual,acc,
+                residual/max(r0,1.0e-300));
+        fprintf(stderr,"ALA COUPLED INNER VELOCITY progress cycles=%d "
+                "residual=%e target=%e relative=%e\n",counts,residual,acc,
+                residual/max(r0,1.0e-300));
+        fflush(E->fp);
+        fflush(stderr);
+      }
+    }  while (!valid && (max_cycles<=0 || counts<max_cycles));
 
     cycles = counts;
   }
@@ -279,6 +291,20 @@ int solve_del2_u(E,d0,F,acc,high_lev)
     fflush(E->fp);
   }
 
+  if(max_cycles>0 && E->parallel.me==0) {
+    fprintf(E->fp,"ALA COUPLED INNER VELOCITY summary status=%s "
+            "cycles=%d max_cycles=%d residual=%e initial=%e target=%e "
+            "relative=%e seconds=%e\n",valid ? "converged" : "cycle_limit",
+            cycles,max_cycles,residual,r0,acc,
+            residual/max(r0,1.0e-300),CPU_time0()-initial_time);
+    fprintf(stderr,"ALA COUPLED INNER VELOCITY summary status=%s "
+            "cycles=%d max_cycles=%d residual=%e target=%e\n",
+            valid ? "converged" : "cycle_limit",cycles,max_cycles,
+            residual,acc);
+    fflush(E->fp);
+    fflush(stderr);
+  }
+
   count++;
 
 
@@ -286,6 +312,31 @@ int solve_del2_u(E,d0,F,acc,high_lev)
   E->control.total_v_solver_calls += 1;
 
   return(valid);
+}
+
+
+/* Preserve the historical unbounded velocity solve for every legacy caller.
+ * The coupled strict-ALA prototype uses the bounded entry point below so a
+ * difficult Arnoldi block cannot remain forever inside one MG application. */
+int solve_del2_u(E,d0,F,acc,high_lev)
+     struct All_variables *E;
+     double **d0;
+     double **F;
+     double acc;
+     int high_lev;
+{
+  return solve_del2_u_internal(E,d0,F,acc,high_lev,0,0);
+}
+
+
+int solve_del2_u_bounded(struct All_variables *E, double **d0, double **F,
+                         double acc, int high_lev, int max_cycles,
+                         int progress_interval)
+{
+  if(max_cycles<1 || progress_interval<1)
+    myerror(E,"Invalid coupled strict-ALA velocity MG limits");
+  return solve_del2_u_internal(E,d0,F,acc,high_lev,max_cycles,
+                               progress_interval);
 }
 
 /* =================================

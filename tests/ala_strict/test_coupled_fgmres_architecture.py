@@ -50,17 +50,39 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("rhs->velocity[m][i]", residual)
         self.assertIn("residual->pressure[m][e]=-action->pressure[m][e]", residual)
 
-    def test_right_preconditioner_has_correct_saddle_point_sign(self) -> None:
+    def test_right_preconditioner_is_pressure_first_triangular(self) -> None:
         preconditioner = _between(
             self.stokes,
             "static void apply_ala_coupled_block_preconditioner(",
             "static float solve_ala_coupled_fgmres_core(",
         )
-        self.assertEqual(preconditioner.count("solve_del2_u("), 2)
+        pressure = preconditioner.index("apply_ala_pressure_preconditioner(")
+        gradient = preconditioner.index("assemble_grad_rho_p(")
+        velocity = preconditioner.index("valid=solve_del2_u_bounded(")
+        self.assertLess(pressure, gradient)
+        self.assertLess(gradient, velocity)
         self.assertIn("apply_ala_pressure_preconditioner(", preconditioner)
         self.assertIn(
             "correction->pressure[m][e]=-correction->pressure[m][e]",
             preconditioner,
+        )
+        self.assertIn(
+            "velocity_work[m][i]=residual->velocity[m][i]",
+            preconditioner,
+        )
+
+    def test_coupled_velocity_solve_is_bounded_and_observable(self) -> None:
+        matrix = (LIB_ROOT / "General_matrix_functions.c").read_text()
+        self.assertIn("int solve_del2_u_bounded(", matrix)
+        self.assertIn(
+            "while (!valid && (max_cycles<=0 || counts<max_cycles))",
+            matrix,
+        )
+        self.assertIn("ALA COUPLED INNER VELOCITY progress", matrix)
+        self.assertIn("ALA COUPLED INNER VELOCITY summary", matrix)
+        self.assertIn(
+            "return solve_del2_u_internal(E,d0,F,acc,high_lev,0,0)",
+            matrix,
         )
 
     def test_arnoldi_reconstruction_updates_both_fields(self) -> None:
@@ -85,6 +107,13 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
     def test_active_cfg_is_isolated_stage9d_ab(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = coupled_fgmres", cfg)
+        self.assertIn(
+            "ala_coupled_inner_relative_tolerance = 1e-2", cfg
+        )
+        self.assertIn("ala_coupled_inner_max_cycles       = 200", cfg)
+        self.assertIn(
+            "ala_coupled_inner_progress_interval = 20", cfg
+        )
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
 
 

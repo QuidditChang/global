@@ -65,5 +65,10 @@ The coupled-FGMRES architecture test verifies the Stage 9d feasibility path:
 - acceptance requires both physical continuity cancellation and the original
   unaugmented momentum residual when its audit gate is enabled.
 
+Stage 9d.1 additionally verifies that the coupled preconditioner is an upper
+block-triangular pressure-first map, and that only its velocity MG call uses a
+bounded, periodically reported cycle budget.  The historical velocity-solver
+entry point retains its original unbounded behavior for rollback equivalence.
+
 Future test groups remain reserved for operator adjoint, energy-budget, and
 multigrid/Galerkin validation.
