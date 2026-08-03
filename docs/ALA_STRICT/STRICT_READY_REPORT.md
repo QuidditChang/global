@@ -301,6 +301,40 @@ explicit residual agreement, drift near one, stable velocity scale, auditable
 unaugmented momentum balance, and no behavior change when the new gate is zero
 or the augmented-Lagrangian path is disabled.
 
+## L. Stage 7c augmented/unaugmented momentum decomposition
+
+The first Stage 7b warm-start run confirmed that the gate works but did not
+explain the rejected momentum state.  From iteration 10 through iteration 46,
+cancellation decreased from `9.912579e-03` to `4.542411e-03`, mass norm from
+`1.912743e+02` to `8.764589e+01`, and algebraic relative residual from
+`3.407300e-02` to `1.599477e-02`.  Over the same interval, unaugmented
+momentum relative residual remained `2.76855e-02` to reported precision.
+Drift remained one and velocity relative norm remained about `0.99987`.
+
+Stage 7c therefore decomposes, at FGMRES startup and restart boundaries,
+
+```text
+r_raw = f - G^T p - K u
+r_aug = f - G^T p - K_gamma u
+r_pen = gamma G^T M_p^-1 G u
+r_aug = r_raw - r_pen
+```
+
+The log now reports raw, augmented, and penalty RMS/relative norms;
+`raw_penalty_cosine`; the independently assembled operator split defect
+`||K_gamma u-Ku-r_pen||`; and the residual-norm identity defect.  If
+`r_aug` is small, `r_pen` matches `r_raw`, cosine is near one, and both
+defects are near roundoff, the warm-start result is an expected finite-`Gu`
+augmented state and the Schur solve must reduce the penalty action further.
+If `r_aug` is large, pressure/velocity reconstruction is not preserving the
+augmented momentum equation.  A large split defect instead identifies an
+operator assembly mismatch.
+
+The audit reuses the existing FGMRES `tmpF/tmpU` vectors and allocates no new
+global field.  Candidate acceptance retains the cheaper raw audit; the full
+decomposition runs only at startup and restart boundaries.  It changes no
+equation, Krylov update, preconditioner, threshold, or cfg value.
+
 ## Validation record
 
 - Strict generator: PASS.
@@ -311,7 +345,7 @@ or the augmented-Lagrangian path is disabled.
 - interval beta-integral identity maximum: 0.
 - Gamma_eff closure relative RMS and maximum: 0.
 - Ks fitted-profile relative RMS: 0.
-- strict static regressions: 21/21 PASS.
+- strict static regressions: 22/22 PASS.
 - changed C translation units: `mpicc -fsyntax-only` PASS.
 - isolated full source compilation: all C objects and `libCitcomS.a` built;
   `CitcomSFull` linked manually because the imported Automake 1.9 templates do

@@ -66,6 +66,10 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double **residual_work,
                                                int lev, double *rms,
                                                double *relative);
+static void strict_ala_momentum_decomposition_audit(
+    struct All_variables *E, double **V, double **P,
+    double **work_a, double **work_b, int lev, const char *stage,
+    int iteration, double *raw_rms, double *raw_relative);
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
@@ -207,8 +211,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
-    strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev,
-                                       &momentum_rms,&momentum_relative);
+    strict_ala_momentum_decomposition_audit(
+        E,V,P,tmpF,tmpU,lev,"startup",0,
+        &momentum_rms,&momentum_relative);
     momentum_converged=(!momentum_gate ||
         momentum_relative<=E->control.ala_unaugmented_momentum_tolerance);
     converged=(continuity_converged && momentum_converged);
@@ -381,8 +386,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=levnpno;e++)
                 r[m][e]=explicit_r[m][e];
-        strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev,
-                                           &momentum_rms,&momentum_relative);
+        strict_ala_momentum_decomposition_audit(
+            E,V,P,tmpF,tmpU,lev,"restart",count,
+            &momentum_rms,&momentum_relative);
         if(E->parallel.me==0)
             fprintf(E->fp,"ALA FGMRES restart cycle completed count=%d "
                     "residual=%e arnoldi_breakdown=%d "
@@ -4446,6 +4452,104 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
                              0.0));
     *rms = residual_norm / sqrt(max((double)gneq,1.0));
     *relative = residual_norm / max(force_norm,1.0e-32);
+}
+
+
+/* Decompose the audited momentum defect without allocating another global
+ * velocity field.  In residual-sign convention,
+ *
+ *   r_raw = f - G^T p - K u,
+ *   r_aug = f - G^T p - K_gamma u = r_raw - r_pen,
+ *   r_pen = gamma G^T M_p^-1 G u.
+ *
+ * The split defect independently checks K_gamma*u-K*u-r_pen.  This audit is
+ * intentionally restricted to FGMRES startup/restart boundaries; candidate
+ * acceptance retains the cheaper raw audit above. */
+static void strict_ala_momentum_decomposition_audit(
+    struct All_variables *E, double **V, double **P,
+    double **work_a, double **work_b, int lev, const char *stage,
+    int iteration, double *raw_rms, double *raw_relative)
+{
+    int m,i,neq,gneq;
+    double force_norm,raw_norm,augmented_norm,penalty_norm;
+    double predicted_penalty_norm,split_defect_norm,split_defect;
+    double raw_penalty_dot,raw_penalty_cosine,predicted_augmented_norm;
+    double residual_norm_defect;
+    void assemble_forces();
+    void assemble_del2_u();
+    void assemble_unaugmented_del2_u();
+    void assemble_ala_augmented_u();
+    void assemble_grad_p();
+    double global_vdot();
+
+    neq=E->lmesh.neq;
+    gneq=E->mesh.neq;
+    assemble_forces(E,0);
+    force_norm=sqrt(max(global_vdot(E,E->F,E->F,lev),0.0));
+
+    /* Independently verify K_gamma-K equals the explicit AL action. */
+    assemble_del2_u(E,V,work_a,lev,1);
+    assemble_unaugmented_del2_u(E,V,work_b,lev,1);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            work_a[m][i]-=work_b[m][i];
+    predicted_penalty_norm=sqrt(max(global_vdot(
+        E,work_a,work_a,lev),0.0));
+    assemble_ala_augmented_u(E,V,work_b,lev,1);
+    penalty_norm=sqrt(max(global_vdot(E,work_b,work_b,lev),0.0));
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            work_a[m][i]-=work_b[m][i];
+    split_defect_norm=sqrt(max(global_vdot(E,work_a,work_a,lev),0.0));
+    split_defect=split_defect_norm/max(max(predicted_penalty_norm,
+                                           penalty_norm),1.0e-300);
+
+    /* Assemble the augmented residual independently. */
+    assemble_del2_u(E,V,work_a,lev,1);
+    assemble_grad_p(E,P,work_b,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            work_a[m][i]=E->F[m][i]-work_b[m][i]-work_a[m][i];
+    augmented_norm=sqrt(max(global_vdot(E,work_a,work_a,lev),0.0));
+
+    /* Assemble the original unaugmented residual independently. */
+    assemble_unaugmented_del2_u(E,V,work_a,lev,1);
+    assemble_grad_p(E,P,work_b,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            work_a[m][i]=E->F[m][i]-work_b[m][i]-work_a[m][i];
+    raw_norm=sqrt(max(global_vdot(E,work_a,work_a,lev),0.0));
+
+    /* Quantify whether the raw defect is the AL penalty component. */
+    assemble_ala_augmented_u(E,V,work_b,lev,1);
+    raw_penalty_dot=global_vdot(E,work_a,work_b,lev);
+    raw_penalty_cosine=raw_penalty_dot
+        /max(raw_norm*penalty_norm,1.0e-300);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            work_a[m][i]-=work_b[m][i];
+    predicted_augmented_norm=sqrt(max(global_vdot(
+        E,work_a,work_a,lev),0.0));
+    residual_norm_defect=fabs(predicted_augmented_norm-augmented_norm)
+        /max(max(predicted_augmented_norm,augmented_norm),1.0e-300);
+
+    *raw_rms=raw_norm/sqrt(max((double)gneq,1.0));
+    *raw_relative=raw_norm/max(force_norm,1.0e-32);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA FGMRES momentum decomposition stage=%s "
+                "iteration=%d raw_rms=%e raw_relative=%e "
+                "augmented_rms=%e augmented_relative=%e "
+                "penalty_rms=%e penalty_relative=%e "
+                "raw_penalty_cosine=%e split_defect=%e "
+                "residual_norm_defect=%e\n",stage,iteration,
+                *raw_rms,*raw_relative,
+                augmented_norm/sqrt(max((double)gneq,1.0)),
+                augmented_norm/max(force_norm,1.0e-32),
+                penalty_norm/sqrt(max((double)gneq,1.0)),
+                penalty_norm/max(force_norm,1.0e-32),
+                raw_penalty_cosine,split_defect,residual_norm_defect);
+        fflush(E->fp);
+    }
 }
 
 

@@ -399,7 +399,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("mass_norm=%e mass_relative=%e", fgmres)
         self.assertIn("Q=%e Q_relative=%e", fgmres)
         self.assertIn(
-            "strict_ala_momentum_residual_audit(E,V,P,tmpF,tmpU,lev",
+            "strict_ala_momentum_residual_audit(",
             fgmres,
         )
         self.assertIn(
@@ -427,11 +427,51 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertLess(candidate_audit, joint_acceptance)
         self.assertIn("momentum_target_not_reached", fgmres)
         self.assertIn("joint_target_reached", fgmres)
+        self.assertIn(
+            'E,V,P,tmpF,tmpU,lev,"startup",0,',
+            fgmres,
+        )
+        self.assertIn(
+            'E,V,P,tmpF,tmpU,lev,"restart",count,',
+            fgmres,
+        )
         self.assertIn("if(converged || arnoldi_breakdown)", fgmres)
         self.assertLess(
             fgmres.rindex("ALA FGMRES momentum audit"),
             fgmres.index("Strict ALA FGMRES failed joint acceptance"),
         )
+
+    def test_stage7c_momentum_decomposition_is_low_memory_and_exact(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        decomposition_start = stokes.index(
+            "static void strict_ala_momentum_decomposition_audit(",
+            stokes.index("Audit the original, unaugmented momentum"),
+        )
+        decomposition = stokes[
+            decomposition_start:
+            stokes.index(
+                "static void strict_ala_depth_diagnostics",
+                decomposition_start,
+            )
+        ]
+        self.assertIn("assemble_del2_u(E,V,work_a,lev,1);", decomposition)
+        self.assertIn(
+            "assemble_unaugmented_del2_u(E,V,work_b,lev,1);",
+            decomposition,
+        )
+        self.assertIn(
+            "assemble_ala_augmented_u(E,V,work_b,lev,1);",
+            decomposition,
+        )
+        self.assertIn("raw_penalty_cosine", decomposition)
+        self.assertIn("split_defect", decomposition)
+        self.assertIn("residual_norm_defect", decomposition)
+        self.assertNotIn("calloc", decomposition)
+        self.assertNotIn("malloc", decomposition)
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,
