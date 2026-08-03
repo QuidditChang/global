@@ -414,6 +414,17 @@ verified 11--13 iteration baseline.  Fewer pressure iterations alone is not a
 win if the added level operators increase total Stokes time.  The cfg rollback
 is a single change: `ala_pressure_multigrid=off`.
 
+The first Stage 8 startup stopped before Arnoldi because the historical
+`audit_ala_shallow_patch_preconditioner()` invoked the complete configured
+preconditioner.  It therefore included the deliberately FGMRES-only
+rediscretized V-cycle in the Schwarz SPD test and rejected its `2.64e-10`
+symmetry defect against the `1e-10` Schwarz threshold.  No V-cycle iteration
+or physical solve had run.  The audit now temporarily disables pressure MG,
+certifies only the unchanged Schwarz base, restores the flag before FGMRES,
+and labels its scope `base_without_pressure_mg`.  V-cycle safety remains the
+separate positive-energy/rollback audit; the Schwarz tolerance was not
+relaxed.
+
 ## Validation record
 
 - Strict generator: PASS.

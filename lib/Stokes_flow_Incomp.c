@@ -4543,7 +4543,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
 static void audit_ala_shallow_patch_preconditioner(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev)
 {
-    int m,e,npno;
+    int m,e,npno,pressure_multigrid_enabled;
     double local[4],global[4],left,right,defect;
     double *x[NCS],*y[NCS],*Mx[NCS],*My[NCS],*work[NCS];
 
@@ -4564,8 +4564,14 @@ static void audit_ala_shallow_patch_preconditioner(struct All_variables *E,
                          +0.197*(double)(E->parallel.me+1));
         }
     }
+    /* Certify the symmetric Schwarz baseline in isolation.  Stage 8's
+       rediscretized V-cycle is FGMRES-only and uses its own positive-energy
+       rollback, so the legacy PCG symmetry threshold does not apply to it. */
+    pressure_multigrid_enabled=E->control.ala_pressure_multigrid;
+    E->control.ala_pressure_multigrid=0;
     apply_ala_pressure_preconditioner(E,x,Mx,work,lev,-1,cache);
     apply_ala_pressure_preconditioner(E,y,My,work,lev,-1,cache);
+    E->control.ala_pressure_multigrid=pressure_multigrid_enabled;
     for(e=0;e<4;e++)
         local[e]=0.0;
     for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -4580,12 +4586,14 @@ static void audit_ala_shallow_patch_preconditioner(struct All_variables *E,
     right=global[1];
     defect=fabs(left-right)/max(fabs(left)+fabs(right),1.0e-300);
     if(E->parallel.me==0) {
-        fprintf(E->fp,"ALA MPI-overlap Schwarz audit symmetry_defect=%e "
+        fprintf(E->fp,"ALA MPI-overlap Schwarz audit "
+                "scope=base_without_pressure_mg symmetry_defect=%e "
                 "energy_x=%e energy_y=%e status=%s\n",defect,
                 global[2],global[3],
                 (defect<=1.0e-10 && global[2]>0.0 && global[3]>0.0)
                     ? "pass" : "fail");
-        fprintf(stderr,"ALA MPI-overlap Schwarz audit symmetry_defect=%e "
+        fprintf(stderr,"ALA MPI-overlap Schwarz audit "
+                "scope=base_without_pressure_mg symmetry_defect=%e "
                 "energy_x=%e energy_y=%e status=%s\n",defect,
                 global[2],global[3],
                 (defect<=1.0e-10 && global[2]>0.0 && global[3]>0.0)

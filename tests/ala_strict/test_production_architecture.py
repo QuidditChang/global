@@ -328,6 +328,26 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_pressure_multigrid requires precond=on, strict ALA",
             instructions,
         )
+        audit_start = stokes.index(
+            "static void audit_ala_shallow_patch_preconditioner"
+        )
+        audit = stokes[
+            audit_start:
+            stokes.index("/* Master loop for pressure", audit_start)
+        ]
+        disable = audit.index("E->control.ala_pressure_multigrid=0;")
+        first_apply = audit.index("apply_ala_pressure_preconditioner(", disable)
+        second_apply = audit.index(
+            "apply_ala_pressure_preconditioner(", first_apply + 1
+        )
+        restore = audit.index(
+            "E->control.ala_pressure_multigrid=pressure_multigrid_enabled;",
+            second_apply,
+        )
+        self.assertLess(disable, first_apply)
+        self.assertLess(first_apply, second_apply)
+        self.assertLess(second_apply, restore)
+        self.assertIn("scope=base_without_pressure_mg", audit)
 
     def test_stage6c_shallow_schur_is_spd_gram_with_rollback(self) -> None:
         stokes = (
