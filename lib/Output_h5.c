@@ -1779,6 +1779,8 @@ void h5output_meta(struct All_variables *E)
     status = set_attribute_int(input,
                                "ala_coupled_inner_progress_interval",
                                E->control.ala_coupled_inner_progress_interval);
+    status = set_attribute_int(input, "ala_coupled_defect_corrections",
+                               E->control.ala_coupled_defect_corrections);
     status = set_attribute_double(input,
                                   "ala_unaugmented_momentum_tolerance",
                                   E->control.ala_unaugmented_momentum_tolerance);

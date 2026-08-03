@@ -54,6 +54,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_inner_relative_tolerance",
             "ala_coupled_inner_max_cycles",
             "ala_coupled_inner_progress_interval",
+            "ala_coupled_defect_corrections",
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
@@ -107,6 +108,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_inner_progress_interval\s*=\s*20\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_defect_corrections\s*=\s*1\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -296,6 +301,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         for name in (
             "ala_coupled_inner_max_cycles",
             "ala_coupled_inner_progress_interval",
+            "ala_coupled_defect_corrections",
         ):
             self.assertIn(f'{name} = prop.int(', incompressible)
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)

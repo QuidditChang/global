@@ -61,8 +61,8 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
     def test_right_preconditioner_is_pressure_first_triangular(self) -> None:
         preconditioner = _between(
             self.stokes,
+            "static void apply_ala_coupled_triangular_once(",
             "static void apply_ala_coupled_block_preconditioner(",
-            "static float solve_ala_coupled_fgmres_core(",
         )
         pressure = preconditioner.index("apply_ala_pressure_preconditioner(")
         gradient = preconditioner.index("assemble_grad_rho_p(")
@@ -78,6 +78,31 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "velocity_work[m][i]=residual->velocity[m][i]",
             preconditioner,
         )
+
+    def test_block_defect_correction_is_multiplicative_and_reversible(self) -> None:
+        preconditioner = _between(
+            self.stokes,
+            "static void apply_ala_coupled_block_preconditioner(",
+            "static void strict_ala_coupled_preconditioner_audit(",
+        )
+        action = preconditioner.index("apply_ala_coupled_operator(")
+        defect = preconditioner.index(
+            "action_work->pressure[m][e]=residual->pressure[m][e]"
+        )
+        correction = preconditioner.rindex(
+            "ala_block_vector_axpy(E,1.0,correction_work,correction)"
+        )
+        self.assertLess(action, defect)
+        self.assertLess(defect, correction)
+        self.assertIn("ala_coupled_defect_corrections", preconditioner)
+        self.assertIn("defect_corrections=%d", self.core)
+        for path in (
+            LIB_ROOT / "Instructions.c",
+            GLOBAL_ROOT / "module/setProperties.c",
+        ):
+            self.assertIn(
+                "ala_coupled_defect_corrections requires", path.read_text()
+            )
 
     def test_coupled_velocity_solve_is_bounded_and_observable(self) -> None:
         matrix = (LIB_ROOT / "General_matrix_functions.c").read_text()
@@ -140,6 +165,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn(
             "ala_coupled_inner_progress_interval = 20", cfg
         )
+        self.assertIn("ala_coupled_defect_corrections       = 1", cfg)
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
 
 

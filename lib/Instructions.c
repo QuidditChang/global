@@ -536,6 +536,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coupled_inner_max_cycles),"200",m);
   input_int("ala_coupled_inner_progress_interval",
             &(E->control.ala_coupled_inner_progress_interval),"20",m);
+  input_int("ala_coupled_defect_corrections",
+            &(E->control.ala_coupled_defect_corrections),"0",m);
   input_double("ala_unaugmented_momentum_tolerance",
                &(E->control.ala_unaugmented_momentum_tolerance),"0.0",m);
   input_boolean("ala_feasibility_audit",
@@ -693,10 +695,17 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_coupled_inner_max_cycles must be at least one");
   if(E->control.ala_coupled_inner_progress_interval < 1)
       myerror(E, "ala_coupled_inner_progress_interval must be at least one");
+  if(E->control.ala_coupled_defect_corrections < 0 ||
+     E->control.ala_coupled_defect_corrections > 2)
+      myerror(E, "ala_coupled_defect_corrections must be between zero and two");
   if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
      strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_outer_solver must be pcg, fgmres, or coupled_fgmres");
+  if(E->control.ala_coupled_defect_corrections > 0 &&
+     strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+      myerror(E, "ala_coupled_defect_corrections requires "
+              "ala_outer_solver=coupled_fgmres");
   if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
       myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
   if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&
@@ -1445,6 +1454,7 @@ void global_default_values(E)
     E->control.ala_coupled_inner_relative_tolerance = 1.0e-2;
     E->control.ala_coupled_inner_max_cycles = 200;
     E->control.ala_coupled_inner_progress_interval = 20;
+    E->control.ala_coupled_defect_corrections = 0;
     E->control.ala_unaugmented_momentum_tolerance = 0.0;
     E->control.ala_feasibility_audit = 0;
     E->control.ala_feasibility_window = 20;

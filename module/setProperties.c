@@ -1067,6 +1067,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_inner_max_cycles, fp);
     getIntProperty(properties, "ala_coupled_inner_progress_interval",
                    E->control.ala_coupled_inner_progress_interval, fp);
+    getIntProperty(properties, "ala_coupled_defect_corrections",
+                   E->control.ala_coupled_defect_corrections, fp);
     getDoubleProperty(properties, "ala_unaugmented_momentum_tolerance",
                       E->control.ala_unaugmented_momentum_tolerance, fp);
     getIntProperty(properties, "ala_feasibility_audit",
@@ -1223,10 +1225,18 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_coupled_inner_max_cycles must be at least one");
     if(E->control.ala_coupled_inner_progress_interval < 1)
         myerror(E, "ala_coupled_inner_progress_interval must be at least one");
+    if(E->control.ala_coupled_defect_corrections < 0 ||
+       E->control.ala_coupled_defect_corrections > 2)
+        myerror(E,
+                "ala_coupled_defect_corrections must be between zero and two");
     if(strcmp(E->control.ala_outer_solver,"pcg") != 0 &&
        strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
        strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
         myerror(E, "ala_outer_solver must be pcg, fgmres, or coupled_fgmres");
+    if(E->control.ala_coupled_defect_corrections > 0 &&
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+        myerror(E, "ala_coupled_defect_corrections requires "
+                "ala_outer_solver=coupled_fgmres");
     if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
         myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
     if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&

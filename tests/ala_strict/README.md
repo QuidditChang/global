@@ -72,6 +72,11 @@ velocity and pressure components of `r`, `z`, and `Az`, their componentwise
 defects, and alignment, so a restarted-FGMRES tail can be assigned to a block
 without changing the Krylov recurrence.
 
+Stage 9d.5 optionally refines the complete triangular block inverse with
+`z <- z + P_tri^-1(r-Az)`.  The defect uses the exact coupled operator, so it
+retains all `D+C` cross terms; setting the correction count to zero reproduces
+the Stage 9d.4 preconditioner exactly.
+
 Stage 9d.1 additionally verifies that the coupled preconditioner is an upper
 block-triangular pressure-first map, and that only its velocity MG call uses a
 bounded, periodically reported cycle budget.  The historical velocity-solver
