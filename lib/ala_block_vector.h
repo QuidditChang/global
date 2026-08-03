@@ -43,5 +43,9 @@ double ala_block_vector_norm(struct All_variables *E,
                              const struct ala_block_vector *vector,
                              double velocity_weight,
                              double pressure_weight);
+void ala_block_vector_component_norms(struct All_variables *E,
+                                      const struct ala_block_vector *vector,
+                                      double *velocity_norm,
+                                      double *pressure_mass_norm);
 
 #endif

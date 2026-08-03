@@ -17,9 +17,9 @@ The phase test verifies:
 
 The production-architecture test also verifies:
 
-- the strict cfg changes only the reference-state inputs and the explicit
-  Stage 6d cross-rank aggregate experiment, Stage 8 recursive pressure
-  multigrid transfer/operator wiring;
+- the strict cfg changes only the reference-state inputs and explicit solver
+  experiments, including the Stage 9d coupled-FGMRES selector and the Stage 8
+  pressure-MG rollback;
 - the eight-column strict reference-state order and pure fitted Tref endpoints;
 - `E->T` remains the sole temperature state and assimilation target;
 - no `DataT` cache or runtime strict-audit hook remains;
@@ -32,7 +32,7 @@ The production-architecture test also verifies:
   unaugmented momentum audit.
 
 The coupled-operator architecture test verifies the first monolithic-solver
-foundation without selecting it in production:
+foundation and its explicit Stage 9d selector:
 
 - one allocation-free action returns `K_gamma*u+(D+C)^T*p` and `(D+C)*u`;
 - the block action never assembles or consumes the pressure-dependent legacy
@@ -40,8 +40,7 @@ foundation without selecting it in production:
 - a finest-level helper reconstructs the pressure-independent momentum RHS as
   `E->F + (D+C)^T*p - D^T*p`;
 - destructive field aliases are rejected; and
-- Stage 7d/Stage 8 remain the only runtime paths until a coupled Krylov method
-  is added and validated.
+- the legacy Schur FGMRES remains available as a separate rollback path.
 
 The block-vector architecture test verifies the Stage 9c mixed-vector
 foundation:
@@ -53,6 +52,18 @@ foundation:
   P0 pressure-volume mass in one MPI reduction and explicit positive weights;
 - no incompressible pressure-mean projection is silently applied to strict
   ALA, where `C^T` generally makes a constant dynamic pressure observable.
+
+The coupled-FGMRES architecture test verifies the Stage 9d feasibility path:
+
+- an explicit `coupled_fgmres` selector leaves legacy `fgmres` intact;
+- the full residual is formed from the pressure-independent force and the
+  monolithic strict-ALA block action;
+- the right block preconditioner uses one velocity solve and the signed
+  pressure Schur inverse approximation;
+- every Krylov correction updates velocity and pressure with the same basis
+  coefficient, followed by explicit block-residual replacement; and
+- acceptance requires both physical continuity cancellation and the original
+  unaugmented momentum residual when its audit gate is enabled.
 
 Future test groups remain reserved for operator adjoint, energy-budget, and
 multigrid/Galerkin validation.

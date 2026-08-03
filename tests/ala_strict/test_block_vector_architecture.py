@@ -46,9 +46,10 @@ class BlockVectorArchitectureTest(unittest.TestCase):
         self.assertIn(
             "MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM", self.source
         )
-        self.assertIn("velocity_weight*global[0]", self.source)
-        self.assertIn("pressure_weight*global[1]", self.source)
+        self.assertIn("velocity_weight*component_dot[0]", self.source)
+        self.assertIn("pressure_weight*component_dot[1]", self.source)
         self.assertIn("metric weights must be positive", self.source)
+        self.assertIn("ala_block_vector_component_norms", self.source)
 
     def test_legacy_makefile_template_links_new_module(self) -> None:
         makefile = (LIB_ROOT / "Makefile.in").read_text()
@@ -62,10 +63,12 @@ class BlockVectorArchitectureTest(unittest.TestCase):
         self.assertNotIn("remove_pressure_mean", combined)
         self.assertNotIn("project_pressure_nullspace", combined)
 
-    def test_module_is_not_selected_by_existing_solver(self) -> None:
+    def test_module_is_selected_only_by_explicit_coupled_solver(self) -> None:
         stokes = (LIB_ROOT / "Stokes_flow_Incomp.c").read_text()
         drive = (LIB_ROOT / "Drive_solvers.c").read_text()
-        self.assertNotIn("ala_block_vector_create", stokes)
+        self.assertIn("solve_ala_coupled_fgmres_core", stokes)
+        self.assertIn("ala_block_vector_create", stokes)
+        self.assertIn('"coupled_fgmres"', stokes)
         self.assertNotIn("ala_block_vector_create", drive)
 
 

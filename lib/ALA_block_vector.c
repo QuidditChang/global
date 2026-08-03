@@ -171,11 +171,9 @@ void ala_block_vector_axpy(struct All_variables *E, double scale,
 }
 
 
-double ala_block_vector_dot(struct All_variables *E,
-                            const struct ala_block_vector *left,
-                            const struct ala_block_vector *right,
-                            double velocity_weight,
-                            double pressure_weight)
+static void ala_block_vector_component_dot(
+    struct All_variables *E, const struct ala_block_vector *left,
+    const struct ala_block_vector *right, double component_dot[2])
 {
     int m,i,level,neq,npno;
     double local[2],global[2],duplicate;
@@ -185,9 +183,6 @@ double ala_block_vector_dot(struct All_variables *E,
     level=left->level;
     ala_block_vector_require_level(E,left,level);
     ala_block_vector_require_level(E,right,level);
-    if(!isfinite(velocity_weight) || velocity_weight<=0.0 ||
-       !isfinite(pressure_weight) || pressure_weight<=0.0)
-        myerror(E,"Strict-ALA block metric weights must be positive");
     neq=E->lmesh.NEQ[level];
     npno=E->lmesh.NPNO[level];
     local[0]=0.0;
@@ -205,7 +200,25 @@ double ala_block_vector_dot(struct All_variables *E,
                        * left->pressure[m][i]*right->pressure[m][i];
     }
     MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-    return velocity_weight*global[0]+pressure_weight*global[1];
+    component_dot[0]=global[0];
+    component_dot[1]=global[1];
+}
+
+
+double ala_block_vector_dot(struct All_variables *E,
+                            const struct ala_block_vector *left,
+                            const struct ala_block_vector *right,
+                            double velocity_weight,
+                            double pressure_weight)
+{
+    double component_dot[2];
+
+    if(!isfinite(velocity_weight) || velocity_weight<=0.0 ||
+       !isfinite(pressure_weight) || pressure_weight<=0.0)
+        myerror(E,"Strict-ALA block metric weights must be positive");
+    ala_block_vector_component_dot(E,left,right,component_dot);
+    return velocity_weight*component_dot[0]
+          +pressure_weight*component_dot[1];
 }
 
 
@@ -223,4 +236,22 @@ double ala_block_vector_norm(struct All_variables *E,
     if(!isfinite(norm_squared) || norm_squared<0.0)
         myerror(E,"Invalid strict-ALA block-vector norm");
     return sqrt(norm_squared);
+}
+
+
+void ala_block_vector_component_norms(struct All_variables *E,
+                                      const struct ala_block_vector *vector,
+                                      double *velocity_norm,
+                                      double *pressure_mass_norm)
+{
+    double component_dot[2];
+
+    if(velocity_norm==NULL || pressure_mass_norm==NULL)
+        myerror(E,"Missing strict-ALA block component norm output");
+    ala_block_vector_component_dot(E,vector,vector,component_dot);
+    if(!isfinite(component_dot[0]) || component_dot[0]<0.0 ||
+       !isfinite(component_dot[1]) || component_dot[1]<0.0)
+        myerror(E,"Invalid strict-ALA block component norm");
+    *velocity_norm=sqrt(component_dot[0]);
+    *pressure_mass_norm=sqrt(component_dot[1]);
 }
