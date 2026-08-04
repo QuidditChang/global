@@ -66,6 +66,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_coarse_weight",
             "ala_coarse_residual_levels",
             "file_vbcs",
+            "lith_age",
+            "lith_age_time",
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
@@ -139,7 +141,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*file_vbcs\s*=\s*0\s*$",
+            r"(?m)^\s*file_vbcs\s*=\s*1\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*lith_age\s*=\s*0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*lith_age_time\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
