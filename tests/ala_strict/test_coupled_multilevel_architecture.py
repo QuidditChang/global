@@ -53,8 +53,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "assemble_div_rho_u(E,y->velocity,Ay->pressure,level);",
             "K_symmetry_defect=%e",
             "G_adjoint_defect=%e",
+            "G_element_adjoint_defect=%e",
             "K_bilinear=(%e,%e)",
             "G_bilinear=(%e,%e)",
+            "G_element_bilinear=(%e,%e)",
             "pressure_mass_range=[%e,%e]",
             "duplicate_velocity_dofs=%d",
         ):
@@ -66,6 +68,18 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("right_vector_norm*right_action_norm", scaling)
         self.assertNotIn("fabs(left)+fabs(right)", scaling)
         self.assertIn("output=(output_index==0) ? E->fp : stderr;", audit)
+        self.assertIn("assemble_grad_rho_p_local_terms(", audit)
+        self.assertIn("MPI_Allreduce(&local_g_element_right", audit)
+
+    def test_production_gradient_wraps_same_local_transpose_terms(self) -> None:
+        gradient = _function_body(
+            self.element, "void assemble_grad_rho_p("
+        )
+        self.assertIn(
+            "assemble_grad_rho_p_local_terms(E,P,gradP,lev);", gradient
+        )
+        self.assertIn("(E->solver.exchange_id_d)(E, gradP, lev);", gradient)
+        self.assertIn("strip_bcs_from_residual(E,gradP,lev);", gradient)
 
     def test_probe_uses_owned_velocity_representation(self) -> None:
         probe = _function_body(

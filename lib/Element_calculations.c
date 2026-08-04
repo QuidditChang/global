@@ -942,11 +942,11 @@ return;
    This is the exact discrete transpose of assemble_div_rho_u().
    ============================================================== */
 
-void assemble_grad_rho_p(struct All_variables *E,
-                         double **P, double **gradP, int lev)
+static void assemble_grad_rho_p_local_terms(struct All_variables *E,
+                                            double **P, double **gradP,
+                                            int lev)
 {
   int m,e,i,j1,j2,j3,p,a,b,nel,neq;
-  void strip_bcs_from_residual();
 
   const int ends=enodes[E->mesh.nsd];
   const int dims=E->mesh.nsd;
@@ -977,7 +977,15 @@ void assemble_grad_rho_p(struct All_variables *E,
       }
     }
   }
+}
 
+
+void assemble_grad_rho_p(struct All_variables *E,
+                         double **P, double **gradP, int lev)
+{
+  void strip_bcs_from_residual();
+
+  assemble_grad_rho_p_local_terms(E,P,gradP,lev);
   (E->solver.exchange_id_d)(E, gradP, lev);
   strip_bcs_from_residual(E,gradP,lev);
 
@@ -1927,7 +1935,9 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     int level,m,e,nz,child;
     int local_invalid,global_invalid,local_skips,global_skips,output_index;
     double left,right,unused,k_defect,g_defect,v_transfer_defect,p_transfer_defect;
-    double k_left,k_right,g_left,g_right;
+    double k_left,k_right,g_left,g_right,g_element_right;
+    double local_g_element_right;
+    double g_element_defect;
     double x_velocity_norm,x_pressure_norm,y_velocity_norm,y_pressure_norm;
     double Ax_velocity_norm,Ax_pressure_norm,Ay_velocity_norm,Ay_pressure_norm;
     double coarse_velocity_norm,coarse_pressure_norm;
@@ -1978,6 +1988,21 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
         g_defect=ala_norm_scaled_adjoint_defect(
             g_left,g_right,x_pressure_norm,Ay_pressure_norm,
             y_velocity_norm,Ax_velocity_norm);
+
+        /* Separate the element transpose from distributed additive assembly.
+         * The unexchanged local G^T contributions dotted with the replicated
+         * velocity must equal the elementwise p^T G u exactly. */
+        assemble_grad_rho_p_local_terms(
+            E,x->pressure,Ax->velocity,level);
+        local_g_element_right=0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[level];e++)
+                local_g_element_right += y->velocity[m][e]
+                                       *Ax->velocity[m][e];
+        MPI_Allreduce(&local_g_element_right,&g_element_right,1,
+                      MPI_DOUBLE,MPI_SUM,E->parallel.world);
+        g_element_defect=fabs(g_left-g_element_right)
+            /max(fabs(g_left)+fabs(g_element_right),1.0e-300);
 
         v_transfer_defect=0.0;
         p_transfer_defect=0.0;
@@ -2080,14 +2105,17 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
             fprintf(output,
                 "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
                 "K_symmetry_defect=%e G_adjoint_defect=%e "
+                "G_element_adjoint_defect=%e "
                 "K_bilinear=(%e,%e) G_bilinear=(%e,%e) "
+                "G_element_bilinear=(%e,%e) "
                 "velocity_transfer_adjoint_defect=%e "
                 "pressure_transfer_adjoint_defect=%e "
                 "beta_range=[%e,%e] beta_nested_defect=%e "
                 "pressure_mass_range=[%e,%e] "
                 "duplicate_velocity_dofs=%d invalid=%d\n",
                 level,E->lmesh.NEQ[level],E->lmesh.NPNO[level],
-                k_defect,g_defect,k_left,k_right,g_left,g_right,
+                k_defect,g_defect,g_element_defect,
+                k_left,k_right,g_left,g_right,g_left,g_element_right,
                 v_transfer_defect,p_transfer_defect,
                 global_min[0],global_max[0],global_beta_nested_defect,
                 global_min[1],global_max[1],
