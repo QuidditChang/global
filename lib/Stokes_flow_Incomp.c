@@ -168,6 +168,156 @@ static void apply_ala_coupled_triangular_once(
 }
 
 
+static int ala_solve_cached_element_k(const higher_precision *chol,
+                                      const double rhs[ALA_VANKA_DOF],
+                                      double solution[ALA_VANKA_DOF])
+{
+    int i,j;
+    double forward[ALA_VANKA_DOF],sum,diagonal;
+
+    for(i=0;i<ALA_VANKA_DOF;i++) {
+        sum=rhs[i];
+        for(j=0;j<i;j++)
+            sum -= chol[i*(i+1)/2+j]*forward[j];
+        diagonal=chol[i*(i+1)/2+i];
+        if(!isfinite(diagonal) || diagonal<=0.0)
+            return(0);
+        forward[i]=sum/diagonal;
+    }
+    for(i=ALA_VANKA_DOF-1;i>=0;i--) {
+        sum=forward[i];
+        for(j=i+1;j<ALA_VANKA_DOF;j++)
+            sum -= chol[j*(j+1)/2+i]*solution[j];
+        solution[i]=sum/chol[i*(i+1)/2+i];
+        if(!isfinite(solution[i]))
+            return(0);
+    }
+    return(1);
+}
+
+
+/* One genuine mixed element-Vanka application for Stage 9f.1.  The cached
+ * 24x24 K_gamma Cholesky factors define a stable local velocity inverse.  A
+ * scalar Schur complement then solves the element's P0 pressure together
+ * with its 24 velocity dofs:
+ *
+ *   du = K_P^-1 (ru-G_P^T dp),
+ *   dp = (G_P K_P^-1 ru-rp)/(G_P K_P^-1 G_P^T+epsilon M_P).
+ *
+ * Velocity overlap is assembled with the same partition of unity as the
+ * existing full-element smoother; P0 pressure is element-local. */
+static void apply_ala_coupled_element_vanka_once(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    struct ala_block_vector *correction, struct ala_block_vector *delta,
+    int lev)
+{
+    int m,e,a,d,i,node,eq,fixed,local_patches,global_patches;
+    double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
+    double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
+    double pressure_rhs,pressure_solution,schur,regularization;
+    double damping,weight,local_min,local_max,global_min,global_max;
+    higher_precision *chol;
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+    const int neq=E->lmesh.NEQ[lev];
+    const int npno=E->lmesh.NPNO[lev];
+
+    if(loc_mat_size[dims]!=ALA_VANKA_DOF)
+        myerror(E,"Coupled element-Vanka requires 3-D 24-dof elements");
+    damping=E->control.ala_element_vanka_damping;
+    regularization=E->control.ala_element_vanka_regularization;
+    ala_block_vector_zero(E,correction);
+    ala_block_vector_zero(E,delta);
+    local_patches=0;
+    local_min=1.0e300;
+    local_max=0.0;
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NEL[lev];e++) {
+            if(!E->ALA_vanka_valid[lev][m][e])
+                myerror(E,"Coupled element-Vanka velocity factor is invalid");
+            chol=E->ALA_vanka_chol[lev][m]+e*ALA_VANKA_CHOL_SIZE;
+            for(a=1;a<=ends;a++) {
+                node=E->IEN[lev][m][e].node[a];
+                for(d=0;d<dims;d++) {
+                    i=(a-1)*dims+d;
+                    eq=E->ID[lev][m][node].doff[d+1];
+                    fixed=(d==0 && (E->NODE[lev][m][node]&VBX)) ||
+                          (d==1 && (E->NODE[lev][m][node]&VBY)) ||
+                          (d==2 && (E->NODE[lev][m][node]&VBZ));
+                    velocity_rhs[i]=fixed ? 0.0 : residual->velocity[m][eq];
+                    gradient[i]=fixed ? 0.0 :
+                        E->elt_del[lev][m][e].g[i][0]
+                       +E->elt_c[lev][m][e].c[i][0];
+                }
+            }
+            for(i=0;i<ALA_VANKA_DOF;i++)
+                velocity_base[i]=velocity_pressure[i]=0.0;
+            if(!ala_solve_cached_element_k(
+                   chol,velocity_rhs,velocity_base) ||
+               !ala_solve_cached_element_k(
+                   chol,gradient,velocity_pressure))
+                myerror(E,"Coupled element-Vanka velocity solve failed");
+            pressure_rhs=residual->pressure[m][e];
+            schur=regularization*E->ECO[lev][m][e].area;
+            pressure_solution=-pressure_rhs;
+            for(i=0;i<ALA_VANKA_DOF;i++) {
+                schur += gradient[i]*velocity_pressure[i];
+                pressure_solution += gradient[i]*velocity_base[i];
+            }
+            if(!isfinite(schur) || schur<=1.0e-300)
+                myerror(E,"Coupled element-Vanka pressure Schur is invalid");
+            pressure_solution /= schur;
+            delta->pressure[m][e]=pressure_solution;
+            for(a=1;a<=ends;a++) {
+                node=E->IEN[lev][m][e].node[a];
+                for(d=0;d<dims;d++) {
+                    i=(a-1)*dims+d;
+                    eq=E->ID[lev][m][node].doff[d+1];
+                    delta->velocity[m][eq] += velocity_base[i]
+                        -velocity_pressure[i]*pressure_solution;
+                }
+            }
+            local_min=min(local_min,schur);
+            local_max=max(local_max,schur);
+            local_patches++;
+        }
+
+    (E->solver.exchange_id_d)(E,delta->velocity,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(eq=0;eq<neq;eq++) {
+            weight=E->ALA_vanka_overlap_BI[lev][m][eq];
+            correction->velocity[m][eq]=damping*weight
+                                            *delta->velocity[m][eq];
+        }
+        correction->velocity[m][neq]=0.0;
+        correction->pressure[m][0]=0.0;
+        for(e=1;e<=npno;e++)
+            correction->pressure[m][e]=damping*delta->pressure[m][e];
+    }
+    MPI_Allreduce(&local_patches,&global_patches,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
+                "global_patches=%d damping=%e pressure_regularization=%e "
+                "local_schur_range=[%e,%e] fallback_count=0\n",
+                lev,global_patches,damping,regularization,
+                global_min,global_max);
+        fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
+                "global_patches=%d damping=%e pressure_regularization=%e "
+                "local_schur_range=[%e,%e] fallback_count=0\n",
+                lev,global_patches,damping,regularization,
+                global_min,global_max);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+}
+
+
 static void apply_ala_coupled_block_preconditioner(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction,
@@ -180,6 +330,11 @@ static void apply_ala_coupled_block_preconditioner(
 
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
+    if(E->control.ala_coupled_element_vanka) {
+        apply_ala_coupled_element_vanka_once(
+            E,residual,correction,correction_work,lev);
+        return;
+    }
     apply_ala_coupled_triangular_once(
         E,residual,correction,pressure_work,velocity_work,lev,iteration,cache);
 
@@ -287,6 +442,7 @@ static float solve_ala_coupled_fgmres_core(
     struct ala_block_vector *preconditioner_delta;
     struct ala_block_vector **vb,**zb;
     const char *acceptance_status;
+    const char *preconditioner_name;
 
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
@@ -371,16 +527,18 @@ static float solve_ala_coupled_fgmres_core(
     explicit_norm=initial_block_norm;
     block_relative=1.0;
     augmented_momentum_relative=velocity_component/force_norm;
+    preconditioner_name=E->control.ala_coupled_element_vanka
+        ? "coupled_element_vanka" : "upper_block_triangular";
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
-                "preconditioner=upper_block_triangular "
+                "preconditioner=%s "
                 "defect_corrections=%d "
                 "inner_relative_tolerance=%e inner_max_cycles=%d "
                 "inner_progress_interval=%d "
                 "metric_weights=(velocity_force:%e,pressure_algebraic:%e) "
                 "block_norm=%e momentum_component=%e "
                 "continuity_component=%e cancellation=%e "
-                "raw_momentum_relative=%e\n",restart,
+                "raw_momentum_relative=%e\n",restart,preconditioner_name,
                 E->control.ala_coupled_defect_corrections,
                 E->control.ala_coupled_inner_relative_tolerance,
                 E->control.ala_coupled_inner_max_cycles,
@@ -388,11 +546,11 @@ static float solve_ala_coupled_fgmres_core(
                 velocity_weight,pressure_weight,initial_block_norm,velocity_component,
                 pressure_component,cancellation_l2,momentum_relative);
         fprintf(stderr,"ALA COUPLED FGMRES startup restart=%d "
-                "preconditioner=upper_block_triangular "
+                "preconditioner=%s "
                 "defect_corrections=%d "
                 "inner_relative_tolerance=%e inner_max_cycles=%d "
                 "block_norm=%e cancellation=%e "
-                "raw_momentum_relative=%e\n",restart,
+                "raw_momentum_relative=%e\n",restart,preconditioner_name,
                 E->control.ala_coupled_defect_corrections,
                 E->control.ala_coupled_inner_relative_tolerance,
                 E->control.ala_coupled_inner_max_cycles,initial_block_norm,

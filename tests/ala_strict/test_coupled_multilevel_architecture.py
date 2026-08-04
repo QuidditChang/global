@@ -108,6 +108,17 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             '"ala_coupled_first_preconditioner_audit_only",',
             self.properties,
         )
+        self.assertIn("int ala_coupled_element_vanka;", self.defs)
+        self.assertIn(
+            'input_boolean("ala_coupled_element_vanka",', self.instructions
+        )
+        self.assertIn(
+            '"ala_coupled_element_vanka", default=False', self.pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_coupled_element_vanka",',
+            self.properties,
+        )
 
     def test_first_preconditioner_audit_stops_after_action_audit(self) -> None:
         core = _function_body(
@@ -258,6 +269,30 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "struct ala_block_vector *correction",
         ):
             self.assertIn(token, self.header)
+
+    def test_stage9f1_element_patch_solves_both_fields(self) -> None:
+        smoother = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_element_vanka_once(",
+        )
+        for token in (
+            "E->ALA_vanka_chol[lev][m]",
+            "E->elt_del[lev][m][e].g[i][0]",
+            "E->elt_c[lev][m][e].c[i][0]",
+            "pressure_solution /= schur;",
+            "velocity_base[i]",
+            "-velocity_pressure[i]*pressure_solution",
+            "correction->pressure[m][e]",
+            "ALA COUPLED ELEMENT VANKA APPLICATION",
+            "local_schur_range=[%e,%e]",
+            "fallback_count=0",
+        ):
+            self.assertIn(token, smoother)
+        block = _function_body(
+            self.stokes, "static void apply_ala_coupled_block_preconditioner("
+        )
+        self.assertIn("if(E->control.ala_coupled_element_vanka)", block)
+        self.assertIn("apply_ala_coupled_element_vanka_once(", block)
 
 
 if __name__ == "__main__":
