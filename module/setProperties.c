@@ -1214,6 +1214,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_element_vanka_damping, fp);
     getDoubleProperty(properties, "ala_element_vanka_regularization",
                       E->control.ala_element_vanka_regularization, fp);
+    getIntProperty(properties, "ala_element_vanka_rebuild_interval",
+                   E->control.ala_element_vanka_rebuild_interval, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)
         myerror(E, "ala_schur_symmetry_tolerance must be positive");
     if(E->control.ala_augmented_lagrangian_gamma < 0.0)
@@ -1490,6 +1492,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_element_vanka_regularization < 0.0 ||
        E->control.ala_element_vanka_regularization > 0.1)
         myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
+    if(E->control.ala_element_vanka_rebuild_interval < 1 ||
+       E->control.ala_element_vanka_rebuild_interval > 100)
+        myerror(E, "ala_element_vanka_rebuild_interval must be in [1,100]");
 
     if(E->control.inv_gruneisen != 0) {
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */

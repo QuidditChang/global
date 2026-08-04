@@ -46,6 +46,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
             "steps",
+            "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
             "ala_beta_element_source",
@@ -167,7 +168,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*steps\s*=\s*16\s*$",
+            r"(?m)^\s*steps\s*=\s*11\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_element_vanka_rebuild_interval\s*=\s*4\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -721,6 +726,48 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ALA strict force reassembled after stiffness update",
             solver,
         )
+
+    def test_stage9g_lags_only_vanka_preconditioner_factors(self) -> None:
+        construct = (GLOBAL_ROOT / "lib" / "Construct_arrays.c").read_text(
+            encoding="utf-8"
+        )
+        instructions = (GLOBAL_ROOT / "lib" / "Instructions.c").read_text(
+            encoding="utf-8"
+        )
+        properties = (
+            GLOBAL_ROOT / "module" / "setProperties.c"
+        ).read_text(encoding="utf-8")
+        pyre = (
+            GLOBAL_ROOT
+            / "CitcomS/Components/Stokes_solver/Incompressible.py"
+        ).read_text(encoding="utf-8")
+        output = (GLOBAL_ROOT / "lib" / "Output_h5.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'input_int("ala_element_vanka_rebuild_interval",', instructions
+        )
+        self.assertIn(
+            '"ala_element_vanka_rebuild_interval", default=1', pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_element_vanka_rebuild_interval",',
+            properties,
+        )
+        self.assertIn("ala_element_vanka_rebuild_interval", output)
+        self.assertIn("ala_element_vanka_last_build_cycle", construct)
+        self.assertIn("factor_age>=0", construct)
+        self.assertIn("build_ala_element_vanka_factors(E);", construct)
+        self.assertIn("action=reuse", construct)
+        self.assertIn("scope=preconditioner_only", construct)
+        self.assertIn("current_operator=reassembled", construct)
+        self.assertIn("build_seconds_max=%e", construct)
+        for source in (instructions, properties):
+            self.assertIn(
+                "ala_element_vanka_rebuild_interval must be in [1,100]",
+                source,
+            )
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,

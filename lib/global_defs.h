@@ -556,6 +556,8 @@ struct CONTROL {
     int ala_element_vanka_smoother;
     double ala_element_vanka_damping;
     double ala_element_vanka_regularization;
+    int ala_element_vanka_rebuild_interval;
+    int ala_element_vanka_last_build_cycle;
 
     /* surface temperature */
     float surface_temp;

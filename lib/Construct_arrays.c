@@ -502,10 +502,12 @@ void build_ala_element_vanka_factors(struct All_variables *E)
     double L[ALA_VANKA_DOF*ALA_VANKA_DOF];
     double sum,pivot,maxdiag,global_diag,external,shift;
     double local_min_ratio,global_min_ratio,local_megabytes,global_max_megabytes;
+    double build_start,build_seconds,global_build_seconds;
     higher_precision *cache;
     void get_elt_k();
     void get_ala_aug_k();
     void myerror();
+    double CPU_time0();
     const int dims=E->mesh.nsd;
     const int ends=enodes[dims];
     const int n=loc_mat_size[dims];
@@ -513,6 +515,7 @@ void build_ala_element_vanka_factors(struct All_variables *E)
     if(n!=ALA_VANKA_DOF)
         myerror(E,"Full ALA element-Vanka requires 3-D 24-dof elements");
 
+    build_start=CPU_time0();
     local_elements=0;
     local_megabytes=0.0;
     local_min_ratio=1.0e300;
@@ -611,19 +614,26 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                   E->parallel.world);
     MPI_Allreduce(&local_megabytes,&global_max_megabytes,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
+    build_seconds=CPU_time0()-build_start;
+    MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
-                "regularization=%e min_pivot_ratio=%e\n",
+                "regularization=%e min_pivot_ratio=%e "
+                "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
-                E->control.ala_element_vanka_regularization,global_min_ratio);
+                E->control.ala_element_vanka_regularization,global_min_ratio,
+                global_build_seconds,E->monitor.solution_cycles);
         fprintf(stderr,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
-                "regularization=%e min_pivot_ratio=%e\n",
+                "regularization=%e min_pivot_ratio=%e "
+                "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
-                E->control.ala_element_vanka_regularization,global_min_ratio);
+                E->control.ala_element_vanka_regularization,global_min_ratio,
+                global_build_seconds,E->monitor.solution_cycles);
         fflush(E->fp);
         fflush(stderr);
     }
@@ -913,8 +923,44 @@ void construct_stiffness_B_matrix(E)
 
   if (E->control.NMULTIGRID || E->control.NASSEMBLE) {
     construct_node_ks(E);
-    if(E->control.ala_element_vanka_smoother)
-      build_ala_element_vanka_factors(E);
+    if(E->control.ala_element_vanka_smoother) {
+      int rebuild_vanka=1;
+      int factor_age=E->monitor.solution_cycles
+          -E->control.ala_element_vanka_last_build_cycle;
+
+      /* These factors are a preconditioner, not the physical operator.
+         For temperature-dependent viscosity the matrix changes every step,
+         but FGMRES still audits and converges the current assembled operator.
+         Reusing a recent factorization therefore changes cost and convergence
+         only.  The default interval of one preserves the historical path. */
+      if(E->control.ala_coupled_element_vanka &&
+         E->control.ala_element_vanka_rebuild_interval>1 &&
+         E->control.ala_element_vanka_last_build_cycle>=0 &&
+         factor_age>=0 &&
+         factor_age<E->control.ala_element_vanka_rebuild_interval)
+        rebuild_vanka=0;
+      if(rebuild_vanka) {
+        build_ala_element_vanka_factors(E);
+        E->control.ala_element_vanka_last_build_cycle=
+            E->monitor.solution_cycles;
+      }
+      else if(E->parallel.me==0) {
+        fprintf(E->fp,"ALA full element-Vanka factors action=reuse "
+                "source_cycle=%d current_cycle=%d age=%d interval=%d "
+                "scope=preconditioner_only current_operator=reassembled\n",
+                E->control.ala_element_vanka_last_build_cycle,
+                E->monitor.solution_cycles,factor_age,
+                E->control.ala_element_vanka_rebuild_interval);
+        fprintf(stderr,"ALA full element-Vanka factors action=reuse "
+                "source_cycle=%d current_cycle=%d age=%d interval=%d "
+                "scope=preconditioner_only current_operator=reassembled\n",
+                E->control.ala_element_vanka_last_build_cycle,
+                E->monitor.solution_cycles,factor_age,
+                E->control.ala_element_vanka_rebuild_interval);
+        fflush(E->fp);
+        fflush(stderr);
+      }
+    }
   }
   else {
     construct_elt_ks(E);
