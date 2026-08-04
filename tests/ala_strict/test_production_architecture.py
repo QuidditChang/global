@@ -133,7 +133,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_multilevel_coarse_sweeps\s*=\s*12\s*$",
+            r"(?m)^\s*ala_coupled_multilevel_coarse_sweeps\s*=\s*24\s*$",
         )
         self.assertRegex(
             strict_text,
