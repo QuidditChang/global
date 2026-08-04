@@ -379,7 +379,9 @@ static void apply_ala_coupled_multilevel_vcycle(
             E,lev-1,coarse_correction->velocity,smooth->velocity);
         ala_coupled_prolong_pressure_p0(
             E,lev-1,coarse_correction->pressure,smooth->pressure);
-        ala_block_vector_axpy(E,1.0,smooth,correction);
+        ala_block_vector_axpy(
+            E,E->control.ala_coupled_multilevel_coarse_weight,
+            smooth,correction);
         ala_block_vector_destroy(E,coarse_residual);
         ala_block_vector_destroy(E,coarse_correction);
     }
@@ -416,14 +418,16 @@ static void apply_ala_coupled_block_preconditioner(
         if(E->parallel.me==0) {
             fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=2\n",
+                    "coarse_sweeps=2 coarse_weight=%e\n",
                     E->mesh.levmax-E->mesh.levmin+1,
-                    E->mesh.levmin,E->mesh.levmax);
+                    E->mesh.levmin,E->mesh.levmax,
+                    E->control.ala_coupled_multilevel_coarse_weight);
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=2\n",
+                    "coarse_sweeps=2 coarse_weight=%e\n",
                     E->mesh.levmax-E->mesh.levmin+1,
-                    E->mesh.levmin,E->mesh.levmax);
+                    E->mesh.levmin,E->mesh.levmax,
+                    E->control.ala_coupled_multilevel_coarse_weight);
             fflush(E->fp);
             fflush(stderr);
         }

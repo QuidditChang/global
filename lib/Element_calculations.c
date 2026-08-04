@@ -1769,10 +1769,12 @@ void ala_coupled_prolong_velocity(struct All_variables *E, int coarse_level,
                                   double **coarse, double **fine)
 {
     void interp_vector();
+    void strip_bcs_from_residual();
 
     if(coarse_level<E->mesh.levmin || coarse_level>=E->mesh.levmax)
         myerror(E,"Invalid coupled velocity prolongation level");
     interp_vector(E,coarse_level,coarse,fine);
+    strip_bcs_from_residual(E,fine,coarse_level+1);
 }
 
 

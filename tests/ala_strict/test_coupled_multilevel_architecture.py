@@ -131,6 +131,21 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             'getIntProperty(properties, "ala_coupled_multilevel_vcycle",',
             self.properties,
         )
+        self.assertIn(
+            "double ala_coupled_multilevel_coarse_weight;", self.defs
+        )
+        self.assertIn(
+            'input_double("ala_coupled_multilevel_coarse_weight",',
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_multilevel_coarse_weight", default=1.0', self.pyre
+        )
+        self.assertIn(
+            'getDoubleProperty(properties, '
+            '"ala_coupled_multilevel_coarse_weight",',
+            self.properties,
+        )
 
     def test_first_preconditioner_audit_stops_after_action_audit(self) -> None:
         core = _function_body(
@@ -322,7 +337,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "apply_ala_coupled_multilevel_vcycle(",
             "ala_coupled_prolong_velocity(",
             "ala_coupled_prolong_pressure_p0(",
-            "ala_block_vector_axpy(E,1.0,smooth,correction);",
+            "E->control.ala_coupled_multilevel_coarse_weight",
         ):
             self.assertIn(token, vcycle)
         block = _function_body(
@@ -330,6 +345,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("if(E->control.ala_coupled_multilevel_vcycle)", block)
         self.assertIn("ALA COUPLED MULTILEVEL VCYCLE APPLICATION", block)
+        self.assertIn("coarse_weight=%e", block)
 
 
 if __name__ == "__main__":

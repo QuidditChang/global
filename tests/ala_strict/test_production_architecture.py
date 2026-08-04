@@ -59,6 +59,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_first_preconditioner_audit_only",
             "ala_coupled_element_vanka",
             "ala_coupled_multilevel_vcycle",
+            "ala_coupled_multilevel_coarse_weight",
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
@@ -104,6 +105,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_multilevel_vcycle\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_multilevel_coarse_weight\s*=\s*0\.5\s*$",
         )
         self.assertRegex(
             strict_text,
