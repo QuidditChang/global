@@ -494,6 +494,7 @@ struct CONTROL {
     double ala_coupled_multilevel_coarse_weight;
     int ala_coupled_shallow_vanka_layers;
     int ala_coupled_shallow_vanka_sweeps;
+    int ala_coupled_shallow_vanka_warm_sweeps;
     double ala_unaugmented_momentum_tolerance;
     int ala_feasibility_audit;
     int ala_feasibility_window;

@@ -45,6 +45,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
+            "steps",
             "refstate_file",
             "piterations",
             "ala_beta_element_source",
@@ -66,6 +67,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_coarse_weight",
             "ala_coupled_shallow_vanka_layers",
             "ala_coupled_shallow_vanka_sweeps",
+            "ala_coupled_shallow_vanka_warm_sweeps",
             "ala_depth_diagnostics",
             "ala_coarse_residual_diagnostics",
             "ala_coarse_residual_levels",
@@ -165,6 +167,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
+            r"(?m)^\s*steps\s*=\s*16\s*$",
+        )
+        self.assertRegex(
+            strict_text,
             r"(?m)^\s*ala_coupled_multilevel_coarse_sweeps\s*=\s*24\s*$",
         )
         self.assertRegex(
@@ -174,6 +180,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*8\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_shallow_vanka_warm_sweeps\s*=\s*4\s*$",
         )
         self.assertRegex(
             strict_text,

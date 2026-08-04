@@ -1807,6 +1807,9 @@ void h5output_meta(struct All_variables *E)
     status = set_attribute_int(
         input, "ala_coupled_shallow_vanka_sweeps",
         E->control.ala_coupled_shallow_vanka_sweeps);
+    status = set_attribute_int(
+        input, "ala_coupled_shallow_vanka_warm_sweeps",
+        E->control.ala_coupled_shallow_vanka_warm_sweeps);
     status = set_attribute_double(input,
                                   "ala_unaugmented_momentum_tolerance",
                                   E->control.ala_unaugmented_momentum_tolerance);

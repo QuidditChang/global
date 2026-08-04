@@ -407,7 +407,7 @@ static void apply_ala_coupled_multilevel_vcycle(
 {
     struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
     struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
-    int coarse_sweep,shallow_sweep;
+    int coarse_sweep,shallow_sweep,shallow_sweeps;
     double coarse_weight;
 
     smooth=ala_block_vector_create(E,lev);
@@ -416,6 +416,10 @@ static void apply_ala_coupled_multilevel_vcycle(
     action=ala_block_vector_create(E,lev);
     velocity_work=ala_block_vector_create(E,lev);
     ala_block_vector_zero(E,correction);
+    shallow_sweeps=E->control.ala_coupled_shallow_vanka_sweeps;
+    if(E->monitor.solution_cycles>0 &&
+       E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
+        shallow_sweeps=E->control.ala_coupled_shallow_vanka_warm_sweeps;
 
     /* One mixed pre-sweep. */
     apply_ala_coupled_element_vanka_once(
@@ -475,7 +479,7 @@ static void apply_ala_coupled_multilevel_vcycle(
      * the velocity partition of unity exact at the lower region interface. */
     if(lev==E->mesh.levmax)
         for(shallow_sweep=0;
-            shallow_sweep<E->control.ala_coupled_shallow_vanka_sweeps;
+            shallow_sweep<shallow_sweeps;
             shallow_sweep++) {
             assemble_ala_coupled_block_defect(
                 E,residual,correction,defect,action,velocity_work,lev);
@@ -516,26 +520,42 @@ static void apply_ala_coupled_block_preconditioner(
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
-                    "shallow_layers=%d shallow_sweeps=%d\n",
+                    "shallow_layers=%d shallow_sweeps=%d "
+                    "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
+                    "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
                     E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
-                    E->control.ala_coupled_shallow_vanka_sweeps);
+                    (E->monitor.solution_cycles>0 &&
+                     E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
+                        ? E->control.ala_coupled_shallow_vanka_warm_sweeps
+                        : E->control.ala_coupled_shallow_vanka_sweeps,
+                    E->control.ala_coupled_shallow_vanka_sweeps,
+                    E->control.ala_coupled_shallow_vanka_warm_sweeps,
+                    E->monitor.solution_cycles>0 ? "warm" : "cold");
             reported_cycle=E->monitor.solution_cycles;
             report_valid=1;
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
-                    "shallow_layers=%d shallow_sweeps=%d\n",
+                    "shallow_layers=%d shallow_sweeps=%d "
+                    "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
+                    "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
                     E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
-                    E->control.ala_coupled_shallow_vanka_sweeps);
+                    (E->monitor.solution_cycles>0 &&
+                     E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
+                        ? E->control.ala_coupled_shallow_vanka_warm_sweeps
+                        : E->control.ala_coupled_shallow_vanka_sweeps,
+                    E->control.ala_coupled_shallow_vanka_sweeps,
+                    E->control.ala_coupled_shallow_vanka_warm_sweeps,
+                    E->monitor.solution_cycles>0 ? "warm" : "cold");
             fflush(E->fp);
             fflush(stderr);
         }
