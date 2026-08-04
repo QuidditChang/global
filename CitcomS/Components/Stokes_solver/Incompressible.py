@@ -146,6 +146,8 @@ class Incompressible(CitcomComponent):
             "ala_coupled_element_vanka", default=False)
         ala_coupled_multilevel_vcycle = prop.bool(
             "ala_coupled_multilevel_vcycle", default=False)
+        ala_coupled_multilevel_coarse_sweeps = prop.int(
+            "ala_coupled_multilevel_coarse_sweeps", default=2)
         ala_coupled_multilevel_coarse_weight = prop.float(
             "ala_coupled_multilevel_coarse_weight", default=1.0)
         ala_unaugmented_momentum_tolerance = prop.float(

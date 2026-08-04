@@ -144,6 +144,21 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             self.properties,
         )
         self.assertIn(
+            "int ala_coupled_multilevel_coarse_sweeps;", self.defs
+        )
+        self.assertIn(
+            'input_int("ala_coupled_multilevel_coarse_sweeps",',
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_multilevel_coarse_sweeps", default=2', self.pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, '
+            '"ala_coupled_multilevel_coarse_sweeps",',
+            self.properties,
+        )
+        self.assertIn(
             "double ala_coupled_multilevel_coarse_weight;", self.defs
         )
         self.assertIn(
@@ -404,6 +419,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "ala_coupled_prolong_velocity(",
             "ala_coupled_prolong_pressure_p0(",
             "E->control.ala_coupled_multilevel_coarse_weight",
+            "E->control.ala_coupled_multilevel_coarse_sweeps",
         ):
             self.assertIn(token, vcycle)
         block = _function_body(

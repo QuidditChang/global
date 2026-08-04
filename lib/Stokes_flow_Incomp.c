@@ -365,6 +365,7 @@ static void apply_ala_coupled_multilevel_vcycle(
 {
     struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
     struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
+    int coarse_sweep;
 
     smooth=ala_block_vector_create(E,lev);
     delta=ala_block_vector_create(E,lev);
@@ -407,6 +408,16 @@ static void apply_ala_coupled_multilevel_vcycle(
         E,residual,correction,defect,action,velocity_work,lev);
     apply_ala_coupled_element_vanka_once(E,defect,smooth,delta,lev);
     ala_block_vector_axpy(E,1.0,smooth,correction);
+    if(lev==E->mesh.levmin)
+        for(coarse_sweep=2;
+            coarse_sweep<E->control.ala_coupled_multilevel_coarse_sweeps;
+            coarse_sweep++) {
+            assemble_ala_coupled_block_defect(
+                E,residual,correction,defect,action,velocity_work,lev);
+            apply_ala_coupled_element_vanka_once(
+                E,defect,smooth,delta,lev);
+            ala_block_vector_axpy(E,1.0,smooth,correction);
+        }
 
     ala_block_vector_destroy(E,smooth);
     ala_block_vector_destroy(E,delta);
@@ -437,17 +448,19 @@ static void apply_ala_coupled_block_preconditioner(
            (!report_valid || reported_cycle!=E->monitor.solution_cycles)) {
             fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=2 coarse_weight=%e\n",
+                    "coarse_sweeps=%d coarse_weight=%e\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
+                    E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight);
             reported_cycle=E->monitor.solution_cycles;
             report_valid=1;
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=2 coarse_weight=%e\n",
+                    "coarse_sweeps=%d coarse_weight=%e\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
+                    E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight);
             fflush(E->fp);
             fflush(stderr);

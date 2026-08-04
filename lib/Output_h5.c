@@ -1795,6 +1795,9 @@ void h5output_meta(struct All_variables *E)
                                E->control.ala_coupled_element_vanka);
     status = set_attribute_int(input, "ala_coupled_multilevel_vcycle",
                                E->control.ala_coupled_multilevel_vcycle);
+    status = set_attribute_int(
+        input, "ala_coupled_multilevel_coarse_sweeps",
+        E->control.ala_coupled_multilevel_coarse_sweeps);
     status = set_attribute_double(
         input, "ala_coupled_multilevel_coarse_weight",
         E->control.ala_coupled_multilevel_coarse_weight);

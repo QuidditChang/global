@@ -490,6 +490,7 @@ struct CONTROL {
     int ala_coupled_debug_stop_iteration;
     int ala_coupled_element_vanka;
     int ala_coupled_multilevel_vcycle;
+    int ala_coupled_multilevel_coarse_sweeps;
     double ala_coupled_multilevel_coarse_weight;
     double ala_unaugmented_momentum_tolerance;
     int ala_feasibility_audit;

@@ -1082,6 +1082,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_element_vanka, fp);
     getIntProperty(properties, "ala_coupled_multilevel_vcycle",
                    E->control.ala_coupled_multilevel_vcycle, fp);
+    getIntProperty(properties, "ala_coupled_multilevel_coarse_sweeps",
+                   E->control.ala_coupled_multilevel_coarse_sweeps, fp);
     getDoubleProperty(properties, "ala_coupled_multilevel_coarse_weight",
                       E->control.ala_coupled_multilevel_coarse_weight, fp);
     getDoubleProperty(properties, "ala_unaugmented_momentum_tolerance",
@@ -1290,6 +1292,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        !E->control.ala_coupled_element_vanka)
         myerror(E, "ala_coupled_multilevel_vcycle requires "
                 "ala_coupled_element_vanka=on");
+    if(E->control.ala_coupled_multilevel_coarse_sweeps < 2 ||
+       E->control.ala_coupled_multilevel_coarse_sweeps > 100)
+        myerror(E,
+                "ala_coupled_multilevel_coarse_sweeps must be in [2,100]");
     if(E->control.ala_coupled_multilevel_coarse_weight <= 0.0 ||
        E->control.ala_coupled_multilevel_coarse_weight > 1.0)
         myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");

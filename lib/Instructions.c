@@ -552,6 +552,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_coupled_element_vanka),"off",m);
   input_boolean("ala_coupled_multilevel_vcycle",
                 &(E->control.ala_coupled_multilevel_vcycle),"off",m);
+  input_int("ala_coupled_multilevel_coarse_sweeps",
+            &(E->control.ala_coupled_multilevel_coarse_sweeps),"2",m);
   input_double("ala_coupled_multilevel_coarse_weight",
                &(E->control.ala_coupled_multilevel_coarse_weight),"1.0",m);
   input_double("ala_unaugmented_momentum_tolerance",
@@ -758,6 +760,9 @@ void read_initial_settings(struct All_variables *E)
      !E->control.ala_coupled_element_vanka)
       myerror(E, "ala_coupled_multilevel_vcycle requires "
               "ala_coupled_element_vanka=on");
+  if(E->control.ala_coupled_multilevel_coarse_sweeps < 2 ||
+     E->control.ala_coupled_multilevel_coarse_sweeps > 100)
+      myerror(E, "ala_coupled_multilevel_coarse_sweeps must be in [2,100]");
   if(E->control.ala_coupled_multilevel_coarse_weight <= 0.0 ||
      E->control.ala_coupled_multilevel_coarse_weight > 1.0)
       myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");
@@ -1516,6 +1521,7 @@ void global_default_values(E)
     E->control.ala_coupled_debug_stop_iteration = 0;
     E->control.ala_coupled_element_vanka = 0;
     E->control.ala_coupled_multilevel_vcycle = 0;
+    E->control.ala_coupled_multilevel_coarse_sweeps = 2;
     E->control.ala_coupled_multilevel_coarse_weight = 1.0;
     E->control.ala_unaugmented_momentum_tolerance = 0.0;
     E->control.ala_feasibility_audit = 0;
