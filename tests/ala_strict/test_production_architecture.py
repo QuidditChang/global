@@ -106,7 +106,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*piterations\s*=\s*180\s*$",
+            r"(?m)^\s*piterations\s*=\s*220\s*$",
         )
         self.assertRegex(
             strict_text,
