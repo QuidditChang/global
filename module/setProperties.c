@@ -1061,6 +1061,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_pcg_restart_interval, fp);
     getStringProperty(properties, "ala_outer_solver",
                       E->control.ala_outer_solver, fp);
+    getDoubleProperty(
+        properties, "ala_coupled_initial_velocity_relative_tolerance",
+        E->control.ala_coupled_initial_velocity_relative_tolerance, fp);
     getDoubleProperty(properties, "ala_coupled_inner_relative_tolerance",
                       E->control.ala_coupled_inner_relative_tolerance, fp);
     getIntProperty(properties, "ala_coupled_inner_max_cycles",
@@ -1230,6 +1233,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_inner_accuracy_factor must be positive");
     if(E->control.ala_pcg_restart_interval < 1)
         myerror(E, "ala_pcg_restart_interval must be at least one");
+    if(E->control.ala_coupled_initial_velocity_relative_tolerance < 0.0 ||
+       E->control.ala_coupled_initial_velocity_relative_tolerance >= 1.0)
+        myerror(E,
+                "ala_coupled_initial_velocity_relative_tolerance must be "
+                "in [0,1)");
     if(E->control.ala_coupled_inner_relative_tolerance <= 0.0 ||
        E->control.ala_coupled_inner_relative_tolerance >= 1.0)
         myerror(E, "ala_coupled_inner_relative_tolerance must be in (0,1)");
@@ -1248,6 +1256,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_coupled_defect_corrections > 0 &&
        strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
         myerror(E, "ala_coupled_defect_corrections requires "
+                "ala_outer_solver=coupled_fgmres");
+    if(E->control.ala_coupled_initial_velocity_relative_tolerance > 0.0 &&
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+        myerror(E,
+                "ala_coupled_initial_velocity_relative_tolerance requires "
                 "ala_outer_solver=coupled_fgmres");
     if(E->control.ala_coupled_multilevel_audit_only &&
        strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)

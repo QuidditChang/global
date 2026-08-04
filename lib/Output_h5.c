@@ -1772,6 +1772,9 @@ void h5output_meta(struct All_variables *E)
     status = set_attribute_string(input, "ala_outer_solver",
                                   E->control.ala_outer_solver);
     status = set_attribute_double(
+        input, "ala_coupled_initial_velocity_relative_tolerance",
+        E->control.ala_coupled_initial_velocity_relative_tolerance);
+    status = set_attribute_double(
         input,"ala_coupled_inner_relative_tolerance",
         E->control.ala_coupled_inner_relative_tolerance);
     status = set_attribute_int(input, "ala_coupled_inner_max_cycles",

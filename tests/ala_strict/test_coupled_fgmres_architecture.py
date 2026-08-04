@@ -159,6 +159,9 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = coupled_fgmres", cfg)
         self.assertIn(
+            "ala_coupled_initial_velocity_relative_tolerance = 1e-3", cfg
+        )
+        self.assertIn(
             "ala_coupled_inner_relative_tolerance = 1e-2", cfg
         )
         self.assertIn("ala_coupled_inner_max_cycles       = 200", cfg)
@@ -168,20 +171,24 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
 
-    def test_coupled_path_owns_its_cold_momentum_residual(self) -> None:
+    def test_coupled_path_prebalances_every_momentum_residual(self) -> None:
         dispatch = _between(
             self.stokes,
             'if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||',
             "/* FF contains the current -C^T*P forcing.",
         )
-        coupled = _between(
-            dispatch,
-            'if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0)',
-            "else {",
+        prebalance = dispatch.index("ALA COUPLED MOMENTUM PREBALANCE")
+        velocity_solve = dispatch.index("initial_vel_residual(", prebalance)
+        coupled_solve = dispatch.index("solve_ala_coupled_fgmres_core(")
+        legacy = dispatch[coupled_solve:]
+        self.assertIn(
+            "ala_coupled_initial_velocity_relative_tolerance", dispatch
         )
-        legacy = dispatch[dispatch.index("else {"):]
-        self.assertIn("initial_velocity_solve=skipped", coupled)
-        self.assertNotIn("initial_vel_residual(", coupled)
+        self.assertIn("solution_cycle=%d relative_tolerance=%e", dispatch)
+        self.assertIn("E->monitor.solution_cycles", dispatch)
+        self.assertIn("initial_velocity_solve=skipped", dispatch)
+        self.assertLess(prebalance, velocity_solve)
+        self.assertLess(velocity_solve, coupled_solve)
         self.assertIn("initial_vel_residual(E,V,P,F,imp);", legacy)
         self.assertIn("solve_ala_fgmres_core(", legacy)
 

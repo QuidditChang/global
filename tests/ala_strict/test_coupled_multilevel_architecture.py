@@ -352,6 +352,44 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("if(E->control.ala_coupled_element_vanka)", block)
         self.assertIn("apply_ala_coupled_element_vanka_once(", block)
 
+    def test_vanka_diagnostics_do_not_reduce_on_every_sweep(self) -> None:
+        smoother = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_element_vanka_once(",
+        )
+        self.assertIn("reported_cycle[MAX_LEVELS]", smoother)
+        self.assertIn("reported_valid[MAX_LEVELS]", smoother)
+        self.assertIn("report_diagnostics", smoother)
+        self.assertIn("if(report_diagnostics) {", smoother)
+        self.assertIn("diagnostic_scope=first_application_per_cycle", smoother)
+        self.assertEqual(smoother.count("MPI_Allreduce("), 3)
+
+    def test_coupled_vcycle_skips_unused_legacy_pressure_cache(self) -> None:
+        solve = self.stokes[
+            self.stokes.rindex("static float solve_Ahat_p_fhat_ALA_PCG("):
+        ]
+        self.assertIn("coupled_self_contained_preconditioner", solve)
+        self.assertIn("ala_coupled_multilevel_vcycle ||", solve)
+        self.assertIn("ala_coupled_element_vanka", solve)
+        self.assertIn(
+            "if(!coupled_self_contained_preconditioner &&\n"
+            "       E->control.ala_shallow_patch_preconditioner)",
+            solve,
+        )
+        self.assertIn("self_contained_skip_legacy_pressure_cache", solve)
+        self.assertIn('? "coupled_multilevel_vcycle"', solve)
+
+    def test_expensive_action_audit_is_targeted_not_periodic(self) -> None:
+        core = _function_body(
+            self.stokes, "static float solve_ala_coupled_fgmres_core("
+        )
+        audit = core[core.index("strict_ala_coupled_preconditioner_audit(") - 300:]
+        self.assertIn("count==0 || j==restart-1", audit)
+        self.assertIn(
+            "count+1==E->control.ala_coupled_debug_stop_iteration", audit
+        )
+        self.assertNotIn("((count+1)%5)==0", audit)
+
     def test_stage9f2_vcycle_uses_both_exact_transfer_pairs(self) -> None:
         vcycle = _function_body(
             self.stokes,

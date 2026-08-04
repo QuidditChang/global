@@ -480,6 +480,7 @@ struct CONTROL {
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
     char ala_outer_solver[20];
+    double ala_coupled_initial_velocity_relative_tolerance;
     double ala_coupled_inner_relative_tolerance;
     int ala_coupled_inner_max_cycles;
     int ala_coupled_inner_progress_interval;

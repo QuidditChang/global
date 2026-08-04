@@ -212,6 +212,9 @@ static void apply_ala_coupled_element_vanka_once(
     int lev)
 {
     int m,e,a,d,i,node,eq,fixed,local_patches,global_patches;
+    int report_diagnostics;
+    static int reported_cycle[MAX_LEVELS];
+    static unsigned char reported_valid[MAX_LEVELS];
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
     double pressure_rhs,pressure_solution,schur,regularization;
@@ -228,6 +231,8 @@ static void apply_ala_coupled_element_vanka_once(
     regularization=E->control.ala_element_vanka_regularization;
     ala_block_vector_zero(E,correction);
     ala_block_vector_zero(E,delta);
+    report_diagnostics=!reported_valid[lev] ||
+        reported_cycle[lev]!=E->monitor.solution_cycles;
     local_patches=0;
     local_min=1.0e300;
     local_max=0.0;
@@ -278,9 +283,11 @@ static void apply_ala_coupled_element_vanka_once(
                         -velocity_pressure[i]*pressure_solution;
                 }
             }
-            local_min=min(local_min,schur);
-            local_max=max(local_max,schur);
-            local_patches++;
+            if(report_diagnostics) {
+                local_min=min(local_min,schur);
+                local_max=max(local_max,schur);
+                local_patches++;
+            }
         }
 
     (E->solver.exchange_id_d)(E,delta->velocity,lev);
@@ -295,25 +302,33 @@ static void apply_ala_coupled_element_vanka_once(
         for(e=1;e<=npno;e++)
             correction->pressure[m][e]=damping*delta->pressure[m][e];
     }
-    MPI_Allreduce(&local_patches,&global_patches,1,MPI_INT,MPI_SUM,
-                  E->parallel.world);
-    MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
-                  E->parallel.world);
-    MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
-                  E->parallel.world);
-    if(E->parallel.me==0) {
-        fprintf(E->fp,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
-                "global_patches=%d damping=%e pressure_regularization=%e "
-                "local_schur_range=[%e,%e] fallback_count=0\n",
-                lev,global_patches,damping,regularization,
-                global_min,global_max);
-        fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
-                "global_patches=%d damping=%e pressure_regularization=%e "
-                "local_schur_range=[%e,%e] fallback_count=0\n",
-                lev,global_patches,damping,regularization,
-                global_min,global_max);
-        fflush(E->fp);
-        fflush(stderr);
+    if(report_diagnostics) {
+        MPI_Allreduce(&local_patches,&global_patches,1,MPI_INT,MPI_SUM,
+                      E->parallel.world);
+        MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
+                      E->parallel.world);
+        MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
+                      E->parallel.world);
+        reported_cycle[lev]=E->monitor.solution_cycles;
+        reported_valid[lev]=1;
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
+                    "solution_cycle=%d global_patches=%d damping=%e "
+                    "pressure_regularization=%e "
+                    "local_schur_range=[%e,%e] fallback_count=0 "
+                    "diagnostic_scope=first_application_per_cycle\n",
+                    lev,E->monitor.solution_cycles,global_patches,damping,
+                    regularization,global_min,global_max);
+            fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
+                    "solution_cycle=%d global_patches=%d damping=%e "
+                    "pressure_regularization=%e "
+                    "local_schur_range=[%e,%e] fallback_count=0 "
+                    "diagnostic_scope=first_application_per_cycle\n",
+                    lev,E->monitor.solution_cycles,global_patches,damping,
+                    regularization,global_min,global_max);
+            fflush(E->fp);
+            fflush(stderr);
+        }
     }
 }
 
@@ -414,14 +429,20 @@ static void apply_ala_coupled_block_preconditioner(
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
     if(E->control.ala_coupled_multilevel_vcycle) {
+        static int reported_cycle;
+        static int report_valid;
+
         apply_ala_coupled_multilevel_vcycle(E,residual,correction,lev);
-        if(E->parallel.me==0) {
+        if(E->parallel.me==0 &&
+           (!report_valid || reported_cycle!=E->monitor.solution_cycles)) {
             fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=2 coarse_weight=%e\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
                     E->control.ala_coupled_multilevel_coarse_weight);
+            reported_cycle=E->monitor.solution_cycles;
+            report_valid=1;
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=2 coarse_weight=%e\n",
@@ -690,7 +711,9 @@ static float solve_ala_coupled_fgmres_core(
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);
-            if(count==0 || ((count+1)%5)==0 || j==restart-1)
+            if(count==0 || j==restart-1 ||
+               (E->control.ala_coupled_debug_stop_iteration>0 &&
+                count+1==E->control.ala_coupled_debug_stop_iteration))
                 strict_ala_coupled_preconditioner_audit(
                     E,vb[j],zb[j],w,velocity_weight,pressure_weight,count+1);
             if(count==0 &&
@@ -6373,6 +6396,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     int local_invalid_bpi, global_invalid_bpi;
     int local_invalid_velocity_bi, global_invalid_velocity_bi;
     int galerkin_diagnostic_applications, galerkin_applications;
+    int coupled_self_contained_preconditioner;
     const char *preconditioner_mode;
 
     double alpha, beta, rho, rho_old, curvature;
@@ -6402,9 +6426,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     neq = E->lmesh.neq;
     lev = E->mesh.levmax;
     memset(&preconditioner_cache,0,sizeof(preconditioner_cache));
+    coupled_self_contained_preconditioner =
+        strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0 &&
+        (E->control.ala_coupled_multilevel_vcycle ||
+         E->control.ala_coupled_element_vanka);
 
-    if(E->control.ala_two_level_preconditioner ||
-       E->control.ala_geneo_preconditioner) {
+    if(!coupled_self_contained_preconditioner &&
+       (E->control.ala_two_level_preconditioner ||
+        E->control.ala_geneo_preconditioner)) {
         coarse_lev=lev-E->control.ala_two_level_offset;
         if(coarse_lev<E->mesh.levmin)
             myerror(E,"ALA two-level offset is below the available mesh hierarchy");
@@ -6416,7 +6445,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
            E->lmesh.ELZ[lev]!=coarse_factor*E->lmesh.ELZ[coarse_lev])
             myerror(E,"ALA two-level pressure transfer does not match mesh hierarchy");
     }
-    if(E->control.ala_pressure_multigrid)
+    if(!coupled_self_contained_preconditioner &&
+       E->control.ala_pressure_multigrid)
         for(validation_level=E->control.ala_pressure_multigrid_min_level+1;
             validation_level<=lev;validation_level++)
             if(E->lmesh.ELX[validation_level]
@@ -6429,58 +6459,70 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         F[m] = (double *)malloc(neq*sizeof(double));
-        r[m] = (double *)malloc((npno+1)*sizeof(double));
-        z[m] = (double *)malloc((npno+1)*sizeof(double));
-        p[m] = (double *)malloc((npno+1)*sizeof(double));
-        q[m] = (double *)malloc((npno+1)*sizeof(double));
-        explicit_r[m] = (double *)malloc((npno+1)*sizeof(double));
-        div_u[m] = (double *)malloc((npno+1)*sizeof(double));
         preconditioner_work[m] =
             (double *)malloc((npno+1)*sizeof(double));
+        if(coupled_self_contained_preconditioner) {
+            r[m]=z[m]=p[m]=q[m]=NULL;
+            explicit_r[m]=div_u[m]=NULL;
+        }
+        else {
+            r[m] = (double *)malloc((npno+1)*sizeof(double));
+            z[m] = (double *)malloc((npno+1)*sizeof(double));
+            p[m] = (double *)malloc((npno+1)*sizeof(double));
+            q[m] = (double *)malloc((npno+1)*sizeof(double));
+            explicit_r[m] = (double *)malloc((npno+1)*sizeof(double));
+            div_u[m] = (double *)malloc((npno+1)*sizeof(double));
+        }
     }
 
     time0 = CPU_time0();
     count = 0;
 
-    local_bpi_min = 1.0e300;
-    local_bpi_max = 0.0;
-    local_invalid_bpi = 0;
-    for(validation_level=E->control.ala_pressure_multigrid
-            ? E->control.ala_pressure_multigrid_min_level : lev;
-        validation_level<=lev;validation_level++)
-        for(m=1; m<=E->sphere.caps_per_proc; m++)
-            for(j=1; j<=E->lmesh.NPNO[validation_level]; j++) {
-                if(!isfinite(E->BPI[validation_level][m][j]) ||
-                   E->BPI[validation_level][m][j] <= 0.0)
-                    local_invalid_bpi++;
-                else {
-                    local_bpi_min=min(local_bpi_min,
-                        E->BPI[validation_level][m][j]);
-                    local_bpi_max=max(local_bpi_max,
-                        E->BPI[validation_level][m][j]);
-                }
-            }
-    MPI_Allreduce(&local_bpi_min, &global_bpi_min, 1, MPI_DOUBLE, MPI_MIN,
-                  E->parallel.world);
-    MPI_Allreduce(&local_bpi_max, &global_bpi_max, 1, MPI_DOUBLE, MPI_MAX,
-                  E->parallel.world);
-    MPI_Allreduce(&local_invalid_bpi, &global_invalid_bpi, 1, MPI_INT, MPI_SUM,
-                  E->parallel.world);
-    local_invalid_velocity_bi=0;
-    if(E->control.ala_shallow_patch_preconditioner ||
-       E->control.ala_two_level_preconditioner ||
-       E->control.ala_geneo_preconditioner ||
-       E->control.ala_pressure_multigrid)
+    global_bpi_min=global_bpi_max=0.0;
+    global_invalid_bpi=global_invalid_velocity_bi=0;
+    if(!coupled_self_contained_preconditioner) {
+        local_bpi_min = 1.0e300;
+        local_bpi_max = 0.0;
+        local_invalid_bpi = 0;
         for(validation_level=E->control.ala_pressure_multigrid
                 ? E->control.ala_pressure_multigrid_min_level : lev;
             validation_level<=lev;validation_level++)
-            for(m=1;m<=E->sphere.caps_per_proc;m++)
-                for(j=0;j<E->lmesh.NEQ[validation_level];j++)
-                    if(!isfinite(E->ALA_velocity_BI[validation_level][m][j]) ||
-                       E->ALA_velocity_BI[validation_level][m][j]<=0.0)
-                        local_invalid_velocity_bi++;
-    MPI_Allreduce(&local_invalid_velocity_bi,&global_invalid_velocity_bi,
-                  1,MPI_INT,MPI_SUM,E->parallel.world);
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=E->lmesh.NPNO[validation_level]; j++) {
+                    if(!isfinite(E->BPI[validation_level][m][j]) ||
+                       E->BPI[validation_level][m][j] <= 0.0)
+                        local_invalid_bpi++;
+                    else {
+                        local_bpi_min=min(local_bpi_min,
+                            E->BPI[validation_level][m][j]);
+                        local_bpi_max=max(local_bpi_max,
+                            E->BPI[validation_level][m][j]);
+                    }
+                }
+        MPI_Allreduce(&local_bpi_min,&global_bpi_min,1,MPI_DOUBLE,MPI_MIN,
+                      E->parallel.world);
+        MPI_Allreduce(&local_bpi_max,&global_bpi_max,1,MPI_DOUBLE,MPI_MAX,
+                      E->parallel.world);
+        MPI_Allreduce(&local_invalid_bpi,&global_invalid_bpi,1,MPI_INT,
+                      MPI_SUM,E->parallel.world);
+        local_invalid_velocity_bi=0;
+        if(E->control.ala_shallow_patch_preconditioner ||
+           E->control.ala_two_level_preconditioner ||
+           E->control.ala_geneo_preconditioner ||
+           E->control.ala_pressure_multigrid)
+            for(validation_level=E->control.ala_pressure_multigrid
+                    ? E->control.ala_pressure_multigrid_min_level : lev;
+                validation_level<=lev;validation_level++)
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(j=0;j<E->lmesh.NEQ[validation_level];j++)
+                        if(!isfinite(
+                              E->ALA_velocity_BI[validation_level][m][j]) ||
+                           E->ALA_velocity_BI[validation_level][m][j]<=0.0)
+                            local_invalid_velocity_bi++;
+        MPI_Allreduce(&local_invalid_velocity_bi,
+                      &global_invalid_velocity_bi,1,MPI_INT,MPI_SUM,
+                      E->parallel.world);
+    }
     if(E->parallel.me==0 &&
        (global_invalid_bpi || global_invalid_velocity_bi)) {
         fprintf(stderr,"ALA preconditioner diagonal validation failed "
@@ -6496,7 +6538,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         fprintf(stderr,"ALA preconditioner startup stage=begin\n");
         fflush(stderr);
     }
-    if(E->control.ala_shallow_patch_preconditioner) {
+    if(!coupled_self_contained_preconditioner &&
+       E->control.ala_shallow_patch_preconditioner) {
         if(E->parallel.me==0) {
             fprintf(stderr,"ALA preconditioner startup stage=shallow_patch_build_begin\n");
             fflush(stderr);
@@ -6507,7 +6550,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fflush(stderr);
         }
     }
-    if(E->control.ala_pressure_multigrid) {
+    if(!coupled_self_contained_preconditioner &&
+       E->control.ala_pressure_multigrid) {
         if(E->parallel.me==0) {
             fprintf(stderr,"ALA preconditioner startup stage=pressure_multigrid_build_begin\n");
             fflush(stderr);
@@ -6518,8 +6562,9 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             fflush(stderr);
         }
     }
-    if(E->control.ala_two_level_preconditioner ||
-       E->control.ala_geneo_preconditioner) {
+    if(!coupled_self_contained_preconditioner &&
+       (E->control.ala_two_level_preconditioner ||
+        E->control.ala_geneo_preconditioner)) {
         if(E->parallel.me==0) {
             fprintf(stderr,"ALA preconditioner startup stage=galerkin_diagonal_build_begin\n");
             fflush(stderr);
@@ -6585,10 +6630,14 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             }
         }
     }
-    if(E->control.ala_shallow_patch_preconditioner)
+    if(!coupled_self_contained_preconditioner &&
+       E->control.ala_shallow_patch_preconditioner)
         audit_ala_shallow_patch_preconditioner(
             E,&preconditioner_cache,lev);
-    if(E->control.ala_pressure_multigrid)
+    if(coupled_self_contained_preconditioner)
+        preconditioner_mode=E->control.ala_coupled_multilevel_vcycle
+            ? "coupled_multilevel_vcycle" : "coupled_element_vanka";
+    else if(E->control.ala_pressure_multigrid)
         preconditioner_mode=E->control.ala_shallow_patch_preconditioner
             ? "mpi_overlap_schwarz_plus_pressure_vcycle"
             : "pressure_vcycle";
@@ -6622,7 +6671,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis_type=%s "
                 "geneo_basis=%d geneo_weight=%e "
-                "geneo_rank_group=%dx%d\n",
+                "geneo_rank_group=%dx%d cache_scope=%s\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
@@ -6639,7 +6688,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 preconditioner_cache.geneo_basis_count,
                 E->control.ala_geneo_weight,
                 E->control.ala_geneo_rank_group_x,
-                E->control.ala_geneo_rank_group_y);
+                E->control.ala_geneo_rank_group_y,
+                coupled_self_contained_preconditioner
+                    ? "self_contained_skip_legacy_pressure_cache"
+                    : "legacy_pressure_cache_active");
         fprintf(stderr,
                 "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
                 "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
@@ -6647,7 +6699,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis_type=%s "
                 "geneo_basis=%d geneo_weight=%e "
-                "geneo_rank_group=%dx%d\n",
+                "geneo_rank_group=%dx%d cache_scope=%s\n",
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
@@ -6664,7 +6716,10 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 preconditioner_cache.geneo_basis_count,
                 E->control.ala_geneo_weight,
                 E->control.ala_geneo_rank_group_x,
-                E->control.ala_geneo_rank_group_y);
+                E->control.ala_geneo_rank_group_y,
+                coupled_self_contained_preconditioner
+                    ? "self_contained_skip_legacy_pressure_cache"
+                    : "legacy_pressure_cache_active");
         if(E->control.ala_feasibility_audit) {
             fprintf(E->fp,
                     "ALA_FEASIBILITY_AUDIT enabled inner_rel=%e "
@@ -6769,11 +6824,33 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(strcmp(E->control.ala_outer_solver,"fgmres")==0 ||
        strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0) {
         if(strcmp(E->control.ala_outer_solver,"coupled_fgmres")==0) {
-            /* The monolithic residual contains both momentum and continuity,
-             * and its force-scaled velocity metric lets FGMRES reduce a cold
-             * momentum defect directly.  A separate K_gamma^-1 momentum solve
-             * duplicates that work and dominated the Stage 9d startup cost. */
-            if(E->parallel.me==0) {
+            /* A bounded-accuracy K_gamma momentum equilibration is useful on
+             * both the cold solve and evolving warm starts.  It preserves the
+             * monolithic coupled acceptance gate while avoiding many costly
+             * block iterations whose only role is removing momentum error.
+             * Zero retains the direct-block Stage 9d rollback. */
+            if(E->control.ala_coupled_initial_velocity_relative_tolerance
+               >0.0) {
+                if(E->parallel.me==0) {
+                    fprintf(E->fp,"ALA COUPLED MOMENTUM PREBALANCE "
+                            "solution_cycle=%d relative_tolerance=%e\n",
+                            E->monitor.solution_cycles,
+                            E->control.
+                              ala_coupled_initial_velocity_relative_tolerance);
+                    fprintf(stderr,"ALA COUPLED MOMENTUM PREBALANCE "
+                            "solution_cycle=%d relative_tolerance=%e\n",
+                            E->monitor.solution_cycles,
+                            E->control.
+                              ala_coupled_initial_velocity_relative_tolerance);
+                    fflush(E->fp);
+                    fflush(stderr);
+                }
+                initial_vel_residual(
+                    E,V,P,F,
+                    E->control.
+                      ala_coupled_initial_velocity_relative_tolerance);
+            }
+            else if(E->parallel.me==0) {
                 fprintf(E->fp,"ALA COUPLED FGMRES direct block startup "
                         "initial_velocity_solve=skipped\n");
                 fprintf(stderr,"ALA COUPLED FGMRES direct block startup "
@@ -6793,7 +6870,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E,V,P,steps_max,lev,&preconditioner_cache,r,
                 explicit_r,div_u,preconditioner_work);
         }
-        if(E->control.ala_pressure_multigrid && E->parallel.me==0) {
+        if(!coupled_self_contained_preconditioner &&
+           E->control.ala_pressure_multigrid && E->parallel.me==0) {
             fprintf(E->fp,"ALA_PRESSURE_MG_COST "
                     "operator_applications=%d levels=%d\n",
                     preconditioner_cache.pressure_mg_operator_applications,
@@ -6805,18 +6883,21 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
         }
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             free((void *)F[m]);
-            free((void *)r[m]);
-            free((void *)z[m]);
-            free((void *)p[m]);
-            free((void *)q[m]);
-            free((void *)explicit_r[m]);
-            free((void *)div_u[m]);
+            if(!coupled_self_contained_preconditioner) {
+                free((void *)r[m]);
+                free((void *)z[m]);
+                free((void *)p[m]);
+                free((void *)q[m]);
+                free((void *)explicit_r[m]);
+                free((void *)div_u[m]);
+            }
             free((void *)preconditioner_work[m]);
         }
-        if(E->control.ala_shallow_patch_preconditioner ||
-           E->control.ala_two_level_preconditioner ||
-           E->control.ala_geneo_preconditioner ||
-           E->control.ala_pressure_multigrid)
+        if(!coupled_self_contained_preconditioner &&
+           (E->control.ala_shallow_patch_preconditioner ||
+            E->control.ala_two_level_preconditioner ||
+            E->control.ala_geneo_preconditioner ||
+            E->control.ala_pressure_multigrid))
             free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
         return(residual);
     }

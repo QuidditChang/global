@@ -530,6 +530,9 @@ void read_initial_settings(struct All_variables *E)
   input_int("ala_pcg_restart_interval",
             &(E->control.ala_pcg_restart_interval),"20",m);
   input_string("ala_outer_solver",E->control.ala_outer_solver,"pcg",m);
+  input_double("ala_coupled_initial_velocity_relative_tolerance",
+               &(E->control.ala_coupled_initial_velocity_relative_tolerance),
+               "0.0",m);
   input_double("ala_coupled_inner_relative_tolerance",
                &(E->control.ala_coupled_inner_relative_tolerance),"1.0e-2",m);
   input_int("ala_coupled_inner_max_cycles",
@@ -701,6 +704,10 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_inner_accuracy_factor must be positive");
   if(E->control.ala_pcg_restart_interval < 1)
       myerror(E, "ala_pcg_restart_interval must be at least one");
+  if(E->control.ala_coupled_initial_velocity_relative_tolerance < 0.0 ||
+     E->control.ala_coupled_initial_velocity_relative_tolerance >= 1.0)
+      myerror(E, "ala_coupled_initial_velocity_relative_tolerance must be "
+              "in [0,1)");
   if(E->control.ala_coupled_inner_relative_tolerance <= 0.0 ||
      E->control.ala_coupled_inner_relative_tolerance >= 1.0)
       myerror(E, "ala_coupled_inner_relative_tolerance must be in (0,1)");
@@ -718,6 +725,10 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_coupled_defect_corrections > 0 &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_coupled_defect_corrections requires "
+              "ala_outer_solver=coupled_fgmres");
+  if(E->control.ala_coupled_initial_velocity_relative_tolerance > 0.0 &&
+     strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+      myerror(E, "ala_coupled_initial_velocity_relative_tolerance requires "
               "ala_outer_solver=coupled_fgmres");
   if(E->control.ala_coupled_multilevel_audit_only &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
@@ -1495,6 +1506,7 @@ void global_default_values(E)
     E->control.ala_inner_accuracy_factor = 1.0e-2;
     E->control.ala_pcg_restart_interval = 20;
     strcpy(E->control.ala_outer_solver, "pcg");
+    E->control.ala_coupled_initial_velocity_relative_tolerance = 0.0;
     E->control.ala_coupled_inner_relative_tolerance = 1.0e-2;
     E->control.ala_coupled_inner_max_cycles = 200;
     E->control.ala_coupled_inner_progress_interval = 20;

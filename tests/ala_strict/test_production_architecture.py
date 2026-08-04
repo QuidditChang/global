@@ -52,6 +52,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_velocity_solver",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
+            "ala_coupled_initial_velocity_relative_tolerance",
             "ala_coupled_inner_relative_tolerance",
             "ala_coupled_inner_max_cycles",
             "ala_coupled_inner_progress_interval",
@@ -102,7 +103,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*0\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -132,6 +133,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_outer_solver\s*=\s*coupled_fgmres\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_initial_velocity_relative_tolerance"
+            r"\s*=\s*1e-3\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -341,15 +347,13 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         ):
             self.assertIn(f'{name} = prop.int(', incompressible)
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)
-        self.assertIn(
-            "ala_coupled_inner_relative_tolerance = prop.float(",
-            incompressible,
-        )
-        self.assertIn(
-            'getDoubleProperty(properties, '
-            '"ala_coupled_inner_relative_tolerance"',
-            properties,
-        )
+        for name in (
+            "ala_coupled_initial_velocity_relative_tolerance",
+            "ala_coupled_inner_relative_tolerance",
+        ):
+            self.assertIn(f"{name} = prop.float(", incompressible)
+            self.assertIn("getDoubleProperty(", properties)
+            self.assertIn(f'properties, "{name}"', properties)
         for name in (
             "ala_pressure_multigrid",
             "ala_pressure_multigrid_min_level",
