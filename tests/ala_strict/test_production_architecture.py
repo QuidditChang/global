@@ -50,6 +50,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "kC_ratio",
             "kC_primordial_flavor",
             "profile_optional",
+            "tracer_reclassify_flavors",
+            "bottom_tbl_thickness",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
@@ -198,6 +200,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertEqual(
             [float(value) for value in interfaces.group(1).split(",")],
             [0.585] * 24,
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*tracer_reclassify_flavors\s*=\s*off\s*$",
+        )
+        self.assertAlmostEqual(
+            _cfg_scalar(RUNS_ROOT / "cmbhf_ALA_strict.cfg",
+                        "bottom_tbl_thickness") * 6371.0,
+            500.0,
+            places=6,
         )
         lsf = (RUNS_ROOT / "cmbhf_ALA_strict.lsf").read_text(
             encoding="utf-8"
@@ -898,6 +910,25 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("Active kC requires tracers, composition", composition)
         self.assertIn("kC_primordial_flavor=%d is invalid", composition)
         self.assertIn('{"kC", "1", ELEMENT_PROFILE', profile)
+
+    def test_layered_composition_disables_legacy_flavor_reclassification(
+        self,
+    ) -> None:
+        tracer = (GLOBAL_ROOT / "lib" / "Tracer_setup.c").read_text()
+        definitions = (GLOBAL_ROOT / "lib" / "tracer_defs.h").read_text()
+        properties = (GLOBAL_ROOT / "module" / "setProperties.c").read_text()
+        inventory = (GLOBAL_ROOT / "CitcomS/Components/Tracer.py").read_text()
+
+        self.assertIn("int reclassify_flavors;", definitions)
+        self.assertIn('input_boolean("tracer_reclassify_flavors",', tracer)
+        self.assertIn("if(!E->trace.reclassify_flavors)", tracer)
+        self.assertIn(
+            'getIntProperty(properties, "tracer_reclassify_flavors",',
+            properties,
+        )
+        self.assertIn(
+            '"tracer_reclassify_flavors", default=True', inventory
+        )
 
     def test_runtime_audits_are_absent(self) -> None:
         material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()

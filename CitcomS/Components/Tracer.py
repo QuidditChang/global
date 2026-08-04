@@ -85,6 +85,9 @@ class Tracer(CitcomComponent):
 
         # How to initialize tracer flavors
         ic_method_for_flavors = inv.int("ic_method_for_flavors", default=0)
+        # Apply legacy geometry/age-based flavor rewriting after initialization.
+        tracer_reclassify_flavors = inv.bool(
+            "tracer_reclassify_flavors", default=True)
         z_interface = inv.list("z_interface", default=[0.7])
         ictracer_grd_file = inv.str("ictracer_grd_file", default="")
         ictracer_grd_layers = inv.int("ictracer_grd_layers", default=2)

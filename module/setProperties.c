@@ -820,6 +820,8 @@ PyObject * pyCitcom_Tracer_set_properties(PyObject *self, PyObject *args)
     getIntProperty(properties, "tracer_flavors", E->trace.nflavors, fp);
 
     getIntProperty(properties, "ic_method_for_flavors", E->trace.ic_method_for_flavors, fp);
+    getIntProperty(properties, "tracer_reclassify_flavors",
+                   E->trace.reclassify_flavors, fp);
 
     if (E->trace.nflavors > 1) {
         switch(E->trace.ic_method_for_flavors){
