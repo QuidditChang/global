@@ -1878,9 +1878,16 @@ static void ala_fill_level_probe(struct All_variables *E,
 }
 
 
-static double ala_relative_bilinear_defect(double left, double right)
+static double ala_norm_scaled_adjoint_defect(double left, double right,
+                                             double left_vector_norm,
+                                             double left_action_norm,
+                                             double right_vector_norm,
+                                             double right_action_norm)
 {
-    return fabs(left-right)/max(fabs(left)+fabs(right),1.0e-300);
+    double scale=left_vector_norm*left_action_norm
+                +right_vector_norm*right_action_norm;
+
+    return fabs(left-right)/max(scale,1.0e-300);
 }
 
 
@@ -1910,13 +1917,19 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
 {
     static int completed=0;
     int level,m,e,nz,child;
-    int local_invalid,global_invalid,local_skips,global_skips;
+    int local_invalid,global_invalid,local_skips,global_skips,output_index;
     double left,right,unused,k_defect,g_defect,v_transfer_defect,p_transfer_defect;
+    double k_left,k_right,g_left,g_right;
+    double x_velocity_norm,x_pressure_norm,y_velocity_norm,y_pressure_norm;
+    double Ax_velocity_norm,Ax_pressure_norm,Ay_velocity_norm,Ay_pressure_norm;
+    double coarse_velocity_norm,coarse_pressure_norm;
+    double coarse_action_velocity_norm,coarse_action_pressure_norm;
     double beta,beta_min,beta_max,volume_min,volume_max;
     double child_beta,child_width,nested_beta,nested_width;
     double local_beta_nested_defect,global_beta_nested_defect;
     double local_bounds[4],global_min[2],global_max[2];
     struct ala_block_vector *x,*y,*Ax,*Ay,*coarse,*coarse_action;
+    FILE *output;
     void assemble_del2_u();
 
     if(completed)
@@ -1929,18 +1942,34 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
         Ay=ala_block_vector_create(E,level);
         ala_fill_level_probe(E,x,0.31);
         ala_fill_level_probe(E,y,0.79);
+        ala_block_vector_component_norms(
+            E,x,&x_velocity_norm,&x_pressure_norm);
+        ala_block_vector_component_norms(
+            E,y,&y_velocity_norm,&y_pressure_norm);
 
         assemble_del2_u(E,x->velocity,Ax->velocity,level,1);
         assemble_del2_u(E,y->velocity,Ay->velocity,level,1);
-        ala_block_vector_component_products(E,x,Ay,&left,&unused);
-        ala_block_vector_component_products(E,y,Ax,&right,&unused);
-        k_defect=ala_relative_bilinear_defect(left,right);
+        ala_block_vector_component_products(E,x,Ay,&k_left,&unused);
+        ala_block_vector_component_products(E,y,Ax,&k_right,&unused);
+        ala_block_vector_component_norms(
+            E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+        ala_block_vector_component_norms(
+            E,Ay,&Ay_velocity_norm,&Ay_pressure_norm);
+        k_defect=ala_norm_scaled_adjoint_defect(
+            k_left,k_right,x_velocity_norm,Ay_velocity_norm,
+            y_velocity_norm,Ax_velocity_norm);
 
         assemble_grad_rho_p(E,x->pressure,Ax->velocity,level);
         assemble_div_rho_u(E,y->velocity,Ay->pressure,level);
-        ala_block_vector_component_products(E,y,Ax,&right,&unused);
-        ala_block_vector_component_products(E,x,Ay,&unused,&left);
-        g_defect=ala_relative_bilinear_defect(left,right);
+        ala_block_vector_component_products(E,y,Ax,&g_right,&unused);
+        ala_block_vector_component_products(E,x,Ay,&unused,&g_left);
+        ala_block_vector_component_norms(
+            E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+        ala_block_vector_component_norms(
+            E,Ay,&Ay_velocity_norm,&Ay_pressure_norm);
+        g_defect=ala_norm_scaled_adjoint_defect(
+            g_left,g_right,x_pressure_norm,Ay_pressure_norm,
+            y_velocity_norm,Ax_velocity_norm);
 
         v_transfer_defect=0.0;
         p_transfer_defect=0.0;
@@ -1955,7 +1984,16 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
             ala_block_vector_component_products(E,y,Ax,&left,&unused);
             ala_block_vector_component_products(E,coarse,coarse_action,
                                                 &right,&unused);
-            v_transfer_defect=ala_relative_bilinear_defect(left,right);
+            ala_block_vector_component_norms(
+                E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+            ala_block_vector_component_norms(
+                E,coarse,&coarse_velocity_norm,&coarse_pressure_norm);
+            ala_block_vector_component_norms(
+                E,coarse_action,&coarse_action_velocity_norm,
+                &coarse_action_pressure_norm);
+            v_transfer_defect=ala_norm_scaled_adjoint_defect(
+                left,right,y_velocity_norm,Ax_velocity_norm,
+                coarse_velocity_norm,coarse_action_velocity_norm);
             ala_coupled_prolong_pressure_p0(E,level-1,coarse->pressure,
                                             Ax->pressure);
             ala_coupled_restrict_pressure_p0_transpose(
@@ -1963,7 +2001,14 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
             ala_block_vector_component_products(E,y,Ax,&unused,&left);
             ala_block_vector_component_products(E,coarse,coarse_action,
                                                 &unused,&right);
-            p_transfer_defect=ala_relative_bilinear_defect(left,right);
+            ala_block_vector_component_norms(
+                E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+            ala_block_vector_component_norms(
+                E,coarse_action,&coarse_action_velocity_norm,
+                &coarse_action_pressure_norm);
+            p_transfer_defect=ala_norm_scaled_adjoint_defect(
+                left,right,y_pressure_norm,Ax_pressure_norm,
+                coarse_pressure_norm,coarse_action_pressure_norm);
             ala_block_vector_destroy(E,coarse);
             ala_block_vector_destroy(E,coarse_action);
         }
@@ -2019,22 +2064,28 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                       E->parallel.world);
         MPI_Allreduce(&local_beta_nested_defect,&global_beta_nested_defect,
                       1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
-        if(E->parallel.me==0) {
-            fprintf(stderr,
+        if(E->parallel.me==0)
+          for(output_index=0;output_index<2;output_index++) {
+            output=(output_index==0) ? E->fp : stderr;
+            if(output==NULL || (output_index==1 && output==E->fp))
+                continue;
+            fprintf(output,
                 "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
                 "K_symmetry_defect=%e G_adjoint_defect=%e "
+                "K_bilinear=(%e,%e) G_bilinear=(%e,%e) "
                 "velocity_transfer_adjoint_defect=%e "
                 "pressure_transfer_adjoint_defect=%e "
                 "beta_range=[%e,%e] beta_nested_defect=%e "
                 "pressure_mass_range=[%e,%e] "
                 "duplicate_velocity_dofs=%d invalid=%d\n",
                 level,E->lmesh.NEQ[level],E->lmesh.NPNO[level],
-                k_defect,g_defect,v_transfer_defect,p_transfer_defect,
+                k_defect,g_defect,k_left,k_right,g_left,g_right,
+                v_transfer_defect,p_transfer_defect,
                 global_min[0],global_max[0],global_beta_nested_defect,
                 global_min[1],global_max[1],
                 global_skips,global_invalid);
-            fflush(stderr);
-        }
+            fflush(output);
+          }
         ala_block_vector_destroy(E,x);
         ala_block_vector_destroy(E,y);
         ala_block_vector_destroy(E,Ax);

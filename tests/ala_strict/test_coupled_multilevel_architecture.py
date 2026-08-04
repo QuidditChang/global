@@ -53,10 +53,19 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "assemble_div_rho_u(E,y->velocity,Ay->pressure,level);",
             "K_symmetry_defect=%e",
             "G_adjoint_defect=%e",
+            "K_bilinear=(%e,%e)",
+            "G_bilinear=(%e,%e)",
             "pressure_mass_range=[%e,%e]",
             "duplicate_velocity_dofs=%d",
         ):
             self.assertIn(token, audit)
+        scaling = _function_body(
+            self.element, "static double ala_norm_scaled_adjoint_defect("
+        )
+        self.assertIn("left_vector_norm*left_action_norm", scaling)
+        self.assertIn("right_vector_norm*right_action_norm", scaling)
+        self.assertNotIn("fabs(left)+fabs(right)", scaling)
+        self.assertIn("output=(output_index==0) ? E->fp : stderr;", audit)
 
     def test_coarse_beta_is_restricted_from_authoritative_fine_field(self) -> None:
         audit = _function_body(
