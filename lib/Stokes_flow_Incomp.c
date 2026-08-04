@@ -430,6 +430,24 @@ static float solve_ala_coupled_fgmres_core(
             if(count==0 || ((count+1)%5)==0 || j==restart-1)
                 strict_ala_coupled_preconditioner_audit(
                     E,vb[j],zb[j],w,velocity_weight,pressure_weight,count+1);
+            if(count==0 &&
+               E->control.ala_coupled_first_preconditioner_audit_only) {
+                if(E->parallel.me==0 && E->fp!=NULL) {
+                    fprintf(E->fp,
+                            "ALA COUPLED FIRST PRECONDITIONER AUDIT COMPLETE: "
+                            "terminating before Arnoldi orthogonalization\n");
+                    fflush(E->fp);
+                }
+                if(E->parallel.me==0) {
+                    fprintf(stderr,
+                            "ALA COUPLED FIRST PRECONDITIONER AUDIT COMPLETE: "
+                            "terminating before Arnoldi orthogonalization\n");
+                    fflush(stderr);
+                }
+                MPI_Barrier(E->parallel.world);
+                MPI_Finalize();
+                exit(EXIT_SUCCESS);
+            }
             for(i=0;i<=j;i++) {
                 h[i][j]=ala_block_vector_dot(
                     E,w,vb[i],velocity_weight,pressure_weight);

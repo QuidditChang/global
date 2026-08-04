@@ -540,6 +540,9 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coupled_defect_corrections),"0",m);
   input_boolean("ala_coupled_multilevel_audit_only",
                 &(E->control.ala_coupled_multilevel_audit_only),"off",m);
+  input_boolean("ala_coupled_first_preconditioner_audit_only",
+                &(E->control.ala_coupled_first_preconditioner_audit_only),
+                "off",m);
   input_double("ala_unaugmented_momentum_tolerance",
                &(E->control.ala_unaugmented_momentum_tolerance),"0.0",m);
   input_boolean("ala_feasibility_audit",
@@ -711,6 +714,10 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_coupled_multilevel_audit_only &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_coupled_multilevel_audit_only requires "
+              "ala_outer_solver=coupled_fgmres");
+  if(E->control.ala_coupled_first_preconditioner_audit_only &&
+     strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+      myerror(E, "ala_coupled_first_preconditioner_audit_only requires "
               "ala_outer_solver=coupled_fgmres");
   if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
       myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
@@ -1462,6 +1469,7 @@ void global_default_values(E)
     E->control.ala_coupled_inner_progress_interval = 20;
     E->control.ala_coupled_defect_corrections = 0;
     E->control.ala_coupled_multilevel_audit_only = 0;
+    E->control.ala_coupled_first_preconditioner_audit_only = 0;
     E->control.ala_unaugmented_momentum_tolerance = 0.0;
     E->control.ala_feasibility_audit = 0;
     E->control.ala_feasibility_window = 20;

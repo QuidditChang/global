@@ -56,6 +56,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_inner_progress_interval",
             "ala_coupled_defect_corrections",
             "ala_coupled_multilevel_audit_only",
+            "ala_coupled_first_preconditioner_audit_only",
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
@@ -87,7 +88,12 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_multilevel_audit_only\s*=\s*on\s*$",
+            r"(?m)^\s*ala_coupled_multilevel_audit_only\s*=\s*off\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_first_preconditioner_audit_only"
+            r"\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,

@@ -88,6 +88,44 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
                 "ala_coupled_multilevel_audit_only requires ", source
             )
             self.assertIn('ala_outer_solver=coupled_fgmres', source)
+        self.assertIn(
+            "int ala_coupled_first_preconditioner_audit_only;", self.defs
+        )
+        self.assertIn(
+            'input_boolean("ala_coupled_first_preconditioner_audit_only",',
+            self.instructions,
+        )
+        self.assertIn(
+            "E->control.ala_coupled_first_preconditioner_audit_only = 0;",
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_first_preconditioner_audit_only", default=False',
+            self.pyre,
+        )
+        self.assertIn(
+            'getIntProperty(properties, '
+            '"ala_coupled_first_preconditioner_audit_only",',
+            self.properties,
+        )
+
+    def test_first_preconditioner_audit_stops_after_action_audit(self) -> None:
+        core = _function_body(
+            self.stokes, "static float solve_ala_coupled_fgmres_core("
+        )
+        application = core.index("apply_ala_coupled_block_preconditioner(")
+        action = core.index("apply_ala_coupled_operator(", application)
+        audit = core.index("strict_ala_coupled_preconditioner_audit(", action)
+        gate = core.index(
+            "ala_coupled_first_preconditioner_audit_only", audit
+        )
+        termination = core.index("exit(EXIT_SUCCESS);", gate)
+        orthogonalization = core.index("for(i=0;i<=j;i++)", termination)
+        self.assertLess(application, action)
+        self.assertLess(action, audit)
+        self.assertLess(audit, gate)
+        self.assertLess(gate, termination)
+        self.assertLess(termination, orthogonalization)
 
     def test_level_audit_checks_complete_operator_contracts(self) -> None:
         audit = _function_body(
