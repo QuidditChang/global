@@ -103,7 +103,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*40\s*$",
         )
         self.assertRegex(
             strict_text,
