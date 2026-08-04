@@ -100,10 +100,14 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "K_symmetry_defect=%e",
             "G_adjoint_defect=%e",
             "G_element_adjoint_defect=%e",
+            "G_exchange_adjoint_defect=%e",
+            "G_stripped_adjoint_defect=%e",
             "G_multiplicity_adjoint_defect=%e",
             "K_bilinear=(%e,%e)",
             "G_bilinear=(%e,%e)",
             "G_element_bilinear=(%e,%e)",
+            "G_exchange_bilinear=(%e,%e)",
+            "G_stripped_bilinear=(%e,%e)",
             "G_multiplicity_bilinear=(%e,%e)",
             "pressure_mass_range=[%e,%e]",
             "duplicate_velocity_dofs=%d",
@@ -118,6 +122,12 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("output=(output_index==0) ? E->fp : stderr;", audit)
         self.assertIn("assemble_grad_rho_p_local_terms(", audit)
         self.assertIn("MPI_Allreduce(&local_g_element_right", audit)
+        self.assertLess(
+            audit.index("(E->solver.exchange_id_d)(E,Ax->velocity,level);"),
+            audit.index("strip_bcs_from_residual(E,Ax->velocity,level);"),
+        )
+        self.assertIn("&g_exchange_right", audit)
+        self.assertIn("&g_stripped_right", audit)
         self.assertIn(
             "(E->solver.exchange_id_d)(E,multiplicity->velocity,level);",
             audit,
@@ -141,9 +151,15 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("radius=E->SX[level][m][3][node];", probe)
         self.assertIn("probe->velocity[m][eq]=value;", probe)
+        self.assertIn("const unsigned int vbc_flag[4]={0,VBX,VBY,VBZ};", probe)
+        self.assertIn("E->NODE[level][m][node] & vbc_flag[d]", probe)
+        self.assertIn("value=0.0;", probe)
         self.assertNotIn("E->NODE[level][m][node] & SKIP", probe)
         self.assertNotIn("exchange_id_d", probe)
-        self.assertIn("velocity_probe=direct_conforming_radial", self.element)
+        self.assertIn(
+            "velocity_probe=direct_conforming_radial_bc_projected",
+            self.element,
+        )
 
     def test_coarse_beta_is_restricted_from_authoritative_fine_field(self) -> None:
         audit = _function_body(

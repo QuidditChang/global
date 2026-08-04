@@ -1866,6 +1866,7 @@ static void ala_fill_level_probe(struct All_variables *E,
     int level=probe->level;
     int m,node,e,d,eq,nz;
     double radius,value;
+    const unsigned int vbc_flag[4]={0,VBX,VBY,VBZ};
 
     ala_block_vector_zero(E,probe);
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -1880,6 +1881,8 @@ static void ala_fill_level_probe(struct All_variables *E,
             for(d=1;d<=E->mesh.nsd;d++) {
                 eq=E->ID[level][m][node].doff[d];
                 value=(d==3) ? sin(phase+2.0*radius) : 0.0;
+                if(E->NODE[level][m][node] & vbc_flag[d])
+                    value=0.0;
                 probe->velocity[m][eq]=value;
             }
         }
@@ -1935,9 +1938,11 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     int local_invalid,global_invalid,local_skips,global_skips,output_index;
     double left,right,unused,k_defect,g_defect,v_transfer_defect,p_transfer_defect;
     double k_left,k_right,g_left,g_right,g_element_right;
+    double g_exchange_right,g_stripped_right;
     double local_g_element_right,g_multiplicity_right;
     double local_g_multiplicity_right;
-    double g_element_defect,g_multiplicity_defect;
+    double g_element_defect,g_exchange_defect,g_stripped_defect;
+    double g_multiplicity_defect;
     double x_velocity_norm,x_pressure_norm,y_velocity_norm,y_pressure_norm;
     double Ax_velocity_norm,Ax_pressure_norm,Ay_velocity_norm,Ay_pressure_norm;
     double coarse_velocity_norm,coarse_pressure_norm;
@@ -1950,6 +1955,7 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     struct ala_block_vector *multiplicity;
     FILE *output;
     void assemble_del2_u();
+    void strip_bcs_from_residual();
 
     if(completed)
         return;
@@ -2029,6 +2035,27 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                       MPI_DOUBLE,MPI_SUM,E->parallel.world);
         g_element_defect=fabs(g_left-g_element_right)
             /max(fabs(g_left)+fabs(g_element_right),1.0e-300);
+
+        /* The production transpose wrapper performs additive assembly and
+         * essential-BC stripping consecutively.  Audit the intermediate
+         * assembled vector before stripping so a communication defect cannot
+         * be confused with a constrained-space adjoint contract. */
+        (E->solver.exchange_id_d)(E,Ax->velocity,level);
+        ala_block_vector_component_products(
+            E,y,Ax,&g_exchange_right,&unused);
+        ala_block_vector_component_norms(
+            E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+        g_exchange_defect=ala_norm_scaled_adjoint_defect(
+            g_left,g_exchange_right,x_pressure_norm,Ay_pressure_norm,
+            y_velocity_norm,Ax_velocity_norm);
+        strip_bcs_from_residual(E,Ax->velocity,level);
+        ala_block_vector_component_products(
+            E,y,Ax,&g_stripped_right,&unused);
+        ala_block_vector_component_norms(
+            E,Ax,&Ax_velocity_norm,&Ax_pressure_norm);
+        g_stripped_defect=ala_norm_scaled_adjoint_defect(
+            g_left,g_stripped_right,x_pressure_norm,Ay_pressure_norm,
+            y_velocity_norm,Ax_velocity_norm);
 
         v_transfer_defect=0.0;
         p_transfer_defect=0.0;
@@ -2130,12 +2157,16 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                 continue;
             fprintf(output,
                 "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
-                "velocity_probe=direct_conforming_radial "
+                "velocity_probe=direct_conforming_radial_bc_projected "
                 "K_symmetry_defect=%e G_adjoint_defect=%e "
                 "G_element_adjoint_defect=%e "
+                "G_exchange_adjoint_defect=%e "
+                "G_stripped_adjoint_defect=%e "
                 "G_multiplicity_adjoint_defect=%e "
                 "K_bilinear=(%e,%e) G_bilinear=(%e,%e) "
                 "G_element_bilinear=(%e,%e) "
+                "G_exchange_bilinear=(%e,%e) "
+                "G_stripped_bilinear=(%e,%e) "
                 "G_multiplicity_bilinear=(%e,%e) "
                 "velocity_transfer_adjoint_defect=%e "
                 "pressure_transfer_adjoint_defect=%e "
@@ -2143,8 +2174,10 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                 "pressure_mass_range=[%e,%e] "
                 "duplicate_velocity_dofs=%d invalid=%d\n",
                 level,E->lmesh.NEQ[level],E->lmesh.NPNO[level],
-                k_defect,g_defect,g_element_defect,g_multiplicity_defect,
+                k_defect,g_defect,g_element_defect,g_exchange_defect,
+                g_stripped_defect,g_multiplicity_defect,
                 k_left,k_right,g_left,g_right,g_left,g_element_right,
+                g_left,g_exchange_right,g_left,g_stripped_right,
                 g_left,g_multiplicity_right,
                 v_transfer_defect,p_transfer_defect,
                 global_min[0],global_max[0],global_beta_nested_defect,
