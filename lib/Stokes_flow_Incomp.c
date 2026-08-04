@@ -408,6 +408,7 @@ static void apply_ala_coupled_multilevel_vcycle(
     struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
     struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
     int coarse_sweep,shallow_sweep;
+    double coarse_weight;
 
     smooth=ala_block_vector_create(E,lev);
     delta=ala_block_vector_create(E,lev);
@@ -437,9 +438,15 @@ static void apply_ala_coupled_multilevel_vcycle(
             E,lev-1,coarse_correction->velocity,smooth->velocity);
         ala_coupled_prolong_pressure_p0(
             E,lev-1,coarse_correction->pressure,smooth->pressure);
+        /* The configured damping stabilizes the one coarse correction seen
+         * by the finest operator.  Applying it at every recursive interface
+         * attenuates the globally coarsest mode by weight^nlevels (1/16 for
+         * the production 0.5/five-level hierarchy), precisely where the
+         * residual diagnostics show the remaining energy. */
+        coarse_weight=(lev==E->mesh.levmax)
+            ? E->control.ala_coupled_multilevel_coarse_weight : 1.0;
         ala_block_vector_axpy(
-            E,E->control.ala_coupled_multilevel_coarse_weight,
-            smooth,correction);
+            E,coarse_weight,smooth,correction);
         ala_block_vector_destroy(E,coarse_residual);
         ala_block_vector_destroy(E,coarse_correction);
     }
@@ -508,6 +515,7 @@ static void apply_ala_coupled_block_preconditioner(
             fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
+                    "nested_coarse_weight=1.000000e+00 "
                     "shallow_layers=%d shallow_sweeps=%d\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
@@ -520,6 +528,7 @@ static void apply_ala_coupled_block_preconditioner(
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
+                    "nested_coarse_weight=1.000000e+00 "
                     "shallow_layers=%d shallow_sweeps=%d\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,

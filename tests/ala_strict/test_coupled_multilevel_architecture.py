@@ -468,6 +468,8 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "ala_coupled_prolong_velocity(",
             "ala_coupled_prolong_pressure_p0(",
             "E->control.ala_coupled_multilevel_coarse_weight",
+            "coarse_weight=(lev==E->mesh.levmax)",
+            ": 1.0",
             "E->control.ala_coupled_multilevel_coarse_sweeps",
             "E->control.ala_coupled_shallow_vanka_layers",
             "E->control.ala_coupled_shallow_vanka_sweeps",
@@ -480,6 +482,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("if(E->control.ala_coupled_multilevel_vcycle)", block)
         self.assertIn("ALA COUPLED MULTILEVEL VCYCLE APPLICATION", block)
         self.assertIn("coarse_weight=%e", block)
+        self.assertIn("nested_coarse_weight=1.000000e+00", block)
         self.assertIn("shallow_layers=%d shallow_sweeps=%d", block)
 
     def test_stage10c_shallow_smoother_uses_selected_patch_partition(self) -> None:
