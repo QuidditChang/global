@@ -87,5 +87,12 @@ block-triangular pressure-first map, and that only its velocity MG call uses a
 bounded, periodically reported cycle budget.  The historical velocity-solver
 entry point retains its original unbounded behavior for rollback equivalence.
 
-Future test groups remain reserved for operator adjoint, energy-budget, and
-multigrid/Galerkin validation.
+Stage 9f.0 adds a one-time five-level runtime contract audit for `K_gamma`
+symmetry, `G/G^T` adjointness, velocity and P0-pressure transfer adjointness,
+coarse beta, pressure mass, and duplicate ownership.  The P0 pair is constant
+prolongation with its exact Euclidean transpose.  A mixed patch callback
+contract reserves Stage 9f.1 for a real velocity-pressure Vanka kernel; it does
+not relabel the existing velocity-only smoother as coupled.
+
+Future test groups remain reserved for energy-budget and coupled-V-cycle
+Galerkin validation.

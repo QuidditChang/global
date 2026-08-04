@@ -290,6 +290,7 @@ static float solve_ala_coupled_fgmres_core(
 
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
+    audit_ala_coupled_multilevel_contracts(E);
     restart=E->control.ala_pcg_restart_interval;
     if(restart<1 || restart>64)
         myerror(E,"ALA coupled FGMRES restart must be between 1 and 64");

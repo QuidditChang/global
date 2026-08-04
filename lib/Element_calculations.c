@@ -33,6 +33,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
+#include "ala_block_vector.h"
 #include "ala_coupled_operator.h"
 
 void myerror(struct All_variables *,char *);
@@ -1749,6 +1750,296 @@ void assemble_ala_pressure_independent_force(struct All_variables *E,
         for(i=0;i<neq;i++)
             force[m][i]-=velocity_work[m][i];
     strip_bcs_from_residual(E,force,level);
+}
+
+
+void ala_coupled_prolong_velocity(struct All_variables *E, int coarse_level,
+                                  double **coarse, double **fine)
+{
+    void interp_vector();
+
+    if(coarse_level<E->mesh.levmin || coarse_level>=E->mesh.levmax)
+        myerror(E,"Invalid coupled velocity prolongation level");
+    interp_vector(E,coarse_level,coarse,fine);
+}
+
+
+void ala_coupled_restrict_velocity(struct All_variables *E, int fine_level,
+                                   double **fine, double **coarse)
+{
+    void project_vector();
+
+    if(fine_level<=E->mesh.levmin || fine_level>E->mesh.levmax)
+        myerror(E,"Invalid coupled velocity restriction level");
+    project_vector(E,fine_level,fine,coarse,1);
+}
+
+
+static void ala_require_adjacent_factor_two(struct All_variables *E,
+                                             int coarse_level)
+{
+    int fine_level=coarse_level+1;
+
+    if(coarse_level<E->mesh.levmin || fine_level>E->mesh.levmax ||
+       E->lmesh.ELX[fine_level]!=2*E->lmesh.ELX[coarse_level] ||
+       E->lmesh.ELY[fine_level]!=2*E->lmesh.ELY[coarse_level] ||
+       E->lmesh.ELZ[fine_level]!=2*E->lmesh.ELZ[coarse_level])
+        myerror(E,"Coupled P0 transfer requires adjacent factor-two levels");
+}
+
+
+void ala_coupled_prolong_pressure_p0(struct All_variables *E,
+                                     int coarse_level,
+                                     double **coarse, double **fine)
+{
+    int m,ex,ey,ez,e,cx,cy,cz,ce;
+    int fine_level=coarse_level+1;
+    int elx,ely,elz,celx,celz;
+
+    ala_require_adjacent_factor_two(E,coarse_level);
+    elx=E->lmesh.ELX[fine_level];
+    ely=E->lmesh.ELY[fine_level];
+    elz=E->lmesh.ELZ[fine_level];
+    celx=E->lmesh.ELX[coarse_level];
+    celz=E->lmesh.ELZ[coarse_level];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        fine[m][0]=0.0;
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/2+1;
+                    cy=(ey-1)/2+1;
+                    cz=(ez-1)/2+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    fine[m][e]=coarse[m][ce];
+                }
+    }
+}
+
+
+void ala_coupled_restrict_pressure_p0_transpose(struct All_variables *E,
+                                                int fine_level,
+                                                double **fine,
+                                                double **coarse)
+{
+    int m,ex,ey,ez,e,cx,cy,cz,ce;
+    int coarse_level=fine_level-1;
+    int elx,ely,elz,celx,celz,cnpno;
+
+    ala_require_adjacent_factor_two(E,coarse_level);
+    elx=E->lmesh.ELX[fine_level];
+    ely=E->lmesh.ELY[fine_level];
+    elz=E->lmesh.ELZ[fine_level];
+    celx=E->lmesh.ELX[coarse_level];
+    celz=E->lmesh.ELZ[coarse_level];
+    cnpno=E->lmesh.NPNO[coarse_level];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(ce=0;ce<=cnpno;ce++)
+            coarse[m][ce]=0.0;
+        for(ey=1;ey<=ely;ey++)
+            for(ex=1;ex<=elx;ex++)
+                for(ez=1;ez<=elz;ez++) {
+                    e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                    cx=(ex-1)/2+1;
+                    cy=(ey-1)/2+1;
+                    cz=(ez-1)/2+1;
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    coarse[m][ce] += fine[m][e];
+                }
+    }
+}
+
+
+static void ala_fill_level_probe(struct All_variables *E,
+                                 struct ala_block_vector *probe,
+                                 double phase)
+{
+    int level=probe->level;
+    int m,node,e,d,eq,nz;
+    double radius,value;
+
+    ala_block_vector_zero(E,probe);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(node=1;node<=E->lmesh.NNO[level];node++) {
+            radius=E->SX[level][m][3][node];
+            for(d=1;d<=E->mesh.nsd;d++) {
+                eq=E->ID[level][m][node].doff[d];
+                value=(d==3) ? sin(phase+2.0*radius) : 0.0;
+                probe->velocity[m][eq]=value;
+            }
+        }
+        probe->velocity[m][E->lmesh.NEQ[level]]=0.0;
+        for(e=1;e<=E->lmesh.NPNO[level];e++) {
+            nz=(e-1)%E->lmesh.ELZ[level]+1;
+            probe->pressure[m][e]=cos(phase+0.17*nz);
+        }
+    }
+}
+
+
+static double ala_relative_bilinear_defect(double left, double right)
+{
+    return fabs(left-right)/max(fabs(left)+fabs(right),1.0e-300);
+}
+
+
+static double ala_restricted_beta(struct All_variables *E, int level, int nz,
+                                  double *radial_width)
+{
+    int fine_first,fine_last,fine_nz;
+    double beta=0.0;
+    double dr,dr_total=0.0;
+
+    fine_first=((nz-1)*E->lmesh.elz)/E->lmesh.ELZ[level]+1;
+    fine_last=(nz*E->lmesh.elz)/E->lmesh.ELZ[level];
+    for(fine_nz=fine_first;fine_nz<=fine_last;fine_nz++) {
+        dr=E->sx[1][3][fine_nz+1]-E->sx[1][3][fine_nz];
+        beta += E->refstate.ala_beta[fine_nz]*dr;
+        dr_total += dr;
+    }
+    if(!isfinite(dr_total) || dr_total<=0.0)
+        myerror(E,"Invalid radial width in coupled beta audit");
+    if(radial_width!=NULL)
+        *radial_width=dr_total;
+    return beta/dr_total;
+}
+
+
+void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
+{
+    static int completed=0;
+    int level,m,e,nz,child;
+    int local_invalid,global_invalid,local_skips,global_skips;
+    double left,right,unused,k_defect,g_defect,v_transfer_defect,p_transfer_defect;
+    double beta,beta_min,beta_max,volume_min,volume_max;
+    double child_beta,child_width,nested_beta,nested_width;
+    double local_beta_nested_defect,global_beta_nested_defect;
+    double local_bounds[4],global_min[2],global_max[2];
+    struct ala_block_vector *x,*y,*Ax,*Ay,*coarse,*coarse_action;
+    void assemble_del2_u();
+
+    if(completed)
+        return;
+    completed=1;
+    for(level=E->mesh.levmin;level<=E->mesh.levmax;level++) {
+        x=ala_block_vector_create(E,level);
+        y=ala_block_vector_create(E,level);
+        Ax=ala_block_vector_create(E,level);
+        Ay=ala_block_vector_create(E,level);
+        ala_fill_level_probe(E,x,0.31);
+        ala_fill_level_probe(E,y,0.79);
+
+        assemble_del2_u(E,x->velocity,Ax->velocity,level,1);
+        assemble_del2_u(E,y->velocity,Ay->velocity,level,1);
+        ala_block_vector_component_products(E,x,Ay,&left,&unused);
+        ala_block_vector_component_products(E,y,Ax,&right,&unused);
+        k_defect=ala_relative_bilinear_defect(left,right);
+
+        assemble_grad_rho_p(E,x->pressure,Ax->velocity,level);
+        assemble_div_rho_u(E,y->velocity,Ay->pressure,level);
+        ala_block_vector_component_products(E,y,Ax,&right,&unused);
+        ala_block_vector_component_products(E,x,Ay,&unused,&left);
+        g_defect=ala_relative_bilinear_defect(left,right);
+
+        v_transfer_defect=0.0;
+        p_transfer_defect=0.0;
+        if(level>E->mesh.levmin) {
+            coarse=ala_block_vector_create(E,level-1);
+            coarse_action=ala_block_vector_create(E,level-1);
+            ala_fill_level_probe(E,coarse,0.53);
+            ala_coupled_prolong_velocity(E,level-1,coarse->velocity,
+                                         Ax->velocity);
+            ala_coupled_restrict_velocity(E,level,y->velocity,
+                                          coarse_action->velocity);
+            ala_block_vector_component_products(E,y,Ax,&left,&unused);
+            ala_block_vector_component_products(E,coarse,coarse_action,
+                                                &right,&unused);
+            v_transfer_defect=ala_relative_bilinear_defect(left,right);
+            ala_coupled_prolong_pressure_p0(E,level-1,coarse->pressure,
+                                            Ax->pressure);
+            ala_coupled_restrict_pressure_p0_transpose(
+                E,level,y->pressure,coarse_action->pressure);
+            ala_block_vector_component_products(E,y,Ax,&unused,&left);
+            ala_block_vector_component_products(E,coarse,coarse_action,
+                                                &unused,&right);
+            p_transfer_defect=ala_relative_bilinear_defect(left,right);
+            ala_block_vector_destroy(E,coarse);
+            ala_block_vector_destroy(E,coarse_action);
+        }
+
+        beta_min=1.0e300;
+        beta_max=-1.0e300;
+        volume_min=1.0e300;
+        volume_max=0.0;
+        local_beta_nested_defect=0.0;
+        local_invalid=0;
+        local_skips=0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            local_skips += E->parallel.Skip_neq[level][m];
+            for(e=1;e<=E->lmesh.NEL[level];e++) {
+                nz=(e-1)%E->lmesh.ELZ[level]+1;
+                beta=ala_restricted_beta(E,level,nz,NULL);
+                if(level<E->mesh.levmax && m==1 &&
+                   e<=E->lmesh.ELZ[level]) {
+                    nested_beta=0.0;
+                    nested_width=0.0;
+                    for(child=2*nz-1;child<=2*nz;child++) {
+                        child_beta=ala_restricted_beta(
+                            E,level+1,child,&child_width);
+                        nested_beta += child_beta*child_width;
+                        nested_width += child_width;
+                    }
+                    nested_beta /= nested_width;
+                    local_beta_nested_defect=max(
+                        local_beta_nested_defect,
+                        fabs(beta-nested_beta)/max(fabs(beta),1.0e-300));
+                }
+                if(!isfinite(beta) || beta<=0.0 ||
+                   !isfinite(E->ECO[level][m][e].area) ||
+                   E->ECO[level][m][e].area<=0.0)
+                    local_invalid++;
+                beta_min=min(beta_min,beta);
+                beta_max=max(beta_max,beta);
+                volume_min=min(volume_min,E->ECO[level][m][e].area);
+                volume_max=max(volume_max,E->ECO[level][m][e].area);
+            }
+        }
+        local_bounds[0]=beta_min;
+        local_bounds[1]=volume_min;
+        local_bounds[2]=beta_max;
+        local_bounds[3]=volume_max;
+        MPI_Allreduce(local_bounds,global_min,2,MPI_DOUBLE,MPI_MIN,
+                      E->parallel.world);
+        MPI_Allreduce(local_bounds+2,global_max,2,MPI_DOUBLE,MPI_MAX,
+                      E->parallel.world);
+        MPI_Allreduce(&local_invalid,&global_invalid,1,MPI_INT,MPI_SUM,
+                      E->parallel.world);
+        MPI_Allreduce(&local_skips,&global_skips,1,MPI_INT,MPI_SUM,
+                      E->parallel.world);
+        MPI_Allreduce(&local_beta_nested_defect,&global_beta_nested_defect,
+                      1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+        if(E->parallel.me==0) {
+            fprintf(stderr,
+                "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
+                "K_symmetry_defect=%e G_adjoint_defect=%e "
+                "velocity_transfer_adjoint_defect=%e "
+                "pressure_transfer_adjoint_defect=%e "
+                "beta_range=[%e,%e] beta_nested_defect=%e "
+                "pressure_mass_range=[%e,%e] "
+                "duplicate_velocity_dofs=%d invalid=%d\n",
+                level,E->lmesh.NEQ[level],E->lmesh.NPNO[level],
+                k_defect,g_defect,v_transfer_defect,p_transfer_defect,
+                global_min[0],global_max[0],global_beta_nested_defect,
+                global_min[1],global_max[1],
+                global_skips,global_invalid);
+            fflush(stderr);
+        }
+        ala_block_vector_destroy(E,x);
+        ala_block_vector_destroy(E,y);
+        ala_block_vector_destroy(E,Ax);
+        ala_block_vector_destroy(E,Ay);
+    }
 }
 
 
