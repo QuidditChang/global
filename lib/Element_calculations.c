@@ -1870,12 +1870,12 @@ static void ala_fill_level_probe(struct All_variables *E,
     ala_block_vector_zero(E,probe);
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         for(node=1;node<=E->lmesh.NNO[level];node++) {
-            /* A distributed velocity vector is owned on non-SKIP nodes and
-             * replicated to halo copies.  Populating every local copy before
-             * the additive equation exchange constructs an assembled force,
-             * not a legal Krylov vector, and invalidates the G/G^T audit. */
-            if(E->NODE[level][m][node] & SKIP)
-                continue;
+            /* This is a primal Krylov probe, not an assembled residual.
+             * Prescribe the same analytic radial value independently on
+             * every replica of a shared node.  Using additive exchange to
+             * construct the probe can multiply corner values along several
+             * communication routes and manufacture an adjoint defect before
+             * either G or G^T is applied. */
             radius=E->SX[level][m][3][node];
             for(d=1;d<=E->mesh.nsd;d++) {
                 eq=E->ID[level][m][node].doff[d];
@@ -1888,7 +1888,6 @@ static void ala_fill_level_probe(struct All_variables *E,
             probe->pressure[m][e]=cos(phase+0.17*nz);
         }
     }
-    (E->solver.exchange_id_d)(E,probe->velocity,level);
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         probe->velocity[m][E->lmesh.NEQ[level]]=0.0;
 }
@@ -2131,6 +2130,7 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                 continue;
             fprintf(output,
                 "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
+                "velocity_probe=direct_conforming_radial "
                 "K_symmetry_defect=%e G_adjoint_defect=%e "
                 "G_element_adjoint_defect=%e "
                 "G_multiplicity_adjoint_defect=%e "

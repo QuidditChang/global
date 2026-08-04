@@ -135,19 +135,15 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("(E->solver.exchange_id_d)(E, gradP, lev);", gradient)
         self.assertIn("strip_bcs_from_residual(E,gradP,lev);", gradient)
 
-    def test_probe_uses_owned_velocity_representation(self) -> None:
+    def test_probe_is_directly_conforming_not_additively_assembled(self) -> None:
         probe = _function_body(
             self.element, "static void ala_fill_level_probe("
         )
-        self.assertIn("E->NODE[level][m][node] & SKIP", probe)
-        self.assertIn("continue;", probe)
-        self.assertIn(
-            "(E->solver.exchange_id_d)(E,probe->velocity,level);", probe
-        )
-        self.assertLess(
-            probe.index("E->NODE[level][m][node] & SKIP"),
-            probe.index("probe->velocity[m][eq]=value;"),
-        )
+        self.assertIn("radius=E->SX[level][m][3][node];", probe)
+        self.assertIn("probe->velocity[m][eq]=value;", probe)
+        self.assertNotIn("E->NODE[level][m][node] & SKIP", probe)
+        self.assertNotIn("exchange_id_d", probe)
+        self.assertIn("velocity_probe=direct_conforming_radial", self.element)
 
     def test_coarse_beta_is_restricted_from_authoritative_fine_field(self) -> None:
         audit = _function_body(
