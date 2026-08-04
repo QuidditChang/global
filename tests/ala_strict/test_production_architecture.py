@@ -46,6 +46,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
             "steps",
+            "walltime",
+            "kC_ratio",
+            "kC_primordial_flavor",
+            "profile_optional",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
@@ -168,7 +172,44 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*steps\s*=\s*11\s*$",
+            r"(?m)^\s*steps\s*=\s*30000\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*walltime\s*=\s*168\s*\*hour\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*kC_ratio\s*=\s*0\.8\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*kC_primordial_flavor\s*=\s*24\s*$",
+        )
+        profile = re.search(
+            r"(?m)^\s*profile_optional\s*=\s*(.*?)\s*$", strict_text
+        )
+        self.assertIsNotNone(profile)
+        self.assertIn("kC", profile.group(1).split(","))
+        interfaces = re.search(
+            r"(?m)^\s*z_interface\s*=\s*(.*?)\s*$", strict_text
+        )
+        self.assertIsNotNone(interfaces)
+        self.assertEqual(
+            [float(value) for value in interfaces.group(1).split(",")],
+            [0.585] * 24,
+        )
+        lsf = (RUNS_ROOT / "cmbhf_ALA_strict.lsf").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(lsf, r"(?m)^#BSUB\s+-W\s+168:00\s+")
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*monitoringFrequency\s*=\s*50\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*checkpointFrequency\s*=\s*50\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -833,6 +874,30 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertNotIn("DataT", initial)
         self.assertIn("E->T", advection)
         self.assertIn("E->assim_delta_T", advection)
+
+    def test_kc_tracks_the_explicit_primordial_flavor(self) -> None:
+        advection = (GLOBAL_ROOT / "lib" / "Advection_diffusion.c").read_text()
+        composition = (GLOBAL_ROOT / "lib" / "Composition_related.c").read_text()
+        material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()
+        properties = (GLOBAL_ROOT / "module" / "setProperties.c").read_text()
+        inventory = (
+            GLOBAL_ROOT
+            / "CitcomS/Components/Advection_diffusion/Advection_diffusion.py"
+        ).read_text()
+        profile = (GLOBAL_ROOT / "lib" / "Profile_output.c").read_text()
+
+        self.assertIn('input_int("kC_primordial_flavor",', advection)
+        self.assertIn(
+            'getIntProperty(properties, "kC_primordial_flavor",', properties
+        )
+        self.assertIn(
+            'prop.int("kC_primordial_flavor", default=1)', inventory
+        )
+        self.assertIn("E->control.kC_primordial_flavor - 1", material)
+        self.assertNotIn("E->composition.ncomp-1", material)
+        self.assertIn("Active kC requires tracers, composition", composition)
+        self.assertIn("kC_primordial_flavor=%d is invalid", composition)
+        self.assertIn('{"kC", "1", ELEMENT_PROFILE', profile)
 
     def test_runtime_audits_are_absent(self) -> None:
         material = (GLOBAL_ROOT / "lib" / "Material_properties.c").read_text()

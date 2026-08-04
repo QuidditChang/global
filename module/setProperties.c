@@ -141,6 +141,8 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     }
     getFloatProperty(properties, "kT_exponent", E->control.kT_exponent, fp);
     getFloatProperty(properties, "kC_ratio", E->control.kC_ratio, fp);
+    getIntProperty(properties, "kC_primordial_flavor",
+                   E->control.kC_primordial_flavor, fp);
     getFloatProperty(properties, "kd_mantle_thickness_km",
                      E->control.kd_mantle_thickness_km, fp);
     getFloatProperty(properties, "kd_transition_depth_km",

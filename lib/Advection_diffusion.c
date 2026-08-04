@@ -129,7 +129,9 @@ void advection_diffusion_parameters(struct All_variables *E)
        kT_exponent = a in k~_T = (300/T_dim)^a  (0 = degenerate, k~_T=1)
        kC_ratio    = R_C in k~_C = 1+(R_C-1)*C_prim  (1 = off, k~_C=1) */
     input_float("kT_exponent",&(E->control.kT_exponent),"0.0",m);
-    input_float("kC_ratio",&(E->control.kC_ratio),"0.8",m);
+    input_float("kC_ratio",&(E->control.kC_ratio),"1.0",m);
+    input_int("kC_primordial_flavor",
+              &(E->control.kC_primordial_flavor),"1,1,nomax",m);
     input_float("kd_mantle_thickness_km",
                 &(E->control.kd_mantle_thickness_km),"2890.0",m);
     input_float("kd_transition_depth_km",

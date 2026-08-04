@@ -585,6 +585,7 @@ struct CONTROL {
     float kd_lower_quadratic;
     float kT_exponent;   /* Deschamps k~_T temperature exponent a (default 0 = degenerate leg) */
     float kC_ratio;      /* Deschamps k~_C enriched/normal conductivity ratio R_C */
+    int kC_primordial_flavor; /* tracer flavor supplying C_prim in k~_C */
     float VBXtopval;
     float VBXbotval;
     float VBYtopval;

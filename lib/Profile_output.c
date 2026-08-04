@@ -22,6 +22,9 @@
 #define PROFILE_K_BINS 200
 #define PROFILE_K_MIN 0.0
 #define PROFILE_K_MAX 35.0
+#define PROFILE_KC_BINS 200
+#define PROFILE_KC_MIN 0.0
+#define PROFILE_KC_MAX 1.0000001
 #define PROFILE_VISCOSITY_BINS 200
 #define PROFILE_VISCOSITY_MIN 18.0
 #define PROFILE_VISCOSITY_MAX 24.0
@@ -99,6 +102,7 @@ struct Profile_result {
 enum Profile_flag {
     PROFILE_FLAG_TEMPERATURE = 0,
     PROFILE_FLAG_K,
+    PROFILE_FLAG_KC,
     PROFILE_FLAG_VISCOSITY_GP,
     PROFILE_FLAG_ALA_RESIDUAL_LOG10_ABS,
     PROFILE_FLAG_ALA_RELATIVE_RESIDUAL,
@@ -163,6 +167,12 @@ static double conductivity_at_gp(struct All_variables *E, int cap,
     k_nd = conductivity_element_prefactor(
         E, cap, element, E->control.reference_conductivity) * kT;
     return k_nd * E->data.k0;
+}
+
+static double conductivity_composition_at_element(struct All_variables *E,
+                                                  int cap, int element)
+{
+    return conductivity_element_composition_factor(E, cap, element);
 }
 
 static double viscosity_at_gp(struct All_variables *E, int cap,
@@ -318,6 +328,9 @@ static const struct Profile_variable profile_variables[] = {
     {"k", "W/(m K)", GP_PROFILE, PROFILE_FLAG_K,
      PROFILE_K_BINS, PROFILE_K_MIN, PROFILE_K_MAX,
      NULL, conductivity_at_gp, NULL},
+    {"kC", "1", ELEMENT_PROFILE, PROFILE_FLAG_KC,
+     PROFILE_KC_BINS, PROFILE_KC_MIN, PROFILE_KC_MAX,
+     NULL, NULL, conductivity_composition_at_element},
     {"viscosity_gp", "log10(Pa s)", GP_PROFILE,
      PROFILE_FLAG_VISCOSITY_GP, PROFILE_VISCOSITY_BINS,
      PROFILE_VISCOSITY_MIN, PROFILE_VISCOSITY_MAX,
