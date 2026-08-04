@@ -419,6 +419,16 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "                E,explicit_r->pressure,lev,count);",
             core,
         )
+        self.assertIn(
+            "strict_ala_depth_diagnostics(\n"
+            "        E,w->pressure,operator_work->pressure,lev,0);",
+            core,
+        )
+        self.assertIn(
+            "strict_ala_depth_diagnostics(\n"
+            "                E,w->pressure,operator_work->pressure,lev,count);",
+            core,
+        )
 
     def test_stage9f2_vcycle_uses_both_exact_transfer_pairs(self) -> None:
         vcycle = _function_body(

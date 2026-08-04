@@ -697,6 +697,8 @@ static float solve_ala_coupled_fgmres_core(
         fflush(E->fp);
         fflush(stderr);
     }
+    strict_ala_depth_diagnostics(
+        E,w->pressure,operator_work->pressure,lev,0);
     strict_ala_coarse_residual_diagnostics(
         E,r->pressure,lev,0);
 
@@ -852,6 +854,8 @@ static float solve_ala_coupled_fgmres_core(
                         converged ? "accepted" : "continue");
                 fflush(E->fp);
             }
+            strict_ala_depth_diagnostics(
+                E,w->pressure,operator_work->pressure,lev,count);
             strict_ala_coarse_residual_diagnostics(
                 E,explicit_r->pressure,lev,count);
             if(E->control.ala_coupled_debug_stop_iteration>0 &&
