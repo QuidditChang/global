@@ -484,6 +484,7 @@ struct CONTROL {
     int ala_coupled_inner_max_cycles;
     int ala_coupled_inner_progress_interval;
     int ala_coupled_defect_corrections;
+    int ala_coupled_multilevel_audit_only;
     double ala_unaugmented_momentum_tolerance;
     int ala_feasibility_audit;
     int ala_feasibility_window;

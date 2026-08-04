@@ -134,6 +134,8 @@ class Incompressible(CitcomComponent):
             "ala_coupled_inner_progress_interval", default=20)
         ala_coupled_defect_corrections = prop.int(
             "ala_coupled_defect_corrections", default=0)
+        ala_coupled_multilevel_audit_only = prop.bool(
+            "ala_coupled_multilevel_audit_only", default=False)
         ala_unaugmented_momentum_tolerance = prop.float(
             "ala_unaugmented_momentum_tolerance", default=0.0)
         ala_feasibility_audit = prop.bool("ala_feasibility_audit",

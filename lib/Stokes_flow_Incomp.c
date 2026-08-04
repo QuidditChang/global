@@ -291,6 +291,23 @@ static float solve_ala_coupled_fgmres_core(
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
     audit_ala_coupled_multilevel_contracts(E);
+    if(E->control.ala_coupled_multilevel_audit_only) {
+        if(E->parallel.me==0 && E->fp!=NULL) {
+            fprintf(E->fp,
+                    "ALA COUPLED MULTILEVEL AUDIT COMPLETE: "
+                    "terminating before FGMRES iteration 1\n");
+            fflush(E->fp);
+        }
+        if(E->parallel.me==0) {
+            fprintf(stderr,
+                    "ALA COUPLED MULTILEVEL AUDIT COMPLETE: "
+                    "terminating before FGMRES iteration 1\n");
+            fflush(stderr);
+        }
+        MPI_Barrier(E->parallel.world);
+        MPI_Finalize();
+        exit(EXIT_SUCCESS);
+    }
     restart=E->control.ala_pcg_restart_interval;
     if(restart<1 || restart>64)
         myerror(E,"ALA coupled FGMRES restart must be between 1 and 64");

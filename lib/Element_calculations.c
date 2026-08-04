@@ -1936,8 +1936,9 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     int local_invalid,global_invalid,local_skips,global_skips,output_index;
     double left,right,unused,k_defect,g_defect,v_transfer_defect,p_transfer_defect;
     double k_left,k_right,g_left,g_right,g_element_right;
-    double local_g_element_right;
-    double g_element_defect;
+    double local_g_element_right,g_multiplicity_right;
+    double local_g_multiplicity_right;
+    double g_element_defect,g_multiplicity_defect;
     double x_velocity_norm,x_pressure_norm,y_velocity_norm,y_pressure_norm;
     double Ax_velocity_norm,Ax_pressure_norm,Ay_velocity_norm,Ay_pressure_norm;
     double coarse_velocity_norm,coarse_pressure_norm;
@@ -1947,6 +1948,7 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     double local_beta_nested_defect,global_beta_nested_defect;
     double local_bounds[4],global_min[2],global_max[2];
     struct ala_block_vector *x,*y,*Ax,*Ay,*coarse,*coarse_action;
+    struct ala_block_vector *multiplicity;
     FILE *output;
     void assemble_del2_u();
 
@@ -1958,6 +1960,7 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
         y=ala_block_vector_create(E,level);
         Ax=ala_block_vector_create(E,level);
         Ay=ala_block_vector_create(E,level);
+        multiplicity=ala_block_vector_create(E,level);
         ala_fill_level_probe(E,x,0.31);
         ala_fill_level_probe(E,y,0.79);
         ala_block_vector_component_norms(
@@ -1988,6 +1991,30 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
         g_defect=ala_norm_scaled_adjoint_defect(
             g_left,g_right,x_pressure_norm,Ay_pressure_norm,
             y_velocity_norm,Ax_velocity_norm);
+
+        /* The legacy SKIP owner mask and the additive exchange routes were
+         * designed independently.  Build the actual sharing multiplicity by
+         * exchanging one contribution from every local nodal copy, then use
+         * its reciprocal as a partition of unity over assembled copies. */
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(e=0;e<E->lmesh.NEQ[level];e++)
+                multiplicity->velocity[m][e]=1.0;
+            multiplicity->velocity[m][E->lmesh.NEQ[level]]=0.0;
+        }
+        (E->solver.exchange_id_d)(E,multiplicity->velocity,level);
+        local_g_multiplicity_right=0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[level];e++) {
+                if(!isfinite(multiplicity->velocity[m][e]) ||
+                   multiplicity->velocity[m][e]<=0.0)
+                    myerror(E,"Invalid velocity sharing multiplicity");
+                local_g_multiplicity_right += y->velocity[m][e]
+                    *Ax->velocity[m][e]/multiplicity->velocity[m][e];
+            }
+        MPI_Allreduce(&local_g_multiplicity_right,&g_multiplicity_right,1,
+                      MPI_DOUBLE,MPI_SUM,E->parallel.world);
+        g_multiplicity_defect=fabs(g_left-g_multiplicity_right)
+            /max(fabs(g_left)+fabs(g_multiplicity_right),1.0e-300);
 
         /* Separate the element transpose from distributed additive assembly.
          * The unexchanged local G^T contributions dotted with the replicated
@@ -2106,16 +2133,19 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                 "ALA COUPLED LEVEL CONTRACT level=%d neq=%d np0=%d "
                 "K_symmetry_defect=%e G_adjoint_defect=%e "
                 "G_element_adjoint_defect=%e "
+                "G_multiplicity_adjoint_defect=%e "
                 "K_bilinear=(%e,%e) G_bilinear=(%e,%e) "
                 "G_element_bilinear=(%e,%e) "
+                "G_multiplicity_bilinear=(%e,%e) "
                 "velocity_transfer_adjoint_defect=%e "
                 "pressure_transfer_adjoint_defect=%e "
                 "beta_range=[%e,%e] beta_nested_defect=%e "
                 "pressure_mass_range=[%e,%e] "
                 "duplicate_velocity_dofs=%d invalid=%d\n",
                 level,E->lmesh.NEQ[level],E->lmesh.NPNO[level],
-                k_defect,g_defect,g_element_defect,
+                k_defect,g_defect,g_element_defect,g_multiplicity_defect,
                 k_left,k_right,g_left,g_right,g_left,g_element_right,
+                g_left,g_multiplicity_right,
                 v_transfer_defect,p_transfer_defect,
                 global_min[0],global_max[0],global_beta_nested_defect,
                 global_min[1],global_max[1],
@@ -2126,6 +2156,7 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
         ala_block_vector_destroy(E,y);
         ala_block_vector_destroy(E,Ax);
         ala_block_vector_destroy(E,Ay);
+        ala_block_vector_destroy(E,multiplicity);
     }
 }
 
