@@ -66,6 +66,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_coarse_weight",
             "ala_coupled_shallow_vanka_layers",
             "ala_coupled_shallow_vanka_sweeps",
+            "ala_depth_diagnostics",
+            "ala_coarse_residual_diagnostics",
             "ala_coarse_residual_levels",
             "file_vbcs",
             "lith_age",
@@ -110,7 +112,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*15\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_depth_diagnostics\s*=\s*off\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coarse_residual_diagnostics\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
