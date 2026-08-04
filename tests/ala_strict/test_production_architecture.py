@@ -163,7 +163,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*4\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*8\s*$",
         )
         self.assertRegex(
             strict_text,
