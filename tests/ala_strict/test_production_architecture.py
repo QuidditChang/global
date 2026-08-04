@@ -49,6 +49,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "walltime",
             "kC_ratio",
             "kC_primordial_flavor",
+            "output_optional",
             "profile_optional",
             "tracer_reclassify_flavors",
             "bottom_tbl_thickness",
@@ -193,6 +194,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertIsNotNone(profile)
         self.assertIn("kC", profile.group(1).split(","))
+        output = re.search(
+            r"(?m)^\s*output_optional\s*=\s*(.*?)\s*$", strict_text
+        )
+        self.assertIsNotNone(output)
+        self.assertIn("k", output.group(1).split(","))
         interfaces = re.search(
             r"(?m)^\s*z_interface\s*=\s*(.*?)\s*$", strict_text
         )
