@@ -46,6 +46,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
             "refstate_file",
+            "piterations",
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
@@ -102,6 +103,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*piterations\s*=\s*120\s*$",
         )
         self.assertRegex(
             strict_text,
