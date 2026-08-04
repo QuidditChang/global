@@ -697,6 +697,8 @@ static float solve_ala_coupled_fgmres_core(
         fflush(E->fp);
         fflush(stderr);
     }
+    strict_ala_coarse_residual_diagnostics(
+        E,r->pressure,lev,0);
 
     while(count<*steps_max && !converged) {
         for(j=0;j<65;j++) {
@@ -850,6 +852,8 @@ static float solve_ala_coupled_fgmres_core(
                         converged ? "accepted" : "continue");
                 fflush(E->fp);
             }
+            strict_ala_coarse_residual_diagnostics(
+                E,explicit_r->pressure,lev,count);
             if(E->control.ala_coupled_debug_stop_iteration>0 &&
                count>=E->control.ala_coupled_debug_stop_iteration) {
                 strict_ala_momentum_decomposition_audit(

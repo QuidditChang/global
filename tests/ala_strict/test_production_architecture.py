@@ -64,6 +64,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_vcycle",
             "ala_coupled_multilevel_coarse_sweeps",
             "ala_coupled_multilevel_coarse_weight",
+            "ala_coarse_residual_levels",
             "ala_unaugmented_momentum_tolerance",
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
@@ -104,7 +105,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*60\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*10\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -129,7 +130,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pcg_restart_interval\s*=\s*60\s*$",
+            r"(?m)^\s*ala_pcg_restart_interval\s*=\s*20\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coarse_residual_levels\s*=\s*4\s*$",
         )
         self.assertRegex(
             strict_text,

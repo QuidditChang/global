@@ -405,6 +405,21 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertNotIn("((count+1)%5)==0", audit)
 
+    def test_coupled_iterations_report_pressure_residual_by_level(self) -> None:
+        core = _function_body(
+            self.stokes, "static float solve_ala_coupled_fgmres_core("
+        )
+        self.assertIn(
+            "strict_ala_coarse_residual_diagnostics(\n"
+            "        E,r->pressure,lev,0);",
+            core,
+        )
+        self.assertIn(
+            "strict_ala_coarse_residual_diagnostics(\n"
+            "                E,explicit_r->pressure,lev,count);",
+            core,
+        )
+
     def test_stage9f2_vcycle_uses_both_exact_transfer_pairs(self) -> None:
         vcycle = _function_body(
             self.stokes,
