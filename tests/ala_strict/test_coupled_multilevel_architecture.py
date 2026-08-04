@@ -191,7 +191,18 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             self.element, "void ala_coupled_restrict_velocity("
         )
         self.assertIn("interp_vector(E,coarse_level,coarse,fine);", prolong)
-        self.assertIn("project_vector(E,fine_level,fine,coarse,1);", restrict)
+        self.assertNotIn("project_vector", restrict)
+        self.assertIn("from_rtf_to_xyz(E,fine_level,fine,E->temp);", restrict)
+        self.assertIn("E->NODE[fine_level][m][node] & SKIP", restrict)
+        self.assertIn(
+            "(E->solver.exchange_id_d)(E,E->temp1,coarse_level);", restrict
+        )
+        self.assertIn(
+            "from_xyz_to_rtf(E,coarse_level,E->temp1,coarse);", restrict
+        )
+        self.assertIn(
+            "strip_bcs_from_residual(E,coarse,coarse_level);", restrict
+        )
         self.assertIn("velocity_transfer_adjoint_defect=%e", self.element)
         self.assertIn("pressure_transfer_adjoint_defect=%e", self.element)
 

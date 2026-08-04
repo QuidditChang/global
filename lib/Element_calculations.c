@@ -1761,6 +1761,10 @@ void assemble_ala_pressure_independent_force(struct All_variables *E,
 }
 
 
+static void ala_require_adjacent_factor_two(struct All_variables *E,
+                                             int coarse_level);
+
+
 void ala_coupled_prolong_velocity(struct All_variables *E, int coarse_level,
                                   double **coarse, double **fine)
 {
@@ -1775,11 +1779,91 @@ void ala_coupled_prolong_velocity(struct All_variables *E, int coarse_level,
 void ala_coupled_restrict_velocity(struct All_variables *E, int fine_level,
                                    double **fine, double **coarse)
 {
-    void project_vector();
+    int m,i,j,k,d,node,fine_eq,coarse_node,coarse_eq;
+    int ix,iy,iz,nx,ny,nz;
+    int cx[2],cy[2],cz[2];
+    double wx[2],wy[2],wz[2],weight,value,x1,x2;
+    int coarse_level=fine_level-1;
+    int fnox,fnoy,fnoz,cnox,cnoz,coarse_neq;
+    void from_rtf_to_xyz();
+    void from_xyz_to_rtf();
+    void strip_bcs_from_residual();
 
     if(fine_level<=E->mesh.levmin || fine_level>E->mesh.levmax)
         myerror(E,"Invalid coupled velocity restriction level");
-    project_vector(E,fine_level,fine,coarse,1);
+    ala_require_adjacent_factor_two(E,coarse_level);
+    fnox=E->lmesh.NOX[fine_level];
+    fnoy=E->lmesh.NOY[fine_level];
+    fnoz=E->lmesh.NOZ[fine_level];
+    cnox=E->lmesh.NOX[coarse_level];
+    cnoz=E->lmesh.NOZ[coarse_level];
+    coarse_neq=E->lmesh.NEQ[coarse_level];
+
+    /* interp_vector is T_f^T L T_c: rotate coarse r-t-phi values to
+     * Cartesian, trilinearly interpolate, then rotate back on the fine
+     * mesh.  Its owned-DOF transpose is T_c^T L^T T_f.  Accumulate only
+     * owned fine nodes, assemble the coarse Cartesian contributions, and
+     * finally project the result into the coarse constrained space. */
+    from_rtf_to_xyz(E,fine_level,fine,E->temp);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<=coarse_neq;i++)
+            E->temp1[m][i]=0.0;
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(k=1;k<=fnoy;k++)
+            for(i=1;i<=fnox;i++)
+                for(j=1;j<=fnoz;j++) {
+                    node=j+(i-1)*fnoz+(k-1)*fnox*fnoz;
+                    if(E->NODE[fine_level][m][node] & SKIP)
+                        continue;
+                    if(i%2) {
+                        nx=1; cx[0]=(i+1)/2; wx[0]=1.0;
+                    }
+                    else {
+                        nx=2; cx[0]=i/2; cx[1]=cx[0]+1;
+                        wx[0]=wx[1]=0.5;
+                    }
+                    if(k%2) {
+                        ny=1; cy[0]=(k+1)/2; wy[0]=1.0;
+                    }
+                    else {
+                        ny=2; cy[0]=k/2; cy[1]=cy[0]+1;
+                        wy[0]=wy[1]=0.5;
+                    }
+                    if(j%2) {
+                        nz=1; cz[0]=(j+1)/2; wz[0]=1.0;
+                    }
+                    else {
+                        nz=2; cz[0]=j/2; cz[1]=cz[0]+1;
+                        x1=E->sphere.R[fine_level][j]
+                           -E->sphere.R[fine_level][j-1];
+                        x2=E->sphere.R[fine_level][j+1]
+                           -E->sphere.R[fine_level][j];
+                        wz[0]=x2/(x1+x2);
+                        wz[1]=1.0-wz[0];
+                    }
+                    for(d=1;d<=E->mesh.nsd;d++) {
+                        fine_eq=E->ID[fine_level][m][node].doff[d];
+                        value=E->temp[m][fine_eq];
+                        for(iy=0;iy<ny;iy++)
+                            for(ix=0;ix<nx;ix++)
+                                for(iz=0;iz<nz;iz++) {
+                                    coarse_node=cz[iz]
+                                      +(cx[ix]-1)*cnoz
+                                      +(cy[iy]-1)*cnox*cnoz;
+                                    coarse_eq=E->ID[coarse_level][m]
+                                      [coarse_node].doff[d];
+                                    weight=wx[ix]*wy[iy]*wz[iz];
+                                    E->temp1[m][coarse_eq] += weight*value;
+                                }
+                    }
+                }
+
+    (E->solver.exchange_id_d)(E,E->temp1,coarse_level);
+    from_xyz_to_rtf(E,coarse_level,E->temp1,coarse);
+    strip_bcs_from_residual(E,coarse,coarse_level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        coarse[m][coarse_neq]=0.0;
 }
 
 
