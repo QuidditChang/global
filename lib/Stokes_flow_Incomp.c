@@ -318,6 +318,87 @@ static void apply_ala_coupled_element_vanka_once(
 }
 
 
+static void assemble_ala_coupled_block_defect(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    const struct ala_block_vector *correction,
+    struct ala_block_vector *defect, struct ala_block_vector *action,
+    struct ala_block_vector *velocity_work, int lev)
+{
+    int m,i,e;
+    int neq=E->lmesh.NEQ[lev];
+    int npno=E->lmesh.NPNO[lev];
+
+    apply_ala_coupled_operator(
+        E,correction->velocity,correction->pressure,
+        action->velocity,action->pressure,velocity_work->velocity,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<neq;i++)
+            defect->velocity[m][i]=residual->velocity[m][i]
+                                      -action->velocity[m][i];
+        defect->velocity[m][neq]=0.0;
+        defect->pressure[m][0]=0.0;
+        for(e=1;e<=npno;e++)
+            defect->pressure[m][e]=residual->pressure[m][e]
+                                      -action->pressure[m][e];
+    }
+}
+
+
+static void apply_ala_coupled_multilevel_vcycle(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    struct ala_block_vector *correction, int lev)
+{
+    struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
+    struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
+
+    smooth=ala_block_vector_create(E,lev);
+    delta=ala_block_vector_create(E,lev);
+    defect=ala_block_vector_create(E,lev);
+    action=ala_block_vector_create(E,lev);
+    velocity_work=ala_block_vector_create(E,lev);
+    ala_block_vector_zero(E,correction);
+
+    /* One mixed pre-sweep. */
+    apply_ala_coupled_element_vanka_once(
+        E,residual,smooth,delta,lev);
+    ala_block_vector_axpy(E,1.0,smooth,correction);
+
+    if(lev>E->mesh.levmin) {
+        assemble_ala_coupled_block_defect(
+            E,residual,correction,defect,action,velocity_work,lev);
+        coarse_residual=ala_block_vector_create(E,lev-1);
+        coarse_correction=ala_block_vector_create(E,lev-1);
+        ala_coupled_restrict_velocity(
+            E,lev,defect->velocity,coarse_residual->velocity);
+        ala_coupled_restrict_pressure_p0_transpose(
+            E,lev,defect->pressure,coarse_residual->pressure);
+        apply_ala_coupled_multilevel_vcycle(
+            E,coarse_residual,coarse_correction,lev-1);
+        ala_block_vector_zero(E,smooth);
+        ala_coupled_prolong_velocity(
+            E,lev-1,coarse_correction->velocity,smooth->velocity);
+        ala_coupled_prolong_pressure_p0(
+            E,lev-1,coarse_correction->pressure,smooth->pressure);
+        ala_block_vector_axpy(E,1.0,smooth,correction);
+        ala_block_vector_destroy(E,coarse_residual);
+        ala_block_vector_destroy(E,coarse_correction);
+    }
+
+    /* One mixed post-sweep; on the coarsest level this is the second local
+     * solve and serves as the deliberately bounded coarse solver. */
+    assemble_ala_coupled_block_defect(
+        E,residual,correction,defect,action,velocity_work,lev);
+    apply_ala_coupled_element_vanka_once(E,defect,smooth,delta,lev);
+    ala_block_vector_axpy(E,1.0,smooth,correction);
+
+    ala_block_vector_destroy(E,smooth);
+    ala_block_vector_destroy(E,delta);
+    ala_block_vector_destroy(E,defect);
+    ala_block_vector_destroy(E,action);
+    ala_block_vector_destroy(E,velocity_work);
+}
+
+
 static void apply_ala_coupled_block_preconditioner(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction,
@@ -330,6 +411,24 @@ static void apply_ala_coupled_block_preconditioner(
 
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
+    if(E->control.ala_coupled_multilevel_vcycle) {
+        apply_ala_coupled_multilevel_vcycle(E,residual,correction,lev);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
+                    "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
+                    "coarse_sweeps=2\n",
+                    E->mesh.levmax-E->mesh.levmin+1,
+                    E->mesh.levmin,E->mesh.levmax);
+            fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
+                    "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
+                    "coarse_sweeps=2\n",
+                    E->mesh.levmax-E->mesh.levmin+1,
+                    E->mesh.levmin,E->mesh.levmax);
+            fflush(E->fp);
+            fflush(stderr);
+        }
+        return;
+    }
     if(E->control.ala_coupled_element_vanka) {
         apply_ala_coupled_element_vanka_once(
             E,residual,correction,correction_work,lev);
@@ -527,8 +626,10 @@ static float solve_ala_coupled_fgmres_core(
     explicit_norm=initial_block_norm;
     block_relative=1.0;
     augmented_momentum_relative=velocity_component/force_norm;
-    preconditioner_name=E->control.ala_coupled_element_vanka
-        ? "coupled_element_vanka" : "upper_block_triangular";
+    preconditioner_name=E->control.ala_coupled_multilevel_vcycle
+        ? "coupled_multilevel_vcycle"
+        : (E->control.ala_coupled_element_vanka
+           ? "coupled_element_vanka" : "upper_block_triangular");
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
                 "preconditioner=%s "

@@ -1788,6 +1788,8 @@ void h5output_meta(struct All_variables *E)
         E->control.ala_coupled_first_preconditioner_audit_only);
     status = set_attribute_int(input, "ala_coupled_element_vanka",
                                E->control.ala_coupled_element_vanka);
+    status = set_attribute_int(input, "ala_coupled_multilevel_vcycle",
+                               E->control.ala_coupled_multilevel_vcycle);
     status = set_attribute_double(input,
                                   "ala_unaugmented_momentum_tolerance",
                                   E->control.ala_unaugmented_momentum_tolerance);

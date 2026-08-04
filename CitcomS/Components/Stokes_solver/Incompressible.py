@@ -140,6 +140,8 @@ class Incompressible(CitcomComponent):
             "ala_coupled_first_preconditioner_audit_only", default=False)
         ala_coupled_element_vanka = prop.bool(
             "ala_coupled_element_vanka", default=False)
+        ala_coupled_multilevel_vcycle = prop.bool(
+            "ala_coupled_multilevel_vcycle", default=False)
         ala_unaugmented_momentum_tolerance = prop.float(
             "ala_unaugmented_momentum_tolerance", default=0.0)
         ala_feasibility_audit = prop.bool("ala_feasibility_audit",

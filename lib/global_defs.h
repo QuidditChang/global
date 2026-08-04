@@ -487,6 +487,7 @@ struct CONTROL {
     int ala_coupled_multilevel_audit_only;
     int ala_coupled_first_preconditioner_audit_only;
     int ala_coupled_element_vanka;
+    int ala_coupled_multilevel_vcycle;
     double ala_unaugmented_momentum_tolerance;
     int ala_feasibility_audit;
     int ala_feasibility_window;

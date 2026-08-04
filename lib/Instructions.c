@@ -545,6 +545,8 @@ void read_initial_settings(struct All_variables *E)
                 "off",m);
   input_boolean("ala_coupled_element_vanka",
                 &(E->control.ala_coupled_element_vanka),"off",m);
+  input_boolean("ala_coupled_multilevel_vcycle",
+                &(E->control.ala_coupled_multilevel_vcycle),"off",m);
   input_double("ala_unaugmented_momentum_tolerance",
                &(E->control.ala_unaugmented_momentum_tolerance),"0.0",m);
   input_boolean("ala_feasibility_audit",
@@ -731,6 +733,10 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_coupled_defect_corrections>0)
       myerror(E, "ala_coupled_element_vanka currently requires "
               "ala_coupled_defect_corrections=0");
+  if(E->control.ala_coupled_multilevel_vcycle &&
+     !E->control.ala_coupled_element_vanka)
+      myerror(E, "ala_coupled_multilevel_vcycle requires "
+              "ala_coupled_element_vanka=on");
   if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
       myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
   if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&
@@ -1483,6 +1489,7 @@ void global_default_values(E)
     E->control.ala_coupled_multilevel_audit_only = 0;
     E->control.ala_coupled_first_preconditioner_audit_only = 0;
     E->control.ala_coupled_element_vanka = 0;
+    E->control.ala_coupled_multilevel_vcycle = 0;
     E->control.ala_unaugmented_momentum_tolerance = 0.0;
     E->control.ala_feasibility_audit = 0;
     E->control.ala_feasibility_window = 20;

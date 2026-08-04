@@ -1075,6 +1075,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_first_preconditioner_audit_only, fp);
     getIntProperty(properties, "ala_coupled_element_vanka",
                    E->control.ala_coupled_element_vanka, fp);
+    getIntProperty(properties, "ala_coupled_multilevel_vcycle",
+                   E->control.ala_coupled_multilevel_vcycle, fp);
     getDoubleProperty(properties, "ala_unaugmented_momentum_tolerance",
                       E->control.ala_unaugmented_momentum_tolerance, fp);
     getIntProperty(properties, "ala_feasibility_audit",
@@ -1261,6 +1263,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_coupled_defect_corrections>0)
         myerror(E, "ala_coupled_element_vanka currently requires "
                 "ala_coupled_defect_corrections=0");
+    if(E->control.ala_coupled_multilevel_vcycle &&
+       !E->control.ala_coupled_element_vanka)
+        myerror(E, "ala_coupled_multilevel_vcycle requires "
+                "ala_coupled_element_vanka=on");
     if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
         myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
     if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&

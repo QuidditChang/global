@@ -119,6 +119,18 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             'getIntProperty(properties, "ala_coupled_element_vanka",',
             self.properties,
         )
+        self.assertIn("int ala_coupled_multilevel_vcycle;", self.defs)
+        self.assertIn(
+            'input_boolean("ala_coupled_multilevel_vcycle",',
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_multilevel_vcycle", default=False', self.pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_coupled_multilevel_vcycle",',
+            self.properties,
+        )
 
     def test_first_preconditioner_audit_stops_after_action_audit(self) -> None:
         core = _function_body(
@@ -240,6 +252,9 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             self.element, "void ala_coupled_restrict_velocity("
         )
         self.assertIn("interp_vector(E,coarse_level,coarse,fine);", prolong)
+        self.assertIn(
+            "strip_bcs_from_residual(E,fine,coarse_level+1);", prolong
+        )
         self.assertNotIn("project_vector", restrict)
         self.assertIn("from_rtf_to_xyz(E,fine_level,fine,E->temp);", restrict)
         self.assertIn("E->NODE[fine_level][m][node] & SKIP", restrict)
@@ -293,6 +308,28 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("if(E->control.ala_coupled_element_vanka)", block)
         self.assertIn("apply_ala_coupled_element_vanka_once(", block)
+
+    def test_stage9f2_vcycle_uses_both_exact_transfer_pairs(self) -> None:
+        vcycle = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_multilevel_vcycle(",
+        )
+        for token in (
+            "apply_ala_coupled_element_vanka_once(",
+            "assemble_ala_coupled_block_defect(",
+            "ala_coupled_restrict_velocity(",
+            "ala_coupled_restrict_pressure_p0_transpose(",
+            "apply_ala_coupled_multilevel_vcycle(",
+            "ala_coupled_prolong_velocity(",
+            "ala_coupled_prolong_pressure_p0(",
+            "ala_block_vector_axpy(E,1.0,smooth,correction);",
+        ):
+            self.assertIn(token, vcycle)
+        block = _function_body(
+            self.stokes, "static void apply_ala_coupled_block_preconditioner("
+        )
+        self.assertIn("if(E->control.ala_coupled_multilevel_vcycle)", block)
+        self.assertIn("ALA COUPLED MULTILEVEL VCYCLE APPLICATION", block)
 
 
 if __name__ == "__main__":
