@@ -1086,6 +1086,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_multilevel_coarse_sweeps, fp);
     getDoubleProperty(properties, "ala_coupled_multilevel_coarse_weight",
                       E->control.ala_coupled_multilevel_coarse_weight, fp);
+    getIntProperty(properties, "ala_coupled_shallow_vanka_layers",
+                   E->control.ala_coupled_shallow_vanka_layers, fp);
+    getIntProperty(properties, "ala_coupled_shallow_vanka_sweeps",
+                   E->control.ala_coupled_shallow_vanka_sweeps, fp);
     getDoubleProperty(properties, "ala_unaugmented_momentum_tolerance",
                       E->control.ala_unaugmented_momentum_tolerance, fp);
     getIntProperty(properties, "ala_feasibility_audit",
@@ -1299,6 +1303,20 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_coupled_multilevel_coarse_weight <= 0.0 ||
        E->control.ala_coupled_multilevel_coarse_weight > 1.0)
         myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");
+    if(E->control.ala_coupled_shallow_vanka_layers < 0 ||
+       E->control.ala_coupled_shallow_vanka_layers > 64)
+        myerror(E, "ala_coupled_shallow_vanka_layers must be in [0,64]");
+    if(E->control.ala_coupled_shallow_vanka_sweeps < 0 ||
+       E->control.ala_coupled_shallow_vanka_sweeps > 32)
+        myerror(E, "ala_coupled_shallow_vanka_sweeps must be in [0,32]");
+    if((E->control.ala_coupled_shallow_vanka_layers == 0) !=
+       (E->control.ala_coupled_shallow_vanka_sweeps == 0))
+        myerror(E, "ala_coupled_shallow_vanka_layers and sweeps must both "
+                "be zero or both be positive");
+    if(E->control.ala_coupled_shallow_vanka_sweeps > 0 &&
+       !E->control.ala_coupled_multilevel_vcycle)
+        myerror(E, "ala_coupled_shallow_vanka_sweeps requires "
+                "ala_coupled_multilevel_vcycle=on");
     if(E->control.ala_unaugmented_momentum_tolerance < 0.0)
         myerror(E, "ala_unaugmented_momentum_tolerance must be nonnegative");
     if(E->control.ala_unaugmented_momentum_tolerance > 0.0 &&

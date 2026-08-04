@@ -173,6 +173,30 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             '"ala_coupled_multilevel_coarse_weight",',
             self.properties,
         )
+        self.assertIn("int ala_coupled_shallow_vanka_layers;", self.defs)
+        self.assertIn("int ala_coupled_shallow_vanka_sweeps;", self.defs)
+        self.assertIn(
+            'input_int("ala_coupled_shallow_vanka_layers",',
+            self.instructions,
+        )
+        self.assertIn(
+            'input_int("ala_coupled_shallow_vanka_sweeps",',
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_shallow_vanka_layers", default=0', self.pyre
+        )
+        self.assertIn(
+            '"ala_coupled_shallow_vanka_sweeps", default=0', self.pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_coupled_shallow_vanka_layers",',
+            self.properties,
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_coupled_shallow_vanka_sweeps",',
+            self.properties,
+        )
 
     def test_first_preconditioner_audit_stops_after_action_audit(self) -> None:
         core = _function_body(
@@ -346,7 +370,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
     def test_stage9f1_element_patch_solves_both_fields(self) -> None:
         smoother = _function_body(
             self.stokes,
-            "static void apply_ala_coupled_element_vanka_once(",
+            "static void apply_ala_coupled_element_vanka_region(",
         )
         for token in (
             "E->ALA_vanka_chol[lev][m]",
@@ -370,7 +394,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
     def test_vanka_diagnostics_do_not_reduce_on_every_sweep(self) -> None:
         smoother = _function_body(
             self.stokes,
-            "static void apply_ala_coupled_element_vanka_once(",
+            "static void apply_ala_coupled_element_vanka_region(",
         )
         self.assertIn("reported_cycle[MAX_LEVELS]", smoother)
         self.assertIn("reported_valid[MAX_LEVELS]", smoother)
@@ -445,6 +469,9 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "ala_coupled_prolong_pressure_p0(",
             "E->control.ala_coupled_multilevel_coarse_weight",
             "E->control.ala_coupled_multilevel_coarse_sweeps",
+            "E->control.ala_coupled_shallow_vanka_layers",
+            "E->control.ala_coupled_shallow_vanka_sweeps",
+            "apply_ala_coupled_element_vanka_region(",
         ):
             self.assertIn(token, vcycle)
         block = _function_body(
@@ -453,6 +480,23 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("if(E->control.ala_coupled_multilevel_vcycle)", block)
         self.assertIn("ALA COUPLED MULTILEVEL VCYCLE APPLICATION", block)
         self.assertIn("coarse_weight=%e", block)
+        self.assertIn("shallow_layers=%d shallow_sweeps=%d", block)
+
+    def test_stage10c_shallow_smoother_uses_selected_patch_partition(self) -> None:
+        region = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_element_vanka_region(",
+        )
+        for token in (
+            "radial_element=(e-1)%elz",
+            "global_radial_element=E->lmesh.EZS[lev]+radial_element",
+            "E->mesh.ELZ[lev]-selected_layers",
+            "correction->velocity[m][eq] += 1.0",
+            "exchange_id_d)(E,correction->velocity,lev)",
+            "1.0/correction->velocity[m][eq]",
+            'shallow ? "shallow_finest" : "full"',
+        ):
+            self.assertIn(token, region)
 
 
 if __name__ == "__main__":

@@ -206,15 +206,18 @@ static int ala_solve_cached_element_k(const higher_precision *chol,
  *
  * Velocity overlap is assembled with the same partition of unity as the
  * existing full-element smoother; P0 pressure is element-local. */
-static void apply_ala_coupled_element_vanka_once(
+static void apply_ala_coupled_element_vanka_region(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction, struct ala_block_vector *delta,
-    int lev)
+    int lev, int shallow_layers)
 {
     int m,e,a,d,i,node,eq,fixed,local_patches,global_patches;
+    int radial_element,global_radial_element,selected_layers,shallow;
     int report_diagnostics;
     static int reported_cycle[MAX_LEVELS];
     static unsigned char reported_valid[MAX_LEVELS];
+    static int reported_shallow_cycle[MAX_LEVELS];
+    static unsigned char reported_shallow_valid[MAX_LEVELS];
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
     double pressure_rhs,pressure_solution,schur,regularization;
@@ -224,21 +227,32 @@ static void apply_ala_coupled_element_vanka_once(
     const int ends=enodes[dims];
     const int neq=E->lmesh.NEQ[lev];
     const int npno=E->lmesh.NPNO[lev];
+    const int elz=E->lmesh.ELZ[lev];
 
     if(loc_mat_size[dims]!=ALA_VANKA_DOF)
         myerror(E,"Coupled element-Vanka requires 3-D 24-dof elements");
     damping=E->control.ala_element_vanka_damping;
     regularization=E->control.ala_element_vanka_regularization;
+    shallow=(shallow_layers>0);
+    selected_layers=min(shallow_layers,E->mesh.ELZ[lev]);
     ala_block_vector_zero(E,correction);
     ala_block_vector_zero(E,delta);
-    report_diagnostics=!reported_valid[lev] ||
-        reported_cycle[lev]!=E->monitor.solution_cycles;
+    report_diagnostics=shallow
+        ? (!reported_shallow_valid[lev] ||
+           reported_shallow_cycle[lev]!=E->monitor.solution_cycles)
+        : (!reported_valid[lev] ||
+           reported_cycle[lev]!=E->monitor.solution_cycles);
     local_patches=0;
     local_min=1.0e300;
     local_max=0.0;
 
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NEL[lev];e++) {
+            radial_element=(e-1)%elz;
+            global_radial_element=E->lmesh.EZS[lev]+radial_element;
+            if(shallow && global_radial_element<
+                          E->mesh.ELZ[lev]-selected_layers)
+                continue;
             if(!E->ALA_vanka_valid[lev][m][e])
                 myerror(E,"Coupled element-Vanka velocity factor is invalid");
             chol=E->ALA_vanka_chol[lev][m]+e*ALA_VANKA_CHOL_SIZE;
@@ -250,6 +264,8 @@ static void apply_ala_coupled_element_vanka_once(
                     fixed=(d==0 && (E->NODE[lev][m][node]&VBX)) ||
                           (d==1 && (E->NODE[lev][m][node]&VBY)) ||
                           (d==2 && (E->NODE[lev][m][node]&VBZ));
+                    if(shallow && !fixed)
+                        correction->velocity[m][eq] += 1.0;
                     velocity_rhs[i]=fixed ? 0.0 : residual->velocity[m][eq];
                     gradient[i]=fixed ? 0.0 :
                         E->elt_del[lev][m][e].g[i][0]
@@ -291,9 +307,15 @@ static void apply_ala_coupled_element_vanka_once(
         }
 
     (E->solver.exchange_id_d)(E,delta->velocity,lev);
+    if(shallow)
+        (E->solver.exchange_id_d)(E,correction->velocity,lev);
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         for(eq=0;eq<neq;eq++) {
-            weight=E->ALA_vanka_overlap_BI[lev][m][eq];
+            if(shallow)
+                weight=correction->velocity[m][eq]>0.0
+                    ? 1.0/correction->velocity[m][eq] : 0.0;
+            else
+                weight=E->ALA_vanka_overlap_BI[lev][m][eq];
             correction->velocity[m][eq]=damping*weight
                                             *delta->velocity[m][eq];
         }
@@ -309,27 +331,47 @@ static void apply_ala_coupled_element_vanka_once(
                       E->parallel.world);
         MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
                       E->parallel.world);
-        reported_cycle[lev]=E->monitor.solution_cycles;
-        reported_valid[lev]=1;
+        if(shallow) {
+            reported_shallow_cycle[lev]=E->monitor.solution_cycles;
+            reported_shallow_valid[lev]=1;
+        }
+        else {
+            reported_cycle[lev]=E->monitor.solution_cycles;
+            reported_valid[lev]=1;
+        }
         if(E->parallel.me==0) {
             fprintf(E->fp,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
+                    "region=%s radial_layers=%d "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
-                    regularization,global_min,global_max);
+                    regularization,global_min,global_max,
+                    shallow ? "shallow_finest" : "full",selected_layers);
             fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
+                    "region=%s radial_layers=%d "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
-                    regularization,global_min,global_max);
+                    regularization,global_min,global_max,
+                    shallow ? "shallow_finest" : "full",selected_layers);
             fflush(E->fp);
             fflush(stderr);
         }
     }
+}
+
+
+static void apply_ala_coupled_element_vanka_once(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    struct ala_block_vector *correction, struct ala_block_vector *delta,
+    int lev)
+{
+    apply_ala_coupled_element_vanka_region(
+        E,residual,correction,delta,lev,0);
 }
 
 
@@ -365,7 +407,7 @@ static void apply_ala_coupled_multilevel_vcycle(
 {
     struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
     struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
-    int coarse_sweep;
+    int coarse_sweep,shallow_sweep;
 
     smooth=ala_block_vector_create(E,lev);
     delta=ala_block_vector_create(E,lev);
@@ -419,6 +461,23 @@ static void apply_ala_coupled_multilevel_vcycle(
             ala_block_vector_axpy(E,1.0,smooth,correction);
         }
 
+    /* Prescribed plate velocities excite a shallow high-frequency
+     * continuity mode that barely restricts to the next pressure level.
+     * Apply defect-based mixed smoothing only in the configured top radial
+     * layers of the finest grid.  Dynamic selected-patch multiplicities keep
+     * the velocity partition of unity exact at the lower region interface. */
+    if(lev==E->mesh.levmax)
+        for(shallow_sweep=0;
+            shallow_sweep<E->control.ala_coupled_shallow_vanka_sweeps;
+            shallow_sweep++) {
+            assemble_ala_coupled_block_defect(
+                E,residual,correction,defect,action,velocity_work,lev);
+            apply_ala_coupled_element_vanka_region(
+                E,defect,smooth,delta,lev,
+                E->control.ala_coupled_shallow_vanka_layers);
+            ala_block_vector_axpy(E,1.0,smooth,correction);
+        }
+
     ala_block_vector_destroy(E,smooth);
     ala_block_vector_destroy(E,delta);
     ala_block_vector_destroy(E,defect);
@@ -448,20 +507,26 @@ static void apply_ala_coupled_block_preconditioner(
            (!report_valid || reported_cycle!=E->monitor.solution_cycles)) {
             fprintf(E->fp,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=%d coarse_weight=%e\n",
+                    "coarse_sweeps=%d coarse_weight=%e "
+                    "shallow_layers=%d shallow_sweeps=%d\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
                     E->control.ala_coupled_multilevel_coarse_sweeps,
-                    E->control.ala_coupled_multilevel_coarse_weight);
+                    E->control.ala_coupled_multilevel_coarse_weight,
+                    E->control.ala_coupled_shallow_vanka_layers,
+                    E->control.ala_coupled_shallow_vanka_sweeps);
             reported_cycle=E->monitor.solution_cycles;
             report_valid=1;
             fprintf(stderr,"ALA COUPLED MULTILEVEL VCYCLE APPLICATION "
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
-                    "coarse_sweeps=%d coarse_weight=%e\n",
+                    "coarse_sweeps=%d coarse_weight=%e "
+                    "shallow_layers=%d shallow_sweeps=%d\n",
                     E->mesh.levmax-E->mesh.levmin+1,
                     E->mesh.levmin,E->mesh.levmax,
                     E->control.ala_coupled_multilevel_coarse_sweeps,
-                    E->control.ala_coupled_multilevel_coarse_weight);
+                    E->control.ala_coupled_multilevel_coarse_weight,
+                    E->control.ala_coupled_shallow_vanka_layers,
+                    E->control.ala_coupled_shallow_vanka_sweeps);
             fflush(E->fp);
             fflush(stderr);
         }
