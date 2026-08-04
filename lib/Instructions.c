@@ -543,6 +543,8 @@ void read_initial_settings(struct All_variables *E)
   input_boolean("ala_coupled_first_preconditioner_audit_only",
                 &(E->control.ala_coupled_first_preconditioner_audit_only),
                 "off",m);
+  input_int("ala_coupled_debug_stop_iteration",
+            &(E->control.ala_coupled_debug_stop_iteration),"0",m);
   input_boolean("ala_coupled_element_vanka",
                 &(E->control.ala_coupled_element_vanka),"off",m);
   input_boolean("ala_coupled_multilevel_vcycle",
@@ -724,6 +726,12 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_coupled_first_preconditioner_audit_only &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_coupled_first_preconditioner_audit_only requires "
+              "ala_outer_solver=coupled_fgmres");
+  if(E->control.ala_coupled_debug_stop_iteration < 0)
+      myerror(E, "ala_coupled_debug_stop_iteration must be nonnegative");
+  if(E->control.ala_coupled_debug_stop_iteration > 0 &&
+     strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+      myerror(E, "ala_coupled_debug_stop_iteration requires "
               "ala_outer_solver=coupled_fgmres");
   if(E->control.ala_coupled_element_vanka &&
      (!E->control.ala_element_vanka_smoother ||
@@ -1493,6 +1501,7 @@ void global_default_values(E)
     E->control.ala_coupled_defect_corrections = 0;
     E->control.ala_coupled_multilevel_audit_only = 0;
     E->control.ala_coupled_first_preconditioner_audit_only = 0;
+    E->control.ala_coupled_debug_stop_iteration = 0;
     E->control.ala_coupled_element_vanka = 0;
     E->control.ala_coupled_multilevel_vcycle = 0;
     E->control.ala_coupled_multilevel_coarse_weight = 1.0;

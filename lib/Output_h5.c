@@ -1786,6 +1786,8 @@ void h5output_meta(struct All_variables *E)
     status = set_attribute_int(
         input, "ala_coupled_first_preconditioner_audit_only",
         E->control.ala_coupled_first_preconditioner_audit_only);
+    status = set_attribute_int(input, "ala_coupled_debug_stop_iteration",
+                               E->control.ala_coupled_debug_stop_iteration);
     status = set_attribute_int(input, "ala_coupled_element_vanka",
                                E->control.ala_coupled_element_vanka);
     status = set_attribute_int(input, "ala_coupled_multilevel_vcycle",

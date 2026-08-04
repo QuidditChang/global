@@ -108,6 +108,18 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             '"ala_coupled_first_preconditioner_audit_only",',
             self.properties,
         )
+        self.assertIn("int ala_coupled_debug_stop_iteration;", self.defs)
+        self.assertIn(
+            'input_int("ala_coupled_debug_stop_iteration",',
+            self.instructions,
+        )
+        self.assertIn(
+            '"ala_coupled_debug_stop_iteration", default=0', self.pyre
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_coupled_debug_stop_iteration",',
+            self.properties,
+        )
         self.assertIn("int ala_coupled_element_vanka;", self.defs)
         self.assertIn(
             'input_boolean("ala_coupled_element_vanka",', self.instructions
@@ -164,6 +176,22 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertLess(audit, gate)
         self.assertLess(gate, termination)
         self.assertLess(termination, orthogonalization)
+
+    def test_short_run_stop_follows_iteration_and_momentum_audit(self) -> None:
+        core = _function_body(
+            self.stokes, "static float solve_ala_coupled_fgmres_core("
+        )
+        iteration_line = core.index("ALA COUPLED FGMRES iteration=%d")
+        gate = core.index("ala_coupled_debug_stop_iteration>0", iteration_line)
+        momentum = core.index('"coupled_debug_stop"', gate)
+        marker = core.index("ALA COUPLED DEBUG ITERATION STOP COMPLETE", momentum)
+        termination = core.index("exit(EXIT_SUCCESS);", marker)
+        acceptance = core.index("ALA_COUPLED_FEASIBILITY_SUMMARY", termination)
+        self.assertLess(iteration_line, gate)
+        self.assertLess(gate, momentum)
+        self.assertLess(momentum, marker)
+        self.assertLess(marker, termination)
+        self.assertLess(termination, acceptance)
 
     def test_level_audit_checks_complete_operator_contracts(self) -> None:
         audit = _function_body(

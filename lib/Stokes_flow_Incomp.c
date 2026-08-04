@@ -814,6 +814,30 @@ static float solve_ala_coupled_fgmres_core(
                         converged ? "accepted" : "continue");
                 fflush(E->fp);
             }
+            if(E->control.ala_coupled_debug_stop_iteration>0 &&
+               count>=E->control.ala_coupled_debug_stop_iteration) {
+                strict_ala_momentum_decomposition_audit(
+                    E,V,P,w->velocity,operator_work->velocity,lev,
+                    "coupled_debug_stop",count,
+                    &momentum_rms,&momentum_relative);
+                if(E->parallel.me==0 && E->fp!=NULL) {
+                    fprintf(E->fp,
+                            "ALA COUPLED DEBUG ITERATION STOP COMPLETE: "
+                            "iteration=%d terminating before iteration=%d\n",
+                            count,count+1);
+                    fflush(E->fp);
+                }
+                if(E->parallel.me==0) {
+                    fprintf(stderr,
+                            "ALA COUPLED DEBUG ITERATION STOP COMPLETE: "
+                            "iteration=%d terminating before iteration=%d\n",
+                            count,count+1);
+                    fflush(stderr);
+                }
+                MPI_Barrier(E->parallel.world);
+                MPI_Finalize();
+                exit(EXIT_SUCCESS);
+            }
             if(converged || breakdown)
                 break;
             for(i=0;i<used;i++)

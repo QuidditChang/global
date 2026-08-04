@@ -1073,6 +1073,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_multilevel_audit_only, fp);
     getIntProperty(properties, "ala_coupled_first_preconditioner_audit_only",
                    E->control.ala_coupled_first_preconditioner_audit_only, fp);
+    getIntProperty(properties, "ala_coupled_debug_stop_iteration",
+                   E->control.ala_coupled_debug_stop_iteration, fp);
     getIntProperty(properties, "ala_coupled_element_vanka",
                    E->control.ala_coupled_element_vanka, fp);
     getIntProperty(properties, "ala_coupled_multilevel_vcycle",
@@ -1254,6 +1256,12 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_coupled_first_preconditioner_audit_only &&
        strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
         myerror(E, "ala_coupled_first_preconditioner_audit_only requires "
+                "ala_outer_solver=coupled_fgmres");
+    if(E->control.ala_coupled_debug_stop_iteration < 0)
+        myerror(E, "ala_coupled_debug_stop_iteration must be nonnegative");
+    if(E->control.ala_coupled_debug_stop_iteration > 0 &&
+       strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+        myerror(E, "ala_coupled_debug_stop_iteration requires "
                 "ala_outer_solver=coupled_fgmres");
     if(E->control.ala_coupled_element_vanka &&
        (!E->control.ala_element_vanka_smoother ||

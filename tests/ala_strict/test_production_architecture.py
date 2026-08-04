@@ -57,6 +57,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_defect_corrections",
             "ala_coupled_multilevel_audit_only",
             "ala_coupled_first_preconditioner_audit_only",
+            "ala_coupled_debug_stop_iteration",
             "ala_coupled_element_vanka",
             "ala_coupled_multilevel_vcycle",
             "ala_coupled_multilevel_coarse_weight",
@@ -96,7 +97,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_first_preconditioner_audit_only"
-            r"\s*=\s*on\s*$",
+            r"\s*=\s*off\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
         )
         self.assertRegex(
             strict_text,
