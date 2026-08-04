@@ -172,7 +172,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_element_vanka_rebuild_interval\s*=\s*4\s*$",
+            r"(?m)^\s*ala_element_vanka_rebuild_interval\s*=\s*1\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -768,6 +768,42 @@ class StrictProductionArchitectureTest(unittest.TestCase):
                 "ala_element_vanka_rebuild_interval must be in [1,100]",
                 source,
             )
+
+    def test_stage10_continuity_audit_localizes_linf_and_rejects_fake_div_v(
+        self,
+    ) -> None:
+        drive = (GLOBAL_ROOT / "lib" / "Drive_solvers.c").read_text(
+            encoding="utf-8"
+        )
+        start = drive.index("static void write_ala_residual(")
+        residual = drive[start:drive.index(
+            "static void write_ala_unaugmented_momentum_residual(", start
+        )]
+        self.assertIn("MPI_DOUBLE_INT", residual)
+        self.assertIn("MPI_MAXLOC", residual)
+        self.assertIn("MPI_Bcast(global_linf_location", residual)
+        for metric in (
+            "Linf_signed",
+            "Linf_owner_rank",
+            "Linf_owner_cap",
+            "Linf_owner_element",
+            "Linf_global_radial_element",
+            "Linf_depth_km",
+        ):
+            self.assertIn(metric, residual)
+        self.assertIn(
+            'strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0',
+            residual,
+        )
+        self.assertIn('"solver_div_v", "N/A"', residual)
+        self.assertIn('"solver_div_v_status"', residual)
+        self.assertIn('"not_applicable"', residual)
+        power_row = drive[
+            drive.index("static void print_power_row("):
+            drive.index("static void write_mechanical_power(")
+        ]
+        self.assertIn("isfinite(value.maximum)", power_row)
+        self.assertIn('"N/A", "N/A"', power_row)
 
     def test_stage6c_failure_path_audits_physical_scales_and_momentum(
         self,

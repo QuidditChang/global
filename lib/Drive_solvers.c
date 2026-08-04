@@ -662,8 +662,12 @@ static struct power_stats plate_power(struct All_variables *E, double scale)
 static void print_power_row(FILE *fp, const char *name,
                             struct power_stats value)
 {
-    fprintf(fp, "%-20s  %+16.8e  %+16.8e  %+16.8e\n",
-            name, value.total, value.maximum, value.minimum);
+    if(isfinite(value.maximum) && isfinite(value.minimum))
+        fprintf(fp, "%-20s  %+16.8e  %+16.8e  %+16.8e\n",
+                name, value.total, value.maximum, value.minimum);
+    else
+        fprintf(fp, "%-20s  %+16.8e  %16s  %16s\n",
+                name, value.total, "N/A", "N/A");
 }
 
 
@@ -776,15 +780,20 @@ static void write_mechanical_power(struct All_variables *E)
 
 static void write_ala_residual(struct All_variables *E)
 {
-    int m, e;
+    int m, e, local_ez;
+    int local_linf_cap, local_linf_element, local_linf_global_ez;
+    int global_linf_location[3];
     double volume, rdiv, rbeta, rala, relative, denominator;
     double scale_density, characteristic_scale, active_scale_cutoff;
     double global_cancellation_l2, elementwise_relative_l2;
     double active_relative_l2, active_volume_fraction;
     double active_fraction_above_threshold;
     double local_sum[6], global_sum[5], global_linf;
+    double local_linf_depth, global_linf_depth;
+    double local_linf_signed, global_linf_signed;
     double local_active[3], global_active[3];
     double **div_u, **beta_u;
+    struct { double value; int rank; } local_maxloc, global_maxloc;
     static const double active_scale_fraction = 1.0e-6;
     static const double relative_alert_threshold = 1.0e-1;
     static const char separator[] =
@@ -800,6 +809,13 @@ static void write_ala_residual(struct All_variables *E)
     assemble_c_u(E, E->U, beta_u, E->mesh.levmax);
 
     for(e=0; e<6; e++) local_sum[e] = 0.0;
+    local_maxloc.value = -1.0;
+    local_maxloc.rank = E->parallel.me;
+    local_linf_cap = 0;
+    local_linf_element = 0;
+    local_linf_global_ez = 0;
+    local_linf_depth = 0.0;
+    local_linf_signed = 0.0;
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         for(e=1; e<=E->lmesh.nel; e++) {
             volume = E->eco[m][e].area;
@@ -817,12 +833,38 @@ static void write_ala_residual(struct All_variables *E)
             local_sum[3] += volume;
             local_sum[4] += volume * scale_density * scale_density;
             local_sum[5] = max(local_sum[5], fabs(rala));
+            if(fabs(rala) > local_maxloc.value) {
+                local_ez = (e-1) % E->lmesh.ELZ[E->mesh.levmax] + 1;
+                local_maxloc.value = fabs(rala);
+                local_linf_signed = rala;
+                local_linf_cap = m;
+                local_linf_element = e;
+                local_linf_global_ez =
+                    E->lmesh.EZS[E->mesh.levmax] + local_ez;
+                local_linf_depth = (1.0 - 0.5 *
+                    (E->sx[m][3][local_ez] +
+                     E->sx[m][3][local_ez+1])) * E->data.radius_km;
+            }
         }
     }
     MPI_Allreduce(local_sum, global_sum, 5, MPI_DOUBLE, MPI_SUM,
                   E->parallel.world);
-    MPI_Allreduce(&local_sum[5], &global_linf, 1, MPI_DOUBLE, MPI_MAX,
-                  E->parallel.world);
+    MPI_Allreduce(&local_maxloc, &global_maxloc, 1, MPI_DOUBLE_INT,
+                  MPI_MAXLOC, E->parallel.world);
+    global_linf = global_maxloc.value;
+    if(E->parallel.me == global_maxloc.rank) {
+        global_linf_location[0] = local_linf_cap;
+        global_linf_location[1] = local_linf_element;
+        global_linf_location[2] = local_linf_global_ez;
+        global_linf_depth = local_linf_depth;
+        global_linf_signed = local_linf_signed;
+    }
+    MPI_Bcast(global_linf_location, 3, MPI_INT, global_maxloc.rank,
+              E->parallel.world);
+    MPI_Bcast(&global_linf_depth, 1, MPI_DOUBLE, global_maxloc.rank,
+              E->parallel.world);
+    MPI_Bcast(&global_linf_signed, 1, MPI_DOUBLE, global_maxloc.rank,
+              E->parallel.world);
 
     characteristic_scale = sqrt(global_sum[4]
                                   / max(global_sum[3], 1.0e-300));
@@ -869,11 +911,32 @@ static void write_ala_residual(struct All_variables *E)
         fprintf(E->fp, "%-30s  %+16.8e\n", "L2",
                 sqrt(global_sum[0] / global_sum[3]));
         fprintf(E->fp, "%-30s  %+16.8e\n", "Linf", global_linf);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "Linf_signed",
+                global_linf_signed);
+        fprintf(E->fp, "%-30s  %16d\n", "Linf_owner_rank",
+                global_maxloc.rank);
+        fprintf(E->fp, "%-30s  %16d\n", "Linf_owner_cap",
+                global_linf_location[0]);
+        fprintf(E->fp, "%-30s  %16d\n", "Linf_owner_element",
+                global_linf_location[1]);
+        fprintf(E->fp, "%-30s  %16d\n", "Linf_global_radial_element",
+                global_linf_location[2]);
+        fprintf(E->fp, "%-30s  %+16.8e\n", "Linf_depth_km",
+                global_linf_depth);
         fprintf(E->fp, "%-30s  %+16.8e\n",
                 "volume_weighted_mean_abs",
                 global_sum[1] / global_sum[3]);
-        fprintf(E->fp, "%-30s  %+16.8e\n", "solver_div_v",
-                E->monitor.incompressibility);
+        if(strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) {
+            fprintf(E->fp, "%-30s  %16s\n", "solver_div_v", "N/A");
+            fprintf(E->fp, "%-30s  %16s\n", "solver_div_v_status",
+                    "not_applicable");
+        }
+        else {
+            fprintf(E->fp, "%-30s  %+16.8e\n", "solver_div_v",
+                    E->monitor.incompressibility);
+            fprintf(E->fp, "%-30s  %16s\n", "solver_div_v_status",
+                    "legacy_populated");
+        }
         fprintf(E->fp, "%-30s  %+16.8e\n", "global_cancellation_L2",
                 global_cancellation_l2);
         fprintf(E->fp, "%-30s  %+16.8e\n",
