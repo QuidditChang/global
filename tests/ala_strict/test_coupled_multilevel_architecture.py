@@ -67,6 +67,20 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertNotIn("fabs(left)+fabs(right)", scaling)
         self.assertIn("output=(output_index==0) ? E->fp : stderr;", audit)
 
+    def test_probe_uses_owned_velocity_representation(self) -> None:
+        probe = _function_body(
+            self.element, "static void ala_fill_level_probe("
+        )
+        self.assertIn("E->NODE[level][m][node] & SKIP", probe)
+        self.assertIn("continue;", probe)
+        self.assertIn(
+            "(E->solver.exchange_id_d)(E,probe->velocity,level);", probe
+        )
+        self.assertLess(
+            probe.index("E->NODE[level][m][node] & SKIP"),
+            probe.index("probe->velocity[m][eq]=value;"),
+        )
+
     def test_coarse_beta_is_restricted_from_authoritative_fine_field(self) -> None:
         audit = _function_body(
             self.element, "void audit_ala_coupled_multilevel_contracts("

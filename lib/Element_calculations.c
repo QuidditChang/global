@@ -1862,6 +1862,12 @@ static void ala_fill_level_probe(struct All_variables *E,
     ala_block_vector_zero(E,probe);
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         for(node=1;node<=E->lmesh.NNO[level];node++) {
+            /* A distributed velocity vector is owned on non-SKIP nodes and
+             * replicated to halo copies.  Populating every local copy before
+             * the additive equation exchange constructs an assembled force,
+             * not a legal Krylov vector, and invalidates the G/G^T audit. */
+            if(E->NODE[level][m][node] & SKIP)
+                continue;
             radius=E->SX[level][m][3][node];
             for(d=1;d<=E->mesh.nsd;d++) {
                 eq=E->ID[level][m][node].doff[d];
@@ -1869,12 +1875,14 @@ static void ala_fill_level_probe(struct All_variables *E,
                 probe->velocity[m][eq]=value;
             }
         }
-        probe->velocity[m][E->lmesh.NEQ[level]]=0.0;
         for(e=1;e<=E->lmesh.NPNO[level];e++) {
             nz=(e-1)%E->lmesh.ELZ[level]+1;
             probe->pressure[m][e]=cos(phase+0.17*nz);
         }
     }
+    (E->solver.exchange_id_d)(E,probe->velocity,level);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        probe->velocity[m][E->lmesh.NEQ[level]]=0.0;
 }
 
 
