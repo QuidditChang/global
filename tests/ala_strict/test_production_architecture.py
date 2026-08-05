@@ -53,6 +53,9 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "profile_optional",
             "tracer_reclassify_flavors",
             "bottom_tbl_thickness",
+            "k0",
+            "rayleigh",
+            "phase_Ra",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
@@ -229,6 +232,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             strict_text,
             r"(?m)^\s*checkpointFrequency\s*=\s*50\s*$",
         )
+
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_element_vanka_rebuild_interval\s*=\s*1\s*$",
@@ -295,6 +299,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             strict_text,
             r"(?m)^\s*ala_pressure_multigrid_min_level\s*=\s*0\s*$",
         )
+
+    def test_kappa0_is_authoritative_and_k0_is_closed(self) -> None:
+        path = RUNS_ROOT / "cmbhf_ALA_strict.cfg"
+        text = path.read_text(encoding="utf-8")
+        kappa0 = 1.0e-6
+        rho0 = _cfg_scalar(path, "rho0")
+        cp0 = _cfg_scalar(path, "Cp0")
+        k0 = _cfg_scalar(path, "k0")
+        self.assertIn("# @physical kappa0_m2_s = 1.0e-6", text)
+        self.assertAlmostEqual(k0, kappa0 * rho0 * cp0, places=12)
 
     def test_strict_reference_schema_and_tref_endpoints(self) -> None:
         path = RUNS_ROOT / "refstate_ALA_strict.txt"
