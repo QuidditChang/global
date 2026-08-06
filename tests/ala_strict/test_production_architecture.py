@@ -907,6 +907,27 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("E->T", advection)
         self.assertIn("E->assim_delta_T", advection)
 
+    def test_strict_rheology_uses_refstate_temperature_profile(self) -> None:
+        viscosity = (
+            GLOBAL_ROOT / "lib" / "Viscosity_structures.c"
+        ).read_text(encoding="utf-8")
+        helper_start = viscosity.index(
+            "static double strict_rheology_reference_temperature(",
+            viscosity.index("void visc_from_mat("),
+        )
+        helper_end = viscosity.index("void visc_from_T(", helper_start)
+        helper = viscosity[helper_start:helper_end]
+        case3_start = viscosity.index("case 3:")
+        case3_end = viscosity.index("case 4:", case3_start)
+        case3 = viscosity[case3_start:case3_end]
+
+        self.assertIn("E->refstate.Tref[radial_node]", helper)
+        self.assertIn("E->N.vpt[GNVINDEX(a,gp)]", helper)
+        self.assertIn("E->control.ala_pressure_buoyancy", case3)
+        self.assertIn(
+            "strict_rheology_reference_temperature(E,m,i,jj)", case3
+        )
+
     def test_kc_tracks_the_explicit_primordial_flavor(self) -> None:
         advection = (GLOBAL_ROOT / "lib" / "Advection_diffusion.c").read_text()
         composition = (GLOBAL_ROOT / "lib" / "Composition_related.c").read_text()

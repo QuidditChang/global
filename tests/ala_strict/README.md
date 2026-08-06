@@ -22,6 +22,8 @@ The production-architecture test also verifies:
   pressure-MG rollback;
 - the eight-column strict reference-state order and pure fitted Tref endpoints;
 - `E->T` remains the sole temperature state and assimilation target;
+- strict rheology shape-interpolates `E->refstate.Tref` to each viscosity
+  Gauss point instead of constructing a lith-age reference profile;
 - no `DataT` cache or runtime strict-audit hook remains;
 - `Xref` uses `E->refstate.Tref` while dynamic `X` uses `E->T`;
 - the Stage 6c node-block shallow Schur map is constructed as an SPD Gram

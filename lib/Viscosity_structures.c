@@ -51,6 +51,9 @@ static void record_tracer_visc();
 static void read_tracer_visc();
 static void read_tracer_visc22();
 static void get_shape_functions();
+static double strict_rheology_reference_temperature(struct All_variables *E,
+                                                     int cap, int element,
+                                                     int gp);
 void parallel_process_termination();
 
 
@@ -332,6 +335,30 @@ void visc_from_mat(E,EEta)
 }
 
 
+static double strict_rheology_reference_temperature(struct All_variables *E,
+                                                     int cap, int element,
+                                                     int gp)
+{
+    int a, node, radial_node;
+    double temperature;
+    const int ends = enodes[E->mesh.nsd];
+
+    if(!E->refstate.has_temperature) {
+        myerror(E,
+                "Strict ALA rheology requires the reference-state Tref profile");
+    }
+
+    temperature = 0.0;
+    for(a=1; a<=ends; a++) {
+        node = E->ien[cap][element].node[a];
+        radial_node = (node - 1) % E->lmesh.noz + 1;
+        temperature += E->refstate.Tref[radial_node]
+                     * E->N.vpt[GNVINDEX(a,gp)];
+    }
+    return temperature;
+}
+
+
 void visc_from_T(E,EEta,propogate)
      struct All_variables *E;
      float **EEta;
@@ -432,8 +459,9 @@ void visc_from_T(E,EEta,propogate)
               fclose(fp);
         }
         //one = 1.0;
-        slope = ((1.0 - E->control.lith_age_mantle_temp) - E->control.lith_age_mantle_temp) / \
-            (1.0 - E->control.lith_age_depth - (E->sphere.ri+2.0*E->control.lith_age_depth)); 
+        if(!E->control.ala_pressure_buoyancy)
+            slope = ((1.0 - E->control.lith_age_mantle_temp) - E->control.lith_age_mantle_temp) / \
+                (1.0 - E->control.lith_age_depth - (E->sphere.ri+2.0*E->control.lith_age_depth));
 
         T_max = 1.0; T_min = 0.0;
 
@@ -557,7 +585,11 @@ void visc_from_T(E,EEta,propogate)
                             zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
                         }
 
-	                one = E->control.lith_age_mantle_temp + slope * (zzz - E->control.lith_age_depth);
+                        if(E->control.ala_pressure_buoyancy)
+                            one = strict_rheology_reference_temperature(E,m,i,jj);
+                        else
+                            one = E->control.lith_age_mantle_temp
+                                + slope * (zzz - E->control.lith_age_depth);
 
                         if(E->control.mat_control==0) {
 			   /*if(r>0.97 && fabs(E->flag_depth2[nodeg])*1000.0>200) { // && E->age_t[nodeg]>380.0/E->data.scalet) {
@@ -3218,4 +3250,3 @@ void apply_smooth_viscbc(E,EEta)
 
     return;
 }
-
