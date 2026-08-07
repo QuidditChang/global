@@ -223,7 +223,7 @@ static void apply_ala_coupled_element_vanka_region(
     static unsigned char reported_band_valid[MAX_LEVELS];
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
-    double pressure_rhs,pressure_solution,schur,regularization;
+    double pressure_rhs,pressure_solution,schur;
     double damping,weight,region_weight,taper_position;
     double local_min,local_max,global_min,global_max;
     higher_precision *chol;
@@ -236,7 +236,6 @@ static void apply_ala_coupled_element_vanka_region(
     if(loc_mat_size[dims]!=ALA_VANKA_DOF)
         myerror(E,"Coupled element-Vanka requires 3-D 24-dof elements");
     damping=E->control.ala_element_vanka_damping;
-    regularization=E->control.ala_element_vanka_regularization;
     shallow=(shallow_layers>0);
     selected_layers=min(shallow_layers,E->mesh.ELZ[lev]);
     selected_core=core_layers<0 ? -1 : min(core_layers,selected_layers);
@@ -297,10 +296,9 @@ static void apply_ala_coupled_element_vanka_region(
                    chol,gradient,velocity_pressure))
                 myerror(E,"Coupled element-Vanka velocity solve failed");
             pressure_rhs=residual->pressure[m][e];
-            schur=regularization*E->ECO[lev][m][e].area;
+            schur=E->ALA_vanka_schur[lev][m][e];
             pressure_solution=-pressure_rhs;
             for(i=0;i<ALA_VANKA_DOF;i++) {
-                schur += gradient[i]*velocity_pressure[i];
                 pressure_solution += gradient[i]*velocity_base[i];
             }
             if(!isfinite(schur) || schur<=1.0e-300)
@@ -369,7 +367,8 @@ static void apply_ala_coupled_element_vanka_region(
                     "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
-                    regularization,global_min,global_max,
+                    E->control.ala_element_vanka_regularization,
+                    global_min,global_max,
                     band_only ? "shallow_band" :
                         (shallow ? "shallow_core" : "full"),selected_layers,
                     selected_core,band_only ? "sine" : "off");
@@ -380,7 +379,8 @@ static void apply_ala_coupled_element_vanka_region(
                     "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
-                    regularization,global_min,global_max,
+                    E->control.ala_element_vanka_regularization,
+                    global_min,global_max,
                     band_only ? "shallow_band" :
                         (shallow ? "shallow_core" : "full"),selected_layers,
                     selected_core,band_only ? "sine" : "off");
@@ -427,6 +427,113 @@ static void assemble_ala_coupled_block_defect(
 }
 
 
+/* Observe, but never modify, the coefficient consistency of the current
+ * rediscretized hierarchy.  A Galerkin-consistent constant-P0 aggregate has
+ * S_c=sum(children S_f).  The ratio and relative mismatch below decide
+ * whether a new hierarchy is required; they are not used as a correction. */
+static void ala_audit_local_schur_coarsening(
+    struct All_variables *E, int fine_level)
+{
+    int m,cx,cy,cz,ce,dx,dy,dz,ex,ey,ez,e;
+    int local_count,global_count;
+    int report_diagnostics;
+    static int reported_cycle[MAX_LEVELS];
+    static unsigned char reported_valid[MAX_LEVELS];
+    double fine_sum,coarse_schur,ratio,mismatch;
+    double local_min,global_min,local_max,global_max,local_sum,global_sum;
+    double local_mismatch_sum,global_mismatch_sum;
+    double local_mismatch_max,global_mismatch_max;
+    const int coarse_level=fine_level-1;
+    const int felz=E->lmesh.ELZ[fine_level];
+    const int felx=E->lmesh.ELX[fine_level];
+    const int celz=E->lmesh.ELZ[coarse_level];
+    const int celx=E->lmesh.ELX[coarse_level];
+    const int cely=E->lmesh.ELY[coarse_level];
+
+    if(!E->control.ala_viscosity_spectrum_diagnostics)
+        return;
+    report_diagnostics=!reported_valid[fine_level] ||
+        reported_cycle[fine_level]!=E->monitor.solution_cycles;
+    local_count=0;
+    local_min=1.0e300;
+    local_max=local_sum=0.0;
+    local_mismatch_sum=local_mismatch_max=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(cy=1;cy<=cely;cy++)
+            for(cx=1;cx<=celx;cx++)
+                for(cz=1;cz<=celz;cz++) {
+                    ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                    coarse_schur=E->ALA_vanka_schur[coarse_level][m][ce];
+                    fine_sum=0.0;
+                    for(dy=0;dy<2;dy++)
+                        for(dx=0;dx<2;dx++)
+                            for(dz=0;dz<2;dz++) {
+                                ex=2*cx-1+dx;
+                                ey=2*cy-1+dy;
+                                ez=2*cz-1+dz;
+                                e=ez+(ex-1)*felz+(ey-1)*felz*felx;
+                                fine_sum +=
+                                    E->ALA_vanka_schur[fine_level][m][e];
+                            }
+                    if(!isfinite(coarse_schur) || coarse_schur<=0.0 ||
+                       !isfinite(fine_sum) || fine_sum<=0.0)
+                        myerror(E,"ALA Schur coarsening audit "
+                                "has an invalid local Schur scale");
+                    ratio=coarse_schur/fine_sum;
+                    mismatch=fabs(coarse_schur-fine_sum)
+                        /(fabs(coarse_schur)+fabs(fine_sum));
+                    if(report_diagnostics) {
+                        local_min=min(local_min,ratio);
+                        local_max=max(local_max,ratio);
+                        local_sum += ratio;
+                        local_mismatch_sum += mismatch;
+                        local_mismatch_max=max(local_mismatch_max,mismatch);
+                        local_count++;
+                    }
+                }
+    if(report_diagnostics) {
+        MPI_Allreduce(&local_count,&global_count,1,MPI_INT,MPI_SUM,
+                      E->parallel.world);
+        MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
+                      E->parallel.world);
+        MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
+                      E->parallel.world);
+        MPI_Allreduce(&local_sum,&global_sum,1,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        MPI_Allreduce(&local_mismatch_sum,&global_mismatch_sum,1,
+                      MPI_DOUBLE,MPI_SUM,E->parallel.world);
+        MPI_Allreduce(&local_mismatch_max,&global_mismatch_max,1,
+                      MPI_DOUBLE,MPI_MAX,E->parallel.world);
+        if(global_count<=0)
+            myerror(E,"ALA Schur coarsening audit is empty");
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA SCHUR COARSENING AUDIT fine_level=%d "
+                    "coarse_level=%d ratio_range=[%e,%e] ratio_mean=%e "
+                    "relative_mismatch_mean=%e relative_mismatch_max=%e "
+                    "elements=%d cycle=%d action=observe_only\n",
+                    fine_level,coarse_level,global_min,global_max,
+                    global_sum/global_count,
+                    global_mismatch_sum/global_count,global_mismatch_max,
+                    global_count,
+                    E->monitor.solution_cycles);
+            fprintf(stderr,"ALA SCHUR COARSENING AUDIT fine_level=%d "
+                    "coarse_level=%d ratio_range=[%e,%e] ratio_mean=%e "
+                    "relative_mismatch_mean=%e relative_mismatch_max=%e "
+                    "elements=%d cycle=%d action=observe_only\n",
+                    fine_level,coarse_level,global_min,global_max,
+                    global_sum/global_count,
+                    global_mismatch_sum/global_count,global_mismatch_max,
+                    global_count,
+                    E->monitor.solution_cycles);
+            fflush(E->fp);
+            fflush(stderr);
+        }
+        reported_cycle[fine_level]=E->monitor.solution_cycles;
+        reported_valid[fine_level]=1;
+    }
+}
+
+
 static void apply_ala_coupled_multilevel_vcycle(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction, int lev)
@@ -462,6 +569,7 @@ static void apply_ala_coupled_multilevel_vcycle(
             E,lev,defect->velocity,coarse_residual->velocity);
         ala_coupled_restrict_pressure_p0_transpose(
             E,lev,defect->pressure,coarse_residual->pressure);
+        ala_audit_local_schur_coarsening(E,lev);
         apply_ala_coupled_multilevel_vcycle(
             E,coarse_residual,coarse_correction,lev-1);
         ala_block_vector_zero(E,smooth);

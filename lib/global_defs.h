@@ -492,6 +492,8 @@ struct CONTROL {
     int ala_coupled_multilevel_vcycle;
     int ala_coupled_multilevel_coarse_sweeps;
     double ala_coupled_multilevel_coarse_weight;
+    int ala_viscosity_spectrum_diagnostics;
+    int ala_viscosity_spectrum_interval;
     int ala_coupled_shallow_vanka_layers;
     int ala_coupled_shallow_vanka_core_layers;
     int ala_coupled_shallow_vanka_band_sweeps;
@@ -895,6 +897,7 @@ struct All_variables {
     double *ALA_vanka_overlap_BI[MAX_LEVELS][NCS];
     higher_precision *ALA_vanka_chol[MAX_LEVELS][NCS];
     unsigned char *ALA_vanka_valid[MAX_LEVELS][NCS];
+    double *ALA_vanka_schur[MAX_LEVELS][NCS];
     double *ALA_BPI_line_diag[MAX_LEVELS][NCS];
     double *ALA_BPI_line_lower[MAX_LEVELS][NCS];
     unsigned char *ALA_BPI_line_valid[MAX_LEVELS][NCS];

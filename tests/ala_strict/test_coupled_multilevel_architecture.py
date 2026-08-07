@@ -31,8 +31,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         cls.element = (LIB_ROOT / "Element_calculations.c").read_text()
         cls.header = (LIB_ROOT / "ala_coupled_operator.h").read_text()
         cls.stokes = (LIB_ROOT / "Stokes_flow_Incomp.c").read_text()
+        cls.construct = (LIB_ROOT / "Construct_arrays.c").read_text()
         cls.defs = (LIB_ROOT / "global_defs.h").read_text()
         cls.instructions = (LIB_ROOT / "Instructions.c").read_text()
+        cls.output = (LIB_ROOT / "Output_h5.c").read_text()
         cls.pyre = (
             GLOBAL_ROOT / "CitcomS/Components/Stokes_solver/Incompressible.py"
         ).read_text()
@@ -173,6 +175,15 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             '"ala_coupled_multilevel_coarse_weight",',
             self.properties,
         )
+        for token in (
+            "ala_viscosity_spectrum_diagnostics",
+            "ala_viscosity_spectrum_interval",
+        ):
+            self.assertIn(token, self.defs)
+            self.assertIn(token, self.instructions)
+            self.assertIn(token, self.pyre)
+            self.assertIn(token, self.properties)
+            self.assertIn(token, self.output)
         self.assertIn("int ala_coupled_shallow_vanka_layers;", self.defs)
         self.assertIn(
             "int ala_coupled_shallow_vanka_core_layers;", self.defs
@@ -556,6 +567,53 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("shallow_cold_sweeps=%d shallow_warm_sweeps=%d", block)
         self.assertIn('solution_start=%s', block)
+
+    def test_viscosity_spectrum_reuses_cached_local_schur(self) -> None:
+        builder = _function_body(
+            self.construct, "void build_ala_element_vanka_factors("
+        )
+        self.assertIn("E->ALA_vanka_schur[level][m][e]=schur;", builder)
+        self.assertIn("E->EVI[level][m][(e-1)*vpts+v]", builder)
+        self.assertIn("diag=1.0/E->BI[level][m][eq];", builder)
+        self.assertIn("ALA VISCOSITY SPECTRUM level=%d", builder)
+        self.assertIn("eta_mean_times_schur_mean=%e", builder)
+        region = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_element_vanka_region(",
+        )
+        self.assertIn("schur=E->ALA_vanka_schur[lev][m][e];", region)
+
+    def test_schur_coarsening_audit_is_observational_only(
+        self,
+    ) -> None:
+        audit = _function_body(
+            self.stokes,
+            "static void ala_audit_local_schur_coarsening(",
+        )
+        for token in (
+            "coarse_schur/fine_sum",
+            "relative_mismatch_mean=%e",
+            "relative_mismatch_max=%e",
+            "ALA SCHUR COARSENING AUDIT fine_level=%d",
+            "action=observe_only",
+        ):
+            self.assertIn(token, audit)
+        self.assertNotIn("coarse[m][ce] *=", audit)
+        vcycle = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_multilevel_vcycle(",
+        )
+        restriction = vcycle.index(
+            "ala_coupled_restrict_pressure_p0_transpose("
+        )
+        audit_call = vcycle.index(
+            "ala_audit_local_schur_coarsening("
+        )
+        recursion = vcycle.index(
+            "apply_ala_coupled_multilevel_vcycle(", audit_call + 1
+        )
+        self.assertLess(restriction, audit_call)
+        self.assertLess(audit_call, recursion)
 
     def test_shallow_vanka_band_is_separate_and_windowed(self) -> None:
         region = _function_body(

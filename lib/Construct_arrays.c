@@ -500,7 +500,10 @@ void build_ala_element_vanka_factors(struct All_variables *E)
     int local_elements,global_elements;
     double matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
     double L[ALA_VANKA_DOF*ALA_VANKA_DOF];
+    double gradient[ALA_VANKA_DOF],forward[ALA_VANKA_DOF];
+    double velocity_pressure[ALA_VANKA_DOF];
     double sum,pivot,maxdiag,global_diag,external,shift;
+    double schur,diagonal;
     double local_min_ratio,global_min_ratio,local_megabytes,global_max_megabytes;
     double build_start,build_seconds,global_build_seconds;
     higher_precision *cache;
@@ -523,7 +526,8 @@ void build_ala_element_vanka_factors(struct All_variables *E)
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             local_elements += E->lmesh.NEL[level];
             local_megabytes += (E->lmesh.NEL[level]+1)
-                *ALA_VANKA_CHOL_SIZE*sizeof(higher_precision)/(1024.0*1024.0);
+                *(ALA_VANKA_CHOL_SIZE*sizeof(higher_precision)
+                  +sizeof(double))/(1024.0*1024.0);
             for(e=1;e<=E->lmesh.NEL[level];e++) {
                 get_elt_k(E,e,matrix,level,m,0);
                 get_ala_aug_k(E,e,matrix,level,m);
@@ -547,6 +551,9 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                     if(!isfinite(E->BI[level][m][eq]) ||
                        E->BI[level][m][eq]<=0.0)
                         myerror(E,"ALA element-Vanka assembled diagonal is invalid");
+                    gradient[i]=fixed[i] ? 0.0 :
+                        E->elt_del[level][m][e].g[i][0]
+                       +E->elt_c[level][m][e].c[i][0];
                     global_diag=1.0/E->BI[level][m][eq];
                     if(!fixed[i]) {
                         external=global_diag-matrix[i*n+i];
@@ -605,6 +612,26 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                 for(i=0;i<n;i++)
                     for(j=0;j<=i;j++)
                         cache[k++]=(higher_precision)L[i*n+j];
+                for(i=0;i<n;i++) {
+                    sum=gradient[i];
+                    for(j=0;j<i;j++)
+                        sum -= L[i*n+j]*forward[j];
+                    diagonal=L[i*n+i];
+                    forward[i]=sum/diagonal;
+                }
+                for(i=n-1;i>=0;i--) {
+                    sum=forward[i];
+                    for(j=i+1;j<n;j++)
+                        sum -= L[j*n+i]*velocity_pressure[j];
+                    velocity_pressure[i]=sum/L[i*n+i];
+                }
+                schur=E->control.ala_element_vanka_regularization
+                    *E->ECO[level][m][e].area;
+                for(i=0;i<n;i++)
+                    schur += gradient[i]*velocity_pressure[i];
+                if(!isfinite(schur) || schur<=1.0e-300)
+                    myerror(E,"ALA element-Vanka cached Schur is invalid");
+                E->ALA_vanka_schur[level][m][e]=schur;
                 E->ALA_vanka_valid[level][m][e]=1;
             }
         }
@@ -636,6 +663,169 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                 global_build_seconds,E->monitor.solution_cycles);
         fflush(E->fp);
         fflush(stderr);
+    }
+
+    if(E->control.ala_viscosity_spectrum_diagnostics &&
+       E->monitor.solution_cycles%
+         E->control.ala_viscosity_spectrum_interval==0) {
+        int radial,global_radial,v,radial_count;
+        int *local_eta_count,*global_eta_count;
+        int *local_diag_count,*global_diag_count;
+        int *local_schur_count,*global_schur_count;
+        double eta,diag,depth;
+        double *local_eta_min,*global_eta_min,*local_eta_max,*global_eta_max;
+        double *local_eta_sum,*global_eta_sum;
+        double *local_diag_min,*global_diag_min,*local_diag_max,*global_diag_max;
+        double *local_diag_sum,*global_diag_sum;
+        double *local_schur_min,*global_schur_min;
+        double *local_schur_max,*global_schur_max;
+        double *local_schur_sum,*global_schur_sum;
+        double *local_depth_sum,*global_depth_sum;
+        const int vpts=vpoints[dims];
+
+        for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++) {
+            radial_count=E->mesh.ELZ[level];
+#define ALA_ALLOC_DIAG(name,type) \
+            name=(type *)malloc(radial_count*sizeof(type)); \
+            if(name==NULL) myerror(E,"Unable to allocate ALA viscosity diagnostics")
+            ALA_ALLOC_DIAG(local_eta_count,int);
+            ALA_ALLOC_DIAG(global_eta_count,int);
+            ALA_ALLOC_DIAG(local_diag_count,int);
+            ALA_ALLOC_DIAG(global_diag_count,int);
+            ALA_ALLOC_DIAG(local_schur_count,int);
+            ALA_ALLOC_DIAG(global_schur_count,int);
+            ALA_ALLOC_DIAG(local_eta_min,double);
+            ALA_ALLOC_DIAG(global_eta_min,double);
+            ALA_ALLOC_DIAG(local_eta_max,double);
+            ALA_ALLOC_DIAG(global_eta_max,double);
+            ALA_ALLOC_DIAG(local_eta_sum,double);
+            ALA_ALLOC_DIAG(global_eta_sum,double);
+            ALA_ALLOC_DIAG(local_diag_min,double);
+            ALA_ALLOC_DIAG(global_diag_min,double);
+            ALA_ALLOC_DIAG(local_diag_max,double);
+            ALA_ALLOC_DIAG(global_diag_max,double);
+            ALA_ALLOC_DIAG(local_diag_sum,double);
+            ALA_ALLOC_DIAG(global_diag_sum,double);
+            ALA_ALLOC_DIAG(local_schur_min,double);
+            ALA_ALLOC_DIAG(global_schur_min,double);
+            ALA_ALLOC_DIAG(local_schur_max,double);
+            ALA_ALLOC_DIAG(global_schur_max,double);
+            ALA_ALLOC_DIAG(local_schur_sum,double);
+            ALA_ALLOC_DIAG(global_schur_sum,double);
+            ALA_ALLOC_DIAG(local_depth_sum,double);
+            ALA_ALLOC_DIAG(global_depth_sum,double);
+#undef ALA_ALLOC_DIAG
+            for(radial=0;radial<radial_count;radial++) {
+                local_eta_count[radial]=local_diag_count[radial]=0;
+                local_schur_count[radial]=0;
+                local_eta_min[radial]=local_diag_min[radial]=1.0e300;
+                local_schur_min[radial]=1.0e300;
+                local_eta_max[radial]=local_diag_max[radial]=0.0;
+                local_schur_max[radial]=0.0;
+                local_eta_sum[radial]=local_diag_sum[radial]=0.0;
+                local_schur_sum[radial]=local_depth_sum[radial]=0.0;
+            }
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=1;e<=E->lmesh.NEL[level];e++) {
+                    radial=(e-1)%E->lmesh.ELZ[level];
+                    global_radial=E->lmesh.EZS[level]+radial;
+                    depth=(1.0-E->ECO[level][m][e].centre[3])
+                        *E->data.radius_km;
+                    local_depth_sum[global_radial] += depth;
+                    local_schur_count[global_radial]++;
+                    schur=E->ALA_vanka_schur[level][m][e];
+                    local_schur_min[global_radial]=
+                        min(local_schur_min[global_radial],schur);
+                    local_schur_max[global_radial]=
+                        max(local_schur_max[global_radial],schur);
+                    local_schur_sum[global_radial] += schur;
+                    for(v=1;v<=vpts;v++) {
+                        eta=E->EVI[level][m][(e-1)*vpts+v];
+                        local_eta_min[global_radial]=
+                            min(local_eta_min[global_radial],eta);
+                        local_eta_max[global_radial]=
+                            max(local_eta_max[global_radial],eta);
+                        local_eta_sum[global_radial] += eta;
+                        local_eta_count[global_radial]++;
+                    }
+                    for(i=0;i<n;i++) {
+                        a=i/dims+1;
+                        da=i%dims;
+                        node=E->IEN[level][m][e].node[a];
+                        eq=E->ID[level][m][node].doff[da+1];
+                        diag=1.0/E->BI[level][m][eq];
+                        local_diag_min[global_radial]=
+                            min(local_diag_min[global_radial],diag);
+                        local_diag_max[global_radial]=
+                            max(local_diag_max[global_radial],diag);
+                        local_diag_sum[global_radial] += diag;
+                        local_diag_count[global_radial]++;
+                    }
+                }
+#define ALA_REDUCE_DIAG(local,global,type,operation) \
+            MPI_Allreduce(local,global,radial_count,type,operation,E->parallel.world)
+            ALA_REDUCE_DIAG(local_eta_count,global_eta_count,MPI_INT,MPI_SUM);
+            ALA_REDUCE_DIAG(local_diag_count,global_diag_count,MPI_INT,MPI_SUM);
+            ALA_REDUCE_DIAG(local_schur_count,global_schur_count,MPI_INT,MPI_SUM);
+            ALA_REDUCE_DIAG(local_eta_min,global_eta_min,MPI_DOUBLE,MPI_MIN);
+            ALA_REDUCE_DIAG(local_eta_max,global_eta_max,MPI_DOUBLE,MPI_MAX);
+            ALA_REDUCE_DIAG(local_eta_sum,global_eta_sum,MPI_DOUBLE,MPI_SUM);
+            ALA_REDUCE_DIAG(local_diag_min,global_diag_min,MPI_DOUBLE,MPI_MIN);
+            ALA_REDUCE_DIAG(local_diag_max,global_diag_max,MPI_DOUBLE,MPI_MAX);
+            ALA_REDUCE_DIAG(local_diag_sum,global_diag_sum,MPI_DOUBLE,MPI_SUM);
+            ALA_REDUCE_DIAG(local_schur_min,global_schur_min,MPI_DOUBLE,MPI_MIN);
+            ALA_REDUCE_DIAG(local_schur_max,global_schur_max,MPI_DOUBLE,MPI_MAX);
+            ALA_REDUCE_DIAG(local_schur_sum,global_schur_sum,MPI_DOUBLE,MPI_SUM);
+            ALA_REDUCE_DIAG(local_depth_sum,global_depth_sum,MPI_DOUBLE,MPI_SUM);
+#undef ALA_REDUCE_DIAG
+            if(E->parallel.me==0)
+                for(radial=radial_count-1;radial>=0;radial--) {
+                    if(global_schur_count[radial]<=0 ||
+                       global_eta_count[radial]<=0 ||
+                       global_diag_count[radial]<=0)
+                        myerror(E,"ALA viscosity diagnostic radial layer is empty");
+                    fprintf(E->fp,"ALA VISCOSITY SPECTRUM level=%d "
+                            "radial_element=%d depth_km=%e "
+                            "eta_range=[%e,%e] eta_mean=%e "
+                            "diagK_range=[%e,%e] diagK_mean=%e "
+                            "local_schur_range=[%e,%e] "
+                            "local_schur_mean=%e "
+                            "eta_mean_times_schur_mean=%e "
+                            "cycle=%d\n",
+                            level,radial,
+                            global_depth_sum[radial]
+                              /global_schur_count[radial],
+                            global_eta_min[radial],global_eta_max[radial],
+                            global_eta_sum[radial]/global_eta_count[radial],
+                            global_diag_min[radial],global_diag_max[radial],
+                            global_diag_sum[radial]/global_diag_count[radial],
+                            global_schur_min[radial],
+                            global_schur_max[radial],
+                            global_schur_sum[radial]
+                              /global_schur_count[radial],
+                            global_eta_sum[radial]/global_eta_count[radial]
+                              *global_schur_sum[radial]
+                              /global_schur_count[radial],
+                            E->monitor.solution_cycles);
+                }
+#define ALA_FREE_DIAG(name) free(name)
+            ALA_FREE_DIAG(local_eta_count); ALA_FREE_DIAG(global_eta_count);
+            ALA_FREE_DIAG(local_diag_count); ALA_FREE_DIAG(global_diag_count);
+            ALA_FREE_DIAG(local_schur_count); ALA_FREE_DIAG(global_schur_count);
+            ALA_FREE_DIAG(local_eta_min); ALA_FREE_DIAG(global_eta_min);
+            ALA_FREE_DIAG(local_eta_max); ALA_FREE_DIAG(global_eta_max);
+            ALA_FREE_DIAG(local_eta_sum); ALA_FREE_DIAG(global_eta_sum);
+            ALA_FREE_DIAG(local_diag_min); ALA_FREE_DIAG(global_diag_min);
+            ALA_FREE_DIAG(local_diag_max); ALA_FREE_DIAG(global_diag_max);
+            ALA_FREE_DIAG(local_diag_sum); ALA_FREE_DIAG(global_diag_sum);
+            ALA_FREE_DIAG(local_schur_min); ALA_FREE_DIAG(global_schur_min);
+            ALA_FREE_DIAG(local_schur_max); ALA_FREE_DIAG(global_schur_max);
+            ALA_FREE_DIAG(local_schur_sum); ALA_FREE_DIAG(global_schur_sum);
+            ALA_FREE_DIAG(local_depth_sum); ALA_FREE_DIAG(global_depth_sum);
+#undef ALA_FREE_DIAG
+        }
+        if(E->parallel.me==0)
+            fflush(E->fp);
     }
 }
 

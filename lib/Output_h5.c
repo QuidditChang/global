@@ -1804,6 +1804,11 @@ void h5output_meta(struct All_variables *E)
         input, "ala_coupled_multilevel_coarse_weight",
         E->control.ala_coupled_multilevel_coarse_weight);
     status = set_attribute_int(
+        input, "ala_viscosity_spectrum_diagnostics",
+        E->control.ala_viscosity_spectrum_diagnostics);
+    status = set_attribute_int(input, "ala_viscosity_spectrum_interval",
+                               E->control.ala_viscosity_spectrum_interval);
+    status = set_attribute_int(
         input, "ala_coupled_shallow_vanka_layers",
         E->control.ala_coupled_shallow_vanka_layers);
     status = set_attribute_int(

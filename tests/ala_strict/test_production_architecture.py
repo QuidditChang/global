@@ -53,15 +53,24 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "profile_optional",
             "tracer_reclassify_flavors",
             "bottom_tbl_thickness",
+            "Tbottom",
+            "deltaT",
+            "surfaceT",
             "k0",
+            "kT_exponent",
             "rayleigh",
             "phase_Ra",
+            "phase_clapeyron",
+            "buoyancy_ratio",
+            "ala_augmented_lagrangian_gamma",
+            "ala_element_vanka_damping",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
+            "ala_shallow_patch_preconditioner",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
             "ala_coupled_initial_velocity_relative_tolerance",
@@ -76,13 +85,17 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_vcycle",
             "ala_coupled_multilevel_coarse_sweeps",
             "ala_coupled_multilevel_coarse_weight",
+            "ala_viscosity_spectrum_diagnostics",
+            "ala_viscosity_spectrum_interval",
             "ala_coupled_shallow_vanka_layers",
             "ala_coupled_shallow_vanka_core_layers",
             "ala_coupled_shallow_vanka_band_sweeps",
             "ala_coupled_shallow_vanka_sweeps",
             "ala_coupled_shallow_vanka_warm_sweeps",
             "ala_depth_diagnostics",
+            "ala_depth_diagnostic_interval",
             "ala_coarse_residual_diagnostics",
+            "ala_coarse_residual_interval",
             "ala_coarse_residual_levels",
             "file_vbcs",
             "lith_age",
@@ -127,15 +140,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*0\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_depth_diagnostics\s*=\s*off\s*$",
+            r"(?m)^\s*ala_depth_diagnostics\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coarse_residual_diagnostics\s*=\s*off\s*$",
+            r"(?m)^\s*ala_coarse_residual_diagnostics\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -151,12 +164,20 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_multilevel_coarse_weight\s*=\s*0\.5\s*$",
+            r"(?m)^\s*ala_coupled_multilevel_coarse_weight\s*=\s*1\.0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_viscosity_spectrum_diagnostics\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_velocity_solver\s*="
             r"\s*diagonal\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -241,11 +262,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_multilevel_coarse_sweeps\s*=\s*24\s*$",
+            r"(?m)^\s*ala_coupled_multilevel_coarse_sweeps\s*=\s*2\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*8\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -257,11 +278,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*8\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_warm_sweeps\s*=\s*4\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_warm_sweeps\s*=\s*-1\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -270,7 +291,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_initial_velocity_relative_tolerance"
-            r"\s*=\s*1e-3\s*$",
+            r"\s*=\s*0\.0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_augmented_lagrangian_gamma\s*=\s*0\.0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_element_vanka_damping\s*=\s*1\.0\s*$",
         )
         self.assertRegex(
             strict_text,

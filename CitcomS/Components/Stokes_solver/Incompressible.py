@@ -150,6 +150,10 @@ class Incompressible(CitcomComponent):
             "ala_coupled_multilevel_coarse_sweeps", default=2)
         ala_coupled_multilevel_coarse_weight = prop.float(
             "ala_coupled_multilevel_coarse_weight", default=1.0)
+        ala_viscosity_spectrum_diagnostics = prop.bool(
+            "ala_viscosity_spectrum_diagnostics", default=False)
+        ala_viscosity_spectrum_interval = prop.int(
+            "ala_viscosity_spectrum_interval", default=1)
         ala_coupled_shallow_vanka_layers = prop.int(
             "ala_coupled_shallow_vanka_layers", default=0)
         ala_coupled_shallow_vanka_core_layers = prop.int(

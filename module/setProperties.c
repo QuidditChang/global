@@ -1090,6 +1090,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_multilevel_coarse_sweeps, fp);
     getDoubleProperty(properties, "ala_coupled_multilevel_coarse_weight",
                       E->control.ala_coupled_multilevel_coarse_weight, fp);
+    getIntProperty(properties, "ala_viscosity_spectrum_diagnostics",
+                   E->control.ala_viscosity_spectrum_diagnostics, fp);
+    getIntProperty(properties, "ala_viscosity_spectrum_interval",
+                   E->control.ala_viscosity_spectrum_interval, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_layers",
                    E->control.ala_coupled_shallow_vanka_layers, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_core_layers",
@@ -1315,6 +1319,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_coupled_multilevel_coarse_weight <= 0.0 ||
        E->control.ala_coupled_multilevel_coarse_weight > 1.0)
         myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");
+    if(E->control.ala_viscosity_spectrum_interval < 1)
+        myerror(E, "ala_viscosity_spectrum_interval must be at least one");
     if(E->control.ala_coupled_shallow_vanka_layers < 0 ||
        E->control.ala_coupled_shallow_vanka_layers > 64)
         myerror(E, "ala_coupled_shallow_vanka_layers must be in [0,64]");

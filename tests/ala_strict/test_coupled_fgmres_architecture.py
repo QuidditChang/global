@@ -155,11 +155,11 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("cosine=(velocity:%e,pressure:%e,block:%e)", audit)
         self.assertIn("strict_ala_coupled_preconditioner_audit(", self.core)
 
-    def test_active_cfg_is_isolated_stage9d_ab(self) -> None:
+    def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = coupled_fgmres", cfg)
         self.assertIn(
-            "ala_coupled_initial_velocity_relative_tolerance = 1e-3", cfg
+            "ala_coupled_initial_velocity_relative_tolerance = 0.0", cfg
         )
         self.assertIn(
             "ala_coupled_inner_relative_tolerance = 1e-2", cfg
@@ -170,6 +170,10 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         )
         self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
+        self.assertIn("ala_augmented_lagrangian_gamma = 0.0", cfg)
+        self.assertIn("ala_element_vanka_damping      = 1.0", cfg)
+        self.assertIn("ala_coupled_debug_stop_iteration            = 5", cfg)
+        self.assertIn("ala_coupled_shallow_vanka_layers             = 0", cfg)
 
     def test_coupled_path_prebalances_every_momentum_residual(self) -> None:
         dispatch = _between(

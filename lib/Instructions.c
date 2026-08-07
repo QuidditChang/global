@@ -556,6 +556,10 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coupled_multilevel_coarse_sweeps),"2",m);
   input_double("ala_coupled_multilevel_coarse_weight",
                &(E->control.ala_coupled_multilevel_coarse_weight),"1.0",m);
+  input_boolean("ala_viscosity_spectrum_diagnostics",
+                &(E->control.ala_viscosity_spectrum_diagnostics),"off",m);
+  input_int("ala_viscosity_spectrum_interval",
+            &(E->control.ala_viscosity_spectrum_interval),"1",m);
   input_int("ala_coupled_shallow_vanka_layers",
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",
@@ -778,6 +782,8 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_coupled_multilevel_coarse_weight <= 0.0 ||
      E->control.ala_coupled_multilevel_coarse_weight > 1.0)
       myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");
+  if(E->control.ala_viscosity_spectrum_interval < 1)
+      myerror(E, "ala_viscosity_spectrum_interval must be at least one");
   if(E->control.ala_coupled_shallow_vanka_layers < 0 ||
      E->control.ala_coupled_shallow_vanka_layers > 64)
       myerror(E, "ala_coupled_shallow_vanka_layers must be in [0,64]");
@@ -1498,15 +1504,23 @@ void allocate_velocity_vars(E)
             *sizeof(higher_precision));
         E->ALA_vanka_valid[l][j] = (unsigned char *)malloc(
             (E->lmesh.NEL[l]+1)*sizeof(unsigned char));
+        E->ALA_vanka_schur[l][j] = (double *)malloc(
+            (E->lmesh.NEL[l]+1)*sizeof(double));
         if(E->ALA_vanka_overlap_BI[l][j]==NULL ||
            E->ALA_vanka_chol[l][j]==NULL ||
-           E->ALA_vanka_valid[l][j]==NULL)
+           E->ALA_vanka_valid[l][j]==NULL ||
+           E->ALA_vanka_schur[l][j]==NULL)
           myerror(E,"Unable to allocate full ALA element-Vanka cache");
+        memset(E->ALA_vanka_valid[l][j],0,
+               (E->lmesh.NEL[l]+1)*sizeof(unsigned char));
+        memset(E->ALA_vanka_schur[l][j],0,
+               (E->lmesh.NEL[l]+1)*sizeof(double));
       }
       else {
         E->ALA_vanka_overlap_BI[l][j] = NULL;
         E->ALA_vanka_chol[l][j] = NULL;
         E->ALA_vanka_valid[l][j] = NULL;
+        E->ALA_vanka_schur[l][j] = NULL;
       }
       k = (E->lmesh.NOX[l]*E->lmesh.NOZ[l]+E->lmesh.NOX[l]*E->lmesh.NOY[l]+
           E->lmesh.NOY[l]*E->lmesh.NOZ[l])*6;
@@ -1575,6 +1589,8 @@ void global_default_values(E)
     E->control.ala_coupled_multilevel_vcycle = 0;
     E->control.ala_coupled_multilevel_coarse_sweeps = 2;
     E->control.ala_coupled_multilevel_coarse_weight = 1.0;
+    E->control.ala_viscosity_spectrum_diagnostics = 0;
+    E->control.ala_viscosity_spectrum_interval = 1;
     E->control.ala_coupled_shallow_vanka_layers = 0;
     E->control.ala_coupled_shallow_vanka_core_layers = -1;
     E->control.ala_coupled_shallow_vanka_band_sweeps = 0;
