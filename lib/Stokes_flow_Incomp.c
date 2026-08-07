@@ -209,10 +209,11 @@ static int ala_solve_cached_element_k(const higher_precision *chol,
 static void apply_ala_coupled_element_vanka_region(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction, struct ala_block_vector *delta,
-    int lev, int shallow_layers)
+    int lev, int shallow_layers, int core_layers)
 {
     int m,e,a,d,i,node,eq,fixed,local_patches,global_patches;
-    int radial_element,global_radial_element,selected_layers,shallow;
+    int radial_element,global_radial_element,selected_layers,selected_core;
+    int depth_layer,shallow;
     int report_diagnostics;
     static int reported_cycle[MAX_LEVELS];
     static unsigned char reported_valid[MAX_LEVELS];
@@ -221,7 +222,8 @@ static void apply_ala_coupled_element_vanka_region(
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
     double pressure_rhs,pressure_solution,schur,regularization;
-    double damping,weight,local_min,local_max,global_min,global_max;
+    double damping,weight,region_weight,taper_position;
+    double local_min,local_max,global_min,global_max;
     higher_precision *chol;
     const int dims=E->mesh.nsd;
     const int ends=enodes[dims];
@@ -235,6 +237,7 @@ static void apply_ala_coupled_element_vanka_region(
     regularization=E->control.ala_element_vanka_regularization;
     shallow=(shallow_layers>0);
     selected_layers=min(shallow_layers,E->mesh.ELZ[lev]);
+    selected_core=core_layers<0 ? -1 : min(core_layers,selected_layers);
     ala_block_vector_zero(E,correction);
     ala_block_vector_zero(E,delta);
     report_diagnostics=shallow
@@ -253,6 +256,16 @@ static void apply_ala_coupled_element_vanka_region(
             if(shallow && global_radial_element<
                           E->mesh.ELZ[lev]-selected_layers)
                 continue;
+            depth_layer=E->mesh.ELZ[lev]-1-global_radial_element;
+            region_weight=1.0;
+            if(shallow && selected_core>=0 &&
+               selected_core<selected_layers &&
+               depth_layer>=selected_core) {
+                taper_position=(depth_layer-selected_core+0.5)
+                    /(double)(selected_layers-selected_core);
+                region_weight=0.5*(1.0+cos(3.14159265358979323846
+                                           *taper_position));
+            }
             if(!E->ALA_vanka_valid[lev][m][e])
                 myerror(E,"Coupled element-Vanka velocity factor is invalid");
             chol=E->ALA_vanka_chol[lev][m]+e*ALA_VANKA_CHOL_SIZE;
@@ -289,14 +302,15 @@ static void apply_ala_coupled_element_vanka_region(
             if(!isfinite(schur) || schur<=1.0e-300)
                 myerror(E,"Coupled element-Vanka pressure Schur is invalid");
             pressure_solution /= schur;
-            delta->pressure[m][e]=pressure_solution;
+            delta->pressure[m][e]=region_weight*pressure_solution;
             for(a=1;a<=ends;a++) {
                 node=E->IEN[lev][m][e].node[a];
                 for(d=0;d<dims;d++) {
                     i=(a-1)*dims+d;
                     eq=E->ID[lev][m][node].doff[d+1];
-                    delta->velocity[m][eq] += velocity_base[i]
-                        -velocity_pressure[i]*pressure_solution;
+                    delta->velocity[m][eq] += region_weight
+                        *(velocity_base[i]
+                          -velocity_pressure[i]*pressure_solution);
                 }
             }
             if(report_diagnostics) {
@@ -344,20 +358,22 @@ static void apply_ala_coupled_element_vanka_region(
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
-                    "region=%s radial_layers=%d "
+                    "region=%s radial_layers=%d core_layers=%d taper=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     regularization,global_min,global_max,
-                    shallow ? "shallow_finest" : "full",selected_layers);
+                    shallow ? "shallow_finest" : "full",selected_layers,
+                    selected_core,selected_core>=0 ? "cosine" : "off");
             fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
-                    "region=%s radial_layers=%d "
+                    "region=%s radial_layers=%d core_layers=%d taper=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     regularization,global_min,global_max,
-                    shallow ? "shallow_finest" : "full",selected_layers);
+                    shallow ? "shallow_finest" : "full",selected_layers,
+                    selected_core,selected_core>=0 ? "cosine" : "off");
             fflush(E->fp);
             fflush(stderr);
         }
@@ -371,7 +387,7 @@ static void apply_ala_coupled_element_vanka_once(
     int lev)
 {
     apply_ala_coupled_element_vanka_region(
-        E,residual,correction,delta,lev,0);
+        E,residual,correction,delta,lev,0,-1);
 }
 
 
@@ -485,7 +501,8 @@ static void apply_ala_coupled_multilevel_vcycle(
                 E,residual,correction,defect,action,velocity_work,lev);
             apply_ala_coupled_element_vanka_region(
                 E,defect,smooth,delta,lev,
-                E->control.ala_coupled_shallow_vanka_layers);
+                E->control.ala_coupled_shallow_vanka_layers,
+                E->control.ala_coupled_shallow_vanka_core_layers);
             ala_block_vector_axpy(E,1.0,smooth,correction);
         }
 
@@ -520,7 +537,8 @@ static void apply_ala_coupled_block_preconditioner(
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
-                    "shallow_layers=%d shallow_sweeps=%d "
+                    "shallow_layers=%d shallow_core_layers=%d "
+                    "shallow_taper=%s shallow_sweeps=%d "
                     "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
                     "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
@@ -528,6 +546,9 @@ static void apply_ala_coupled_block_preconditioner(
                     E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
+                    E->control.ala_coupled_shallow_vanka_core_layers,
+                    E->control.ala_coupled_shallow_vanka_core_layers>=0
+                        ? "cosine" : "off",
                     (E->monitor.solution_cycles>0 &&
                      E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
                         ? E->control.ala_coupled_shallow_vanka_warm_sweeps
@@ -541,7 +562,8 @@ static void apply_ala_coupled_block_preconditioner(
                     "levels=%d range=%d:%d pre_sweeps=1 post_sweeps=1 "
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
-                    "shallow_layers=%d shallow_sweeps=%d "
+                    "shallow_layers=%d shallow_core_layers=%d "
+                    "shallow_taper=%s shallow_sweeps=%d "
                     "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
                     "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
@@ -549,6 +571,9 @@ static void apply_ala_coupled_block_preconditioner(
                     E->control.ala_coupled_multilevel_coarse_sweeps,
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
+                    E->control.ala_coupled_shallow_vanka_core_layers,
+                    E->control.ala_coupled_shallow_vanka_core_layers>=0
+                        ? "cosine" : "off",
                     (E->monitor.solution_cycles>0 &&
                      E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
                         ? E->control.ala_coupled_shallow_vanka_warm_sweeps
