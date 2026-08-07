@@ -245,15 +245,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*24\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*8\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_core_layers\s*=\s*8\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_core_layers\s*=\s*-1\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_band_sweeps\s*=\s*2\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_band_sweeps\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
