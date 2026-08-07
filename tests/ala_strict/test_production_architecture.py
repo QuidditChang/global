@@ -253,7 +253,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_band_sweeps\s*=\s*1\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_band_sweeps\s*=\s*2\s*$",
         )
         self.assertRegex(
             strict_text,
