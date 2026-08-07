@@ -177,6 +177,9 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn(
             "int ala_coupled_shallow_vanka_core_layers;", self.defs
         )
+        self.assertIn(
+            "int ala_coupled_shallow_vanka_band_sweeps;", self.defs
+        )
         self.assertIn("int ala_coupled_shallow_vanka_sweeps;", self.defs)
         self.assertIn(
             "int ala_coupled_shallow_vanka_warm_sweeps;", self.defs
@@ -187,6 +190,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn(
             'input_int("ala_coupled_shallow_vanka_core_layers",',
+            self.instructions,
+        )
+        self.assertIn(
+            'input_int("ala_coupled_shallow_vanka_band_sweeps",',
             self.instructions,
         )
         self.assertIn(
@@ -202,6 +209,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn(
             '"ala_coupled_shallow_vanka_core_layers", default=-1',
+            self.pyre,
+        )
+        self.assertIn(
+            '"ala_coupled_shallow_vanka_band_sweeps", default=0',
             self.pyre,
         )
         self.assertIn(
@@ -221,6 +232,11 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             self.properties,
         )
         self.assertIn(
+            'getIntProperty(properties, '
+            '"ala_coupled_shallow_vanka_band_sweeps",',
+            self.properties,
+        )
+        self.assertIn(
             'getIntProperty(properties, "ala_coupled_shallow_vanka_sweeps",',
             self.properties,
         )
@@ -236,6 +252,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             )
             self.assertIn(
                 "ala_coupled_shallow_vanka_core_layers must be -1 or in ",
+                source,
+            )
+            self.assertIn(
+                "ala_coupled_shallow_vanka_band_sweeps must be in [0,8]",
                 source,
             )
 
@@ -514,6 +534,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "E->control.ala_coupled_multilevel_coarse_sweeps",
             "E->control.ala_coupled_shallow_vanka_layers",
             "E->control.ala_coupled_shallow_vanka_core_layers",
+            "E->control.ala_coupled_shallow_vanka_band_sweeps",
             "E->control.ala_coupled_shallow_vanka_sweeps",
             "E->control.ala_coupled_shallow_vanka_warm_sweeps",
             "E->monitor.solution_cycles>0",
@@ -530,25 +551,38 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn(
             "shallow_layers=%d shallow_core_layers=%d", block
         )
-        self.assertIn("shallow_taper=%s shallow_sweeps=%d", block)
+        self.assertIn(
+            "shallow_band_window=sine shallow_band_sweeps=%d", block
+        )
         self.assertIn("shallow_cold_sweeps=%d shallow_warm_sweeps=%d", block)
         self.assertIn('solution_start=%s', block)
 
-    def test_shallow_vanka_cosine_taper_weights_local_corrections(self) -> None:
+    def test_shallow_vanka_band_is_separate_and_windowed(self) -> None:
         region = _function_body(
             self.stokes,
             "static void apply_ala_coupled_element_vanka_region(",
         )
         for token in (
             "depth_layer=E->mesh.ELZ[lev]-1-global_radial_element",
-            "depth_layer>=selected_core",
+            "band_only && depth_layer<selected_core",
             "taper_position=(depth_layer-selected_core+0.5)",
-            "region_weight=0.5*(1.0+cos(",
+            "region_weight=sin(",
             "delta->pressure[m][e]=region_weight*pressure_solution",
             "delta->velocity[m][eq] += region_weight",
-            'selected_core>=0 ? "cosine" : "off"',
+            'band_only ? "sine" : "off"',
         ):
             self.assertIn(token, region)
+        vcycle = _function_body(
+            self.stokes,
+            "static void apply_ala_coupled_multilevel_vcycle(",
+        )
+        self.assertIn(
+            "E->control.ala_coupled_shallow_vanka_band_sweeps", vcycle
+        )
+        self.assertIn("for(band_sweep=0;band_sweep<band_sweeps", vcycle)
+        self.assertIn(
+            "E->control.ala_coupled_shallow_vanka_core_layers,1", vcycle
+        )
 
     def test_stage10c_shallow_smoother_uses_selected_patch_partition(self) -> None:
         region = _function_body(
@@ -562,7 +596,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "correction->velocity[m][eq] += 1.0",
             "exchange_id_d)(E,correction->velocity,lev)",
             "1.0/correction->velocity[m][eq]",
-            'shallow ? "shallow_finest" : "full"',
+            'shallow ? "shallow_core" : "full"',
         ):
             self.assertIn(token, region)
 

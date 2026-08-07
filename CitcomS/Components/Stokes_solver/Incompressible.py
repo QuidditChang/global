@@ -154,6 +154,8 @@ class Incompressible(CitcomComponent):
             "ala_coupled_shallow_vanka_layers", default=0)
         ala_coupled_shallow_vanka_core_layers = prop.int(
             "ala_coupled_shallow_vanka_core_layers", default=-1)
+        ala_coupled_shallow_vanka_band_sweeps = prop.int(
+            "ala_coupled_shallow_vanka_band_sweeps", default=0)
         ala_coupled_shallow_vanka_sweeps = prop.int(
             "ala_coupled_shallow_vanka_sweeps", default=0)
         ala_coupled_shallow_vanka_warm_sweeps = prop.int(

@@ -1810,6 +1810,9 @@ void h5output_meta(struct All_variables *E)
         input, "ala_coupled_shallow_vanka_core_layers",
         E->control.ala_coupled_shallow_vanka_core_layers);
     status = set_attribute_int(
+        input, "ala_coupled_shallow_vanka_band_sweeps",
+        E->control.ala_coupled_shallow_vanka_band_sweeps);
+    status = set_attribute_int(
         input, "ala_coupled_shallow_vanka_sweeps",
         E->control.ala_coupled_shallow_vanka_sweeps);
     status = set_attribute_int(

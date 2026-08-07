@@ -209,7 +209,7 @@ static int ala_solve_cached_element_k(const higher_precision *chol,
 static void apply_ala_coupled_element_vanka_region(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction, struct ala_block_vector *delta,
-    int lev, int shallow_layers, int core_layers)
+    int lev, int shallow_layers, int core_layers, int band_only)
 {
     int m,e,a,d,i,node,eq,fixed,local_patches,global_patches;
     int radial_element,global_radial_element,selected_layers,selected_core;
@@ -219,6 +219,8 @@ static void apply_ala_coupled_element_vanka_region(
     static unsigned char reported_valid[MAX_LEVELS];
     static int reported_shallow_cycle[MAX_LEVELS];
     static unsigned char reported_shallow_valid[MAX_LEVELS];
+    static int reported_band_cycle[MAX_LEVELS];
+    static unsigned char reported_band_valid[MAX_LEVELS];
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
     double pressure_rhs,pressure_solution,schur,regularization;
@@ -240,7 +242,10 @@ static void apply_ala_coupled_element_vanka_region(
     selected_core=core_layers<0 ? -1 : min(core_layers,selected_layers);
     ala_block_vector_zero(E,correction);
     ala_block_vector_zero(E,delta);
-    report_diagnostics=shallow
+    report_diagnostics=band_only
+        ? (!reported_band_valid[lev] ||
+           reported_band_cycle[lev]!=E->monitor.solution_cycles)
+        : shallow
         ? (!reported_shallow_valid[lev] ||
            reported_shallow_cycle[lev]!=E->monitor.solution_cycles)
         : (!reported_valid[lev] ||
@@ -257,14 +262,13 @@ static void apply_ala_coupled_element_vanka_region(
                           E->mesh.ELZ[lev]-selected_layers)
                 continue;
             depth_layer=E->mesh.ELZ[lev]-1-global_radial_element;
+            if(band_only && depth_layer<selected_core)
+                continue;
             region_weight=1.0;
-            if(shallow && selected_core>=0 &&
-               selected_core<selected_layers &&
-               depth_layer>=selected_core) {
+            if(band_only) {
                 taper_position=(depth_layer-selected_core+0.5)
                     /(double)(selected_layers-selected_core);
-                region_weight=0.5*(1.0+cos(3.14159265358979323846
-                                           *taper_position));
+                region_weight=sin(3.14159265358979323846*taper_position);
             }
             if(!E->ALA_vanka_valid[lev][m][e])
                 myerror(E,"Coupled element-Vanka velocity factor is invalid");
@@ -345,7 +349,11 @@ static void apply_ala_coupled_element_vanka_region(
                       E->parallel.world);
         MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
                       E->parallel.world);
-        if(shallow) {
+        if(band_only) {
+            reported_band_cycle[lev]=E->monitor.solution_cycles;
+            reported_band_valid[lev]=1;
+        }
+        else if(shallow) {
             reported_shallow_cycle[lev]=E->monitor.solution_cycles;
             reported_shallow_valid[lev]=1;
         }
@@ -358,22 +366,24 @@ static void apply_ala_coupled_element_vanka_region(
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
-                    "region=%s radial_layers=%d core_layers=%d taper=%s "
+                    "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     regularization,global_min,global_max,
-                    shallow ? "shallow_finest" : "full",selected_layers,
-                    selected_core,selected_core>=0 ? "cosine" : "off");
+                    band_only ? "shallow_band" :
+                        (shallow ? "shallow_core" : "full"),selected_layers,
+                    selected_core,band_only ? "sine" : "off");
             fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
                     "solution_cycle=%d global_patches=%d damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
-                    "region=%s radial_layers=%d core_layers=%d taper=%s "
+                    "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     regularization,global_min,global_max,
-                    shallow ? "shallow_finest" : "full",selected_layers,
-                    selected_core,selected_core>=0 ? "cosine" : "off");
+                    band_only ? "shallow_band" :
+                        (shallow ? "shallow_core" : "full"),selected_layers,
+                    selected_core,band_only ? "sine" : "off");
             fflush(E->fp);
             fflush(stderr);
         }
@@ -387,7 +397,7 @@ static void apply_ala_coupled_element_vanka_once(
     int lev)
 {
     apply_ala_coupled_element_vanka_region(
-        E,residual,correction,delta,lev,0,-1);
+        E,residual,correction,delta,lev,0,-1,0);
 }
 
 
@@ -423,7 +433,7 @@ static void apply_ala_coupled_multilevel_vcycle(
 {
     struct ala_block_vector *smooth,*delta,*defect,*action,*velocity_work;
     struct ala_block_vector *coarse_residual=NULL,*coarse_correction=NULL;
-    int coarse_sweep,shallow_sweep,shallow_sweeps;
+    int band_sweep,band_sweeps,coarse_sweep,shallow_sweep,shallow_sweeps;
     double coarse_weight;
 
     smooth=ala_block_vector_create(E,lev);
@@ -433,6 +443,7 @@ static void apply_ala_coupled_multilevel_vcycle(
     velocity_work=ala_block_vector_create(E,lev);
     ala_block_vector_zero(E,correction);
     shallow_sweeps=E->control.ala_coupled_shallow_vanka_sweeps;
+    band_sweeps=E->control.ala_coupled_shallow_vanka_band_sweeps;
     if(E->monitor.solution_cycles>0 &&
        E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
         shallow_sweeps=E->control.ala_coupled_shallow_vanka_warm_sweeps;
@@ -501,8 +512,25 @@ static void apply_ala_coupled_multilevel_vcycle(
                 E,residual,correction,defect,action,velocity_work,lev);
             apply_ala_coupled_element_vanka_region(
                 E,defect,smooth,delta,lev,
+                E->control.ala_coupled_shallow_vanka_core_layers>=0
+                    ? E->control.ala_coupled_shallow_vanka_core_layers
+                    : E->control.ala_coupled_shallow_vanka_layers,
+                -1,0);
+            ala_block_vector_axpy(E,1.0,smooth,correction);
+        }
+
+    /* Apply the upper-mantle extension independently from the proven core.
+     * Its sine window vanishes at both radial boundaries, while the bounded
+     * sweep count prevents the extension from being repeated with every
+     * strong surface correction. */
+    if(lev==E->mesh.levmax)
+        for(band_sweep=0;band_sweep<band_sweeps;band_sweep++) {
+            assemble_ala_coupled_block_defect(
+                E,residual,correction,defect,action,velocity_work,lev);
+            apply_ala_coupled_element_vanka_region(
+                E,defect,smooth,delta,lev,
                 E->control.ala_coupled_shallow_vanka_layers,
-                E->control.ala_coupled_shallow_vanka_core_layers);
+                E->control.ala_coupled_shallow_vanka_core_layers,1);
             ala_block_vector_axpy(E,1.0,smooth,correction);
         }
 
@@ -538,7 +566,8 @@ static void apply_ala_coupled_block_preconditioner(
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
                     "shallow_layers=%d shallow_core_layers=%d "
-                    "shallow_taper=%s shallow_sweeps=%d "
+                    "shallow_band_window=sine shallow_band_sweeps=%d "
+                    "shallow_sweeps=%d "
                     "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
                     "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
@@ -547,8 +576,7 @@ static void apply_ala_coupled_block_preconditioner(
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
                     E->control.ala_coupled_shallow_vanka_core_layers,
-                    E->control.ala_coupled_shallow_vanka_core_layers>=0
-                        ? "cosine" : "off",
+                    E->control.ala_coupled_shallow_vanka_band_sweeps,
                     (E->monitor.solution_cycles>0 &&
                      E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
                         ? E->control.ala_coupled_shallow_vanka_warm_sweeps
@@ -563,7 +591,8 @@ static void apply_ala_coupled_block_preconditioner(
                     "coarse_sweeps=%d coarse_weight=%e "
                     "nested_coarse_weight=1.000000e+00 "
                     "shallow_layers=%d shallow_core_layers=%d "
-                    "shallow_taper=%s shallow_sweeps=%d "
+                    "shallow_band_window=sine shallow_band_sweeps=%d "
+                    "shallow_sweeps=%d "
                     "shallow_cold_sweeps=%d shallow_warm_sweeps=%d "
                     "solution_start=%s\n",
                     E->mesh.levmax-E->mesh.levmin+1,
@@ -572,8 +601,7 @@ static void apply_ala_coupled_block_preconditioner(
                     E->control.ala_coupled_multilevel_coarse_weight,
                     E->control.ala_coupled_shallow_vanka_layers,
                     E->control.ala_coupled_shallow_vanka_core_layers,
-                    E->control.ala_coupled_shallow_vanka_core_layers>=0
-                        ? "cosine" : "off",
+                    E->control.ala_coupled_shallow_vanka_band_sweeps,
                     (E->monitor.solution_cycles>0 &&
                      E->control.ala_coupled_shallow_vanka_warm_sweeps>=0)
                         ? E->control.ala_coupled_shallow_vanka_warm_sweeps

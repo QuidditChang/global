@@ -78,6 +78,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_coarse_weight",
             "ala_coupled_shallow_vanka_layers",
             "ala_coupled_shallow_vanka_core_layers",
+            "ala_coupled_shallow_vanka_band_sweeps",
             "ala_coupled_shallow_vanka_sweeps",
             "ala_coupled_shallow_vanka_warm_sweeps",
             "ala_depth_diagnostics",
@@ -249,6 +250,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_shallow_vanka_core_layers\s*=\s*8\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_coupled_shallow_vanka_band_sweeps\s*=\s*1\s*$",
         )
         self.assertRegex(
             strict_text,

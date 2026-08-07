@@ -560,6 +560,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",
             &(E->control.ala_coupled_shallow_vanka_core_layers),"-1",m);
+  input_int("ala_coupled_shallow_vanka_band_sweeps",
+            &(E->control.ala_coupled_shallow_vanka_band_sweeps),"0",m);
   input_int("ala_coupled_shallow_vanka_sweeps",
             &(E->control.ala_coupled_shallow_vanka_sweeps),"0",m);
   input_int("ala_coupled_shallow_vanka_warm_sweeps",
@@ -784,6 +786,15 @@ void read_initial_settings(struct All_variables *E)
         E->control.ala_coupled_shallow_vanka_layers)
       myerror(E, "ala_coupled_shallow_vanka_core_layers must be -1 or in "
               "[0,ala_coupled_shallow_vanka_layers]");
+  if(E->control.ala_coupled_shallow_vanka_band_sweeps < 0 ||
+     E->control.ala_coupled_shallow_vanka_band_sweeps > 8)
+      myerror(E, "ala_coupled_shallow_vanka_band_sweeps must be in [0,8]");
+  if(E->control.ala_coupled_shallow_vanka_band_sweeps > 0 &&
+     (E->control.ala_coupled_shallow_vanka_core_layers < 0 ||
+      E->control.ala_coupled_shallow_vanka_core_layers >=
+        E->control.ala_coupled_shallow_vanka_layers))
+      myerror(E, "ala_coupled_shallow_vanka_band_sweeps requires "
+              "0 <= core_layers < shallow_layers");
   if(E->control.ala_coupled_shallow_vanka_sweeps < 0 ||
      E->control.ala_coupled_shallow_vanka_sweeps > 32)
       myerror(E, "ala_coupled_shallow_vanka_sweeps must be in [0,32]");
@@ -1566,6 +1577,7 @@ void global_default_values(E)
     E->control.ala_coupled_multilevel_coarse_weight = 1.0;
     E->control.ala_coupled_shallow_vanka_layers = 0;
     E->control.ala_coupled_shallow_vanka_core_layers = -1;
+    E->control.ala_coupled_shallow_vanka_band_sweeps = 0;
     E->control.ala_coupled_shallow_vanka_sweeps = 0;
     E->control.ala_coupled_shallow_vanka_warm_sweeps = -1;
     E->control.ala_unaugmented_momentum_tolerance = 0.0;

@@ -1094,6 +1094,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_coupled_shallow_vanka_layers, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_core_layers",
                    E->control.ala_coupled_shallow_vanka_core_layers, fp);
+    getIntProperty(properties, "ala_coupled_shallow_vanka_band_sweeps",
+                   E->control.ala_coupled_shallow_vanka_band_sweeps, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_sweeps",
                    E->control.ala_coupled_shallow_vanka_sweeps, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_warm_sweeps",
@@ -1321,6 +1323,15 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
           E->control.ala_coupled_shallow_vanka_layers)
         myerror(E, "ala_coupled_shallow_vanka_core_layers must be -1 or in "
                 "[0,ala_coupled_shallow_vanka_layers]");
+    if(E->control.ala_coupled_shallow_vanka_band_sweeps < 0 ||
+       E->control.ala_coupled_shallow_vanka_band_sweeps > 8)
+        myerror(E, "ala_coupled_shallow_vanka_band_sweeps must be in [0,8]");
+    if(E->control.ala_coupled_shallow_vanka_band_sweeps > 0 &&
+       (E->control.ala_coupled_shallow_vanka_core_layers < 0 ||
+        E->control.ala_coupled_shallow_vanka_core_layers >=
+          E->control.ala_coupled_shallow_vanka_layers))
+        myerror(E, "ala_coupled_shallow_vanka_band_sweeps requires "
+                "0 <= core_layers < shallow_layers");
     if(E->control.ala_coupled_shallow_vanka_sweeps < 0 ||
        E->control.ala_coupled_shallow_vanka_sweeps > 32)
         myerror(E, "ala_coupled_shallow_vanka_sweeps must be in [0,32]");
