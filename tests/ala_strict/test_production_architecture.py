@@ -866,13 +866,24 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             'input_int("ala_element_vanka_rebuild_interval",', instructions
         )
         self.assertIn(
+            'input_double("ala_element_vanka_pressure_damping",', instructions
+        )
+        self.assertIn(
             '"ala_element_vanka_rebuild_interval", default=1', pyre
+        )
+        self.assertIn(
+            '"ala_element_vanka_pressure_damping", default=1.0', pyre
         )
         self.assertIn(
             'getIntProperty(properties, "ala_element_vanka_rebuild_interval",',
             properties,
         )
+        self.assertIn(
+            'getDoubleProperty(properties, "ala_element_vanka_pressure_damping",',
+            properties,
+        )
         self.assertIn("ala_element_vanka_rebuild_interval", output)
+        self.assertIn("ala_element_vanka_pressure_damping", output)
         self.assertIn("ala_element_vanka_last_build_cycle", construct)
         self.assertIn("factor_age>=0", construct)
         self.assertIn("build_ala_element_vanka_factors(E);", construct)
@@ -883,6 +894,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         for source in (instructions, properties):
             self.assertIn(
                 "ala_element_vanka_rebuild_interval must be in [1,100]",
+                source,
+            )
+            self.assertIn(
+                "ala_element_vanka_pressure_damping must be in (0,1]",
                 source,
             )
 
