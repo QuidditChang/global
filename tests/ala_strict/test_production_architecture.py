@@ -64,6 +64,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "buoyancy_ratio",
             "ala_augmented_lagrangian_gamma",
             "ala_element_vanka_damping",
+            "ala_element_vanka_pressure_damping",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
@@ -300,6 +301,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_element_vanka_damping\s*=\s*1\.0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*0\.25\s*$",
         )
         self.assertRegex(
             strict_text,

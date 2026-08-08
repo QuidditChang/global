@@ -690,6 +690,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_element_vanka_smoother),"off",m);
   input_double("ala_element_vanka_damping",
                &(E->control.ala_element_vanka_damping),"0.8",m);
+  input_double("ala_element_vanka_pressure_damping",
+               &(E->control.ala_element_vanka_pressure_damping),"1.0",m);
   input_double("ala_element_vanka_regularization",
                &(E->control.ala_element_vanka_regularization),"1.0e-8",m);
   input_int("ala_element_vanka_rebuild_interval",
@@ -978,6 +980,9 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_element_vanka_damping <= 0.0 ||
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
+  if(E->control.ala_element_vanka_pressure_damping <= 0.0 ||
+     E->control.ala_element_vanka_pressure_damping > 1.0)
+      myerror(E, "ala_element_vanka_pressure_damping must be in (0,1]");
   if(E->control.ala_element_vanka_regularization < 0.0 ||
      E->control.ala_element_vanka_regularization > 0.1)
       myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
@@ -1655,6 +1660,7 @@ void global_default_values(E)
     E->control.ala_radial_line_preconditioner = 0;
     E->control.ala_element_vanka_smoother = 0;
     E->control.ala_element_vanka_damping = 0.8;
+    E->control.ala_element_vanka_pressure_damping = 1.0;
     E->control.ala_element_vanka_regularization = 1.0e-8;
     E->control.ala_element_vanka_rebuild_interval = 1;
     E->control.ala_element_vanka_last_build_cycle = -1;

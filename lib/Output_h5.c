@@ -1714,6 +1714,8 @@ void h5output_meta(struct All_variables *E)
                                E->control.ala_element_vanka_smoother);
     status = set_attribute_double(input, "ala_element_vanka_damping",
                                   E->control.ala_element_vanka_damping);
+    status = set_attribute_double(input, "ala_element_vanka_pressure_damping",
+                                  E->control.ala_element_vanka_pressure_damping);
     status = set_attribute_double(input, "ala_element_vanka_regularization",
                                   E->control.ala_element_vanka_regularization);
     status = set_attribute_int(input, "ala_element_vanka_rebuild_interval",

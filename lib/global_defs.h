@@ -559,6 +559,7 @@ struct CONTROL {
     int ala_radial_line_preconditioner;
     int ala_element_vanka_smoother;
     double ala_element_vanka_damping;
+    double ala_element_vanka_pressure_damping;
     double ala_element_vanka_regularization;
     int ala_element_vanka_rebuild_interval;
     int ala_element_vanka_last_build_cycle;

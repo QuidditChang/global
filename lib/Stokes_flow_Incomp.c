@@ -304,7 +304,12 @@ static void apply_ala_coupled_element_vanka_region(
             if(!isfinite(schur) || schur<=1.0e-300)
                 myerror(E,"Coupled element-Vanka pressure Schur is invalid");
             pressure_solution /= schur;
-            delta->pressure[m][e]=region_weight*pressure_solution;
+            /* Pressure and velocity corrections have different global
+             * scalings in the mixed block. Keep pressure damping independent
+             * so a small local Schur value cannot dominate the global step. */
+            delta->pressure[m][e]=region_weight
+                *E->control.ala_element_vanka_pressure_damping
+                *pressure_solution;
             for(a=1;a<=ends;a++) {
                 node=E->IEN[lev][m][e].node[a];
                 for(d=0;d<dims;d++) {
@@ -361,24 +366,28 @@ static void apply_ala_coupled_element_vanka_region(
         }
         if(E->parallel.me==0) {
             fprintf(E->fp,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
-                    "solution_cycle=%d global_patches=%d damping=%e "
+                    "solution_cycle=%d global_patches=%d velocity_damping=%e "
+                    "pressure_damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
                     "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
+                    E->control.ala_element_vanka_pressure_damping,
                     E->control.ala_element_vanka_regularization,
                     global_min,global_max,
                     band_only ? "shallow_band" :
                         (shallow ? "shallow_core" : "full"),selected_layers,
                     selected_core,band_only ? "sine" : "off");
             fprintf(stderr,"ALA COUPLED ELEMENT VANKA APPLICATION level=%d "
-                    "solution_cycle=%d global_patches=%d damping=%e "
+                    "solution_cycle=%d global_patches=%d velocity_damping=%e "
+                    "pressure_damping=%e "
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
                     "region=%s radial_layers=%d core_layers=%d window=%s "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
+                    E->control.ala_element_vanka_pressure_damping,
                     E->control.ala_element_vanka_regularization,
                     global_min,global_max,
                     band_only ? "shallow_band" :

@@ -637,7 +637,8 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "band_only && depth_layer<selected_core",
             "taper_position=(depth_layer-selected_core+0.5)",
             "region_weight=sin(",
-            "delta->pressure[m][e]=region_weight*pressure_solution",
+            "delta->pressure[m][e]=region_weight",
+            "ala_element_vanka_pressure_damping",
             "delta->velocity[m][eq] += region_weight",
             'band_only ? "sine" : "off"',
         ):
