@@ -583,6 +583,18 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("schur=E->ALA_vanka_schur[lev][m][e];", region)
 
+    def test_unaugmented_current_rheology_vanka_is_allowed(self) -> None:
+        for source in (self.instructions, self.properties):
+            self.assertIn(
+                "ala_element_vanka_smoother requires multigrid, ", source
+            )
+            self.assertIn("and compressible_formulation=ala", source)
+            self.assertNotIn(
+                "ala_element_vanka_smoother requires multigrid, "
+                '"\n              "compressible_formulation=ala, and positive gamma',
+                source,
+            )
+
     def test_schur_coarsening_audit_is_observational_only(
         self,
     ) -> None:

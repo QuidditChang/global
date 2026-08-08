@@ -986,10 +986,9 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_element_vanka_rebuild_interval must be in [1,100]");
   if(E->control.ala_element_vanka_smoother &&
      (strcmp(E->control.SOLVER_TYPE,"multigrid") != 0 ||
-      !E->control.ala_pressure_buoyancy ||
-      E->control.ala_augmented_lagrangian_gamma <= 0.0))
+      !E->control.ala_pressure_buoyancy))
       myerror(E, "ala_element_vanka_smoother requires multigrid, "
-              "compressible_formulation=ala, and positive gamma");
+              "and compressible_formulation=ala");
 
   if(E->control.inv_gruneisen != 0) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use

@@ -1616,10 +1616,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                 "compressible_formulation=ala and uzawa=ala_cg");
     if(E->control.ala_element_vanka_smoother &&
        (strcmp(E->control.SOLVER_TYPE,"multigrid") != 0 ||
-        !E->control.ala_pressure_buoyancy ||
-        E->control.ala_augmented_lagrangian_gamma <= 0.0))
+        !E->control.ala_pressure_buoyancy))
         myerror(E, "ala_element_vanka_smoother requires multigrid, "
-                "compressible_formulation=ala, and positive gamma");
+                "and compressible_formulation=ala");
 
     PUTS(("\n"));
 
