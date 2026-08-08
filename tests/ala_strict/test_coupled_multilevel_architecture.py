@@ -463,6 +463,27 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("if(E->control.ala_coupled_element_vanka)", block)
         self.assertIn("apply_ala_coupled_element_vanka_once(", block)
 
+    def test_galerkin_rap_audit_uses_complete_coupled_action(self) -> None:
+        element = self.element
+        rap = _function_body(
+            element, "static void ala_apply_coupled_galerkin_rap("
+        )
+        for token in (
+            "ala_coupled_prolong_velocity(",
+            "ala_coupled_prolong_pressure_p0(",
+            "apply_ala_coupled_operator(",
+            "ala_coupled_restrict_velocity(",
+            "ala_coupled_restrict_pressure_p0_transpose(",
+        ):
+            self.assertIn(token, rap)
+        audit = _function_body(
+            element, "void audit_ala_coupled_multilevel_contracts("
+        )
+        self.assertIn("ALA COUPLED GALERKIN RAP AUDIT", audit)
+        self.assertIn("rediscretized_action_difference", audit)
+        self.assertIn("rap_symmetry_defect", audit)
+        self.assertIn("action=observe_only", audit)
+
     def test_vanka_diagnostics_do_not_reduce_on_every_sweep(self) -> None:
         smoother = _function_body(
             self.stokes,

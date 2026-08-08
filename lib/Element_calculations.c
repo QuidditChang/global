@@ -1945,6 +1945,47 @@ void ala_coupled_restrict_pressure_p0_transpose(struct All_variables *E,
 }
 
 
+/* Matrix-free Galerkin action on one adjacent coupled level:
+ *
+ *     A_c^RAP x_c = P^T A_f P x_c.
+ *
+ * This audit path deliberately reuses the production velocity/P0 transfers
+ * and the complete strict-ALA block action.  It observes the operator that a
+ * true coupled Galerkin hierarchy would use without changing the current
+ * rediscretized V-cycle. */
+static void ala_apply_coupled_galerkin_rap(
+    struct All_variables *E, const struct ala_block_vector *coarse,
+    struct ala_block_vector *coarse_action,
+    struct ala_block_vector *fine_prolong,
+    struct ala_block_vector *fine_action,
+    struct ala_block_vector *fine_work, int fine_level)
+{
+    int coarse_level=fine_level-1;
+
+    if(coarse->level!=coarse_level ||
+       coarse_action->level!=coarse_level ||
+       fine_prolong->level!=fine_level ||
+       fine_action->level!=fine_level || fine_work->level!=fine_level)
+        myerror(E,"Mismatched level in coupled Galerkin RAP action");
+    ala_block_vector_zero(E,fine_prolong);
+    ala_block_vector_zero(E,fine_action);
+    ala_block_vector_zero(E,fine_work);
+    ala_block_vector_zero(E,coarse_action);
+    ala_coupled_prolong_velocity(E,coarse_level,coarse->velocity,
+                                 fine_prolong->velocity);
+    ala_coupled_prolong_pressure_p0(E,coarse_level,coarse->pressure,
+                                    fine_prolong->pressure);
+    apply_ala_coupled_operator(
+        E,fine_prolong->velocity,fine_prolong->pressure,
+        fine_action->velocity,fine_action->pressure,
+        fine_work->velocity,fine_level);
+    ala_coupled_restrict_velocity(E,fine_level,fine_action->velocity,
+                                  coarse_action->velocity);
+    ala_coupled_restrict_pressure_p0_transpose(
+        E,fine_level,fine_action->pressure,coarse_action->pressure);
+}
+
+
 static void ala_fill_level_probe(struct All_variables *E,
                                  struct ala_block_vector *probe,
                                  double phase)
@@ -2033,12 +2074,22 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
     double Ax_velocity_norm,Ax_pressure_norm,Ay_velocity_norm,Ay_pressure_norm;
     double coarse_velocity_norm,coarse_pressure_norm;
     double coarse_action_velocity_norm,coarse_action_pressure_norm;
+    double rap_left,rap_right,rap_symmetry_defect;
+    double rap_x_norm,rap_y_norm,redis_norm,rap_norm,difference_norm;
+    double redis_velocity_norm,redis_pressure_norm;
+    double rap_velocity_norm,rap_pressure_norm;
+    double difference_velocity_norm,difference_pressure_norm;
+    double velocity_action_difference,pressure_action_difference;
+    double block_action_difference;
     double beta,beta_min,beta_max,volume_min,volume_max;
     double child_beta,child_width,nested_beta,nested_width;
     double local_beta_nested_defect,global_beta_nested_defect;
     double local_bounds[4],global_min[2],global_max[2];
     struct ala_block_vector *x,*y,*Ax,*Ay,*coarse,*coarse_action;
     struct ala_block_vector *multiplicity;
+    struct ala_block_vector *coarse_x,*coarse_y,*rap_x,*rap_y;
+    struct ala_block_vector *redis_x,*redis_work,*difference;
+    struct ala_block_vector *fine_prolong,*fine_action,*fine_work;
     FILE *output;
     void assemble_del2_u();
     void strip_bcs_from_residual();
@@ -2183,6 +2234,83 @@ void audit_ala_coupled_multilevel_contracts(struct All_variables *E)
                 coarse_pressure_norm,coarse_action_pressure_norm);
             ala_block_vector_destroy(E,coarse);
             ala_block_vector_destroy(E,coarse_action);
+
+            /* Compare the true matrix-free Galerkin action P^T A_f P with
+             * the operator currently rediscretized directly on this coarse
+             * mesh.  The comparison is observe-only: the production V-cycle
+             * remains unchanged until the RAP contract is measured. */
+            coarse_x=ala_block_vector_create(E,level-1);
+            coarse_y=ala_block_vector_create(E,level-1);
+            rap_x=ala_block_vector_create(E,level-1);
+            rap_y=ala_block_vector_create(E,level-1);
+            redis_x=ala_block_vector_create(E,level-1);
+            redis_work=ala_block_vector_create(E,level-1);
+            difference=ala_block_vector_create(E,level-1);
+            fine_prolong=ala_block_vector_create(E,level);
+            fine_action=ala_block_vector_create(E,level);
+            fine_work=ala_block_vector_create(E,level);
+            ala_fill_level_probe(E,coarse_x,0.37);
+            ala_fill_level_probe(E,coarse_y,0.83);
+            ala_apply_coupled_galerkin_rap(
+                E,coarse_x,rap_x,fine_prolong,fine_action,fine_work,level);
+            ala_apply_coupled_galerkin_rap(
+                E,coarse_y,rap_y,fine_prolong,fine_action,fine_work,level);
+            rap_left=ala_block_vector_dot(E,coarse_x,rap_y,1.0,1.0);
+            rap_right=ala_block_vector_dot(E,coarse_y,rap_x,1.0,1.0);
+            rap_x_norm=ala_block_vector_norm(E,rap_x,1.0,1.0);
+            rap_y_norm=ala_block_vector_norm(E,rap_y,1.0,1.0);
+            rap_symmetry_defect=fabs(rap_left-rap_right)/max(
+                ala_block_vector_norm(E,coarse_x,1.0,1.0)*rap_y_norm
+               +ala_block_vector_norm(E,coarse_y,1.0,1.0)*rap_x_norm,
+                1.0e-300);
+            apply_ala_coupled_operator(
+                E,coarse_x->velocity,coarse_x->pressure,
+                redis_x->velocity,redis_x->pressure,
+                redis_work->velocity,level-1);
+            ala_block_vector_copy(E,redis_x,difference);
+            ala_block_vector_axpy(E,-1.0,rap_x,difference);
+            redis_norm=ala_block_vector_norm(E,redis_x,1.0,1.0);
+            rap_norm=ala_block_vector_norm(E,rap_x,1.0,1.0);
+            difference_norm=ala_block_vector_norm(E,difference,1.0,1.0);
+            block_action_difference=difference_norm
+                /max(redis_norm+rap_norm,1.0e-300);
+            ala_block_vector_component_norms(
+                E,redis_x,&redis_velocity_norm,&redis_pressure_norm);
+            ala_block_vector_component_norms(
+                E,rap_x,&rap_velocity_norm,&rap_pressure_norm);
+            ala_block_vector_component_norms(
+                E,difference,&difference_velocity_norm,
+                &difference_pressure_norm);
+            velocity_action_difference=difference_velocity_norm/max(
+                redis_velocity_norm+rap_velocity_norm,1.0e-300);
+            pressure_action_difference=difference_pressure_norm/max(
+                redis_pressure_norm+rap_pressure_norm,1.0e-300);
+            if(E->parallel.me==0)
+              for(output_index=0;output_index<2;output_index++) {
+                output=(output_index==0) ? E->fp : stderr;
+                if(output==NULL || (output_index==1 && output==E->fp))
+                    continue;
+                fprintf(output,
+                    "ALA COUPLED GALERKIN RAP AUDIT fine_level=%d "
+                    "coarse_level=%d rap_symmetry_defect=%e "
+                    "rediscretized_action_difference=(velocity:%e,"
+                    "pressure:%e,block:%e) rap_bilinear=(%e,%e) "
+                    "action=observe_only\n",
+                    level,level-1,rap_symmetry_defect,
+                    velocity_action_difference,pressure_action_difference,
+                    block_action_difference,rap_left,rap_right);
+                fflush(output);
+              }
+            ala_block_vector_destroy(E,coarse_x);
+            ala_block_vector_destroy(E,coarse_y);
+            ala_block_vector_destroy(E,rap_x);
+            ala_block_vector_destroy(E,rap_y);
+            ala_block_vector_destroy(E,redis_x);
+            ala_block_vector_destroy(E,redis_work);
+            ala_block_vector_destroy(E,difference);
+            ala_block_vector_destroy(E,fine_prolong);
+            ala_block_vector_destroy(E,fine_action);
+            ala_block_vector_destroy(E,fine_work);
         }
 
         beta_min=1.0e300;
