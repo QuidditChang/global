@@ -1228,6 +1228,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_element_vanka_pressure_damping, fp);
     getDoubleProperty(properties, "ala_element_vanka_regularization",
                       E->control.ala_element_vanka_regularization, fp);
+    getIntProperty(properties, "ala_element_vanka_galerkin_schur",
+                   E->control.ala_element_vanka_galerkin_schur, fp);
     getIntProperty(properties, "ala_element_vanka_rebuild_interval",
                    E->control.ala_element_vanka_rebuild_interval, fp);
     if(E->control.ala_schur_symmetry_tolerance <= 0.0)

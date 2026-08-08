@@ -289,6 +289,8 @@ class Incompressible(CitcomComponent):
             "ala_element_vanka_pressure_damping", default=1.0)
         ala_element_vanka_regularization = prop.float(
             "ala_element_vanka_regularization", default=1.0e-8)
+        ala_element_vanka_galerkin_schur = prop.bool(
+            "ala_element_vanka_galerkin_schur", default=False)
         ala_element_vanka_rebuild_interval = prop.int(
             "ala_element_vanka_rebuild_interval", default=1)
         uzawa = prop.str("uzawa", default="cg",

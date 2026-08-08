@@ -497,6 +497,8 @@ void construct_node_ks(E)
 void build_ala_element_vanka_factors(struct All_variables *E)
 {
     int level,m,e,a,da,i,j,k,node,eq,fixed[ALA_VANKA_DOF];
+    int coarse_level,coarse_e,coarse_x,coarse_y,coarse_z;
+    int fine_x,fine_y,fine_z,fine_e;
     int local_elements,global_elements;
     double matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
     double L[ALA_VANKA_DOF*ALA_VANKA_DOF];
@@ -634,6 +636,57 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                 E->ALA_vanka_schur[level][m][e]=schur;
                 E->ALA_vanka_valid[level][m][e]=1;
             }
+        }
+
+    /* Optional Galerkin pressure-Schur scale.  The local mixed patch remains
+     * the same K/G solve, but its P0 Schur denominator on a coarse element is
+     * inherited as Pp^T S_f Pp: the sum of its eight child denominators.  This
+     * is a targeted Stage 3 diagnostic for the large Schur-coarsening defect;
+     * it does not alter the physical operator or the velocity factors. */
+    if(E->control.ala_element_vanka_galerkin_schur)
+        for(level=E->mesh.gridmin+1;level<=E->mesh.gridmax;level++) {
+            coarse_level=level-1;
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(coarse_y=1;coarse_y<=E->lmesh.ELY[coarse_level];
+                    coarse_y++)
+                    for(coarse_x=1;coarse_x<=E->lmesh.ELX[coarse_level];
+                        coarse_x++)
+                        for(coarse_z=1;
+                            coarse_z<=E->lmesh.ELZ[coarse_level];
+                            coarse_z++) {
+                            coarse_e=coarse_z
+                                +(coarse_x-1)*E->lmesh.ELZ[coarse_level]
+                                +(coarse_y-1)*E->lmesh.ELZ[coarse_level]
+                                  *E->lmesh.ELX[coarse_level];
+                            schur=0.0;
+                            for(fine_y=2*coarse_y-1;fine_y<=2*coarse_y;
+                                fine_y++)
+                                for(fine_x=2*coarse_x-1;
+                                    fine_x<=2*coarse_x;fine_x++)
+                                    for(fine_z=2*coarse_z-1;
+                                        fine_z<=2*coarse_z;fine_z++) {
+                                        fine_e=fine_z
+                                            +(fine_x-1)*E->lmesh.ELZ[level]
+                                            +(fine_y-1)*E->lmesh.ELZ[level]
+                                              *E->lmesh.ELX[level];
+                                        schur +=
+                                            E->ALA_vanka_schur[level][m]
+                                              [fine_e];
+                                    }
+                            if(!isfinite(schur) || schur<=1.0e-300)
+                                myerror(E,"Invalid Galerkin pressure Schur");
+                            E->ALA_vanka_schur[coarse_level][m][coarse_e]
+                                =schur;
+                        }
+        }
+        if(E->control.ala_element_vanka_galerkin_schur &&
+           E->parallel.me==0) {
+            fprintf(E->fp,"ALA GALERKIN PRESSURE SCHUR SCALE enabled "
+                    "operator=PpT_Sfine_Pp action=coarse_child_sum "
+                    "velocity_factors=rediscretized observe_velocity=on\n");
+            fprintf(stderr,"ALA GALERKIN PRESSURE SCHUR SCALE enabled "
+                    "operator=PpT_Sfine_Pp action=coarse_child_sum "
+                    "velocity_factors=rediscretized observe_velocity=on\n");
         }
     MPI_Allreduce(&local_elements,&global_elements,1,MPI_INT,MPI_SUM,
                   E->parallel.world);

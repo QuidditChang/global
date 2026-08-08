@@ -484,6 +484,22 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("rap_symmetry_defect", audit)
         self.assertIn("action=observe_only", audit)
 
+    def test_galerkin_pressure_schur_inherits_child_sum(self) -> None:
+        builder = _function_body(
+            self.construct, "void build_ala_element_vanka_factors("
+        )
+        for token in (
+            "ala_element_vanka_galerkin_schur",
+            "for(fine_y=2*coarse_y-1",
+            "for(fine_x=2*coarse_x-1",
+            "for(fine_z=2*coarse_z-1",
+            "schur +=",
+            "E->ALA_vanka_schur[coarse_level][m][coarse_e]",
+            "ALA GALERKIN PRESSURE SCHUR SCALE enabled",
+            "operator=PpT_Sfine_Pp",
+        ):
+            self.assertIn(token, builder)
+
     def test_vanka_diagnostics_do_not_reduce_on_every_sweep(self) -> None:
         smoother = _function_body(
             self.stokes,

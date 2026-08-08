@@ -65,6 +65,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_augmented_lagrangian_gamma",
             "ala_element_vanka_damping",
             "ala_element_vanka_pressure_damping",
+            "ala_element_vanka_galerkin_schur",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
@@ -869,10 +870,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             'input_double("ala_element_vanka_pressure_damping",', instructions
         )
         self.assertIn(
+            'input_boolean("ala_element_vanka_galerkin_schur",', instructions
+        )
+        self.assertIn(
             '"ala_element_vanka_rebuild_interval", default=1', pyre
         )
         self.assertIn(
             '"ala_element_vanka_pressure_damping", default=1.0', pyre
+        )
+        self.assertIn(
+            '"ala_element_vanka_galerkin_schur", default=False', pyre
         )
         self.assertIn(
             'getIntProperty(properties, "ala_element_vanka_rebuild_interval",',
@@ -880,6 +887,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertIn(
             'getDoubleProperty(properties, "ala_element_vanka_pressure_damping",',
+            properties,
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_element_vanka_galerkin_schur",',
             properties,
         )
         self.assertIn("ala_element_vanka_rebuild_interval", output)
