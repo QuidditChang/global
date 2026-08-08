@@ -644,7 +644,9 @@ void build_ala_element_vanka_factors(struct All_variables *E)
      * is a targeted Stage 3 diagnostic for the large Schur-coarsening defect;
      * it does not alter the physical operator or the velocity factors. */
     if(E->control.ala_element_vanka_galerkin_schur)
-        for(level=E->mesh.gridmin+1;level<=E->mesh.gridmax;level++) {
+        /* Build from fine to coarse so every child Schur is already the
+         * Galerkin value before it is aggregated into its parent. */
+        for(level=E->mesh.gridmax;level>=E->mesh.gridmin+1;level--) {
             coarse_level=level-1;
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(coarse_y=1;coarse_y<=E->lmesh.ELY[coarse_level];

@@ -490,6 +490,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         for token in (
             "ala_element_vanka_galerkin_schur",
+            "for(level=E->mesh.gridmax;level>=E->mesh.gridmin+1;level--)",
             "for(fine_y=2*coarse_y-1",
             "for(fine_x=2*coarse_x-1",
             "for(fine_z=2*coarse_z-1",
