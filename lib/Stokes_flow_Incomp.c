@@ -778,6 +778,9 @@ static void strict_ala_coupled_preconditioner_audit(
     double rv,rp,zv,zp,av,ap,rav,rap;
     double velocity_cosine,pressure_cosine,block_cosine;
     double velocity_defect,pressure_defect,block_rnorm,block_anorm;
+    double velocity_optimal_scale,pressure_optimal_scale,block_optimal_scale;
+    double velocity_projected_defect,pressure_projected_defect;
+    double block_projected_defect,block_product;
 
     ala_block_vector_component_norms(E,residual,&rv,&rp);
     ala_block_vector_component_norms(E,correction,&zv,&zp);
@@ -796,6 +799,13 @@ static void strict_ala_coupled_preconditioner_audit(
         /max(rv,1.0e-300);
     pressure_defect=sqrt(max(rp*rp+ap*ap-2.0*rap,0.0))
         /max(rp,1.0e-300);
+    velocity_optimal_scale=rav/max(av*av,1.0e-300);
+    pressure_optimal_scale=rap/max(ap*ap,1.0e-300);
+    block_product=velocity_weight*rav+pressure_weight*rap;
+    block_optimal_scale=block_product/max(block_anorm*block_anorm,1.0e-300);
+    velocity_projected_defect=sqrt(max(1.0-velocity_cosine*velocity_cosine,0.0));
+    pressure_projected_defect=sqrt(max(1.0-pressure_cosine*pressure_cosine,0.0));
+    block_projected_defect=sqrt(max(1.0-block_cosine*block_cosine,0.0));
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED PRECONDITIONER AUDIT iteration=%d "
                 "r_components=(velocity:%e,pressure:%e) "
@@ -803,11 +813,16 @@ static void strict_ala_coupled_preconditioner_audit(
                 "Az_components=(velocity:%e,pressure:%e) "
                 "Az_to_r=(velocity:%e,pressure:%e) "
                 "defect_to_r=(velocity:%e,pressure:%e) "
-                "cosine=(velocity:%e,pressure:%e,block:%e)\n",
+                "cosine=(velocity:%e,pressure:%e,block:%e) "
+                "optimal_scale=(velocity:%e,pressure:%e,block:%e) "
+                "projected_defect=(velocity:%e,pressure:%e,block:%e)\n",
                 iteration,rv,rp,zv,zp,av,ap,
                 av/max(rv,1.0e-300),ap/max(rp,1.0e-300),
                 velocity_defect,pressure_defect,
-                velocity_cosine,pressure_cosine,block_cosine);
+                velocity_cosine,pressure_cosine,block_cosine,
+                velocity_optimal_scale,pressure_optimal_scale,
+                block_optimal_scale,velocity_projected_defect,
+                pressure_projected_defect,block_projected_defect);
         fflush(E->fp);
     }
 }

@@ -153,6 +153,13 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("Az_components=(velocity:%e,pressure:%e)", audit)
         self.assertIn("defect_to_r=(velocity:%e,pressure:%e)", audit)
         self.assertIn("cosine=(velocity:%e,pressure:%e,block:%e)", audit)
+        self.assertIn(
+            "optimal_scale=(velocity:%e,pressure:%e,block:%e)", audit
+        )
+        self.assertIn(
+            "projected_defect=(velocity:%e,pressure:%e,block:%e)", audit
+        )
+        self.assertIn("pressure_optimal_scale=rap/max(ap*ap", audit)
         self.assertIn("strict_ala_coupled_preconditioner_audit(", self.core)
 
     def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:
