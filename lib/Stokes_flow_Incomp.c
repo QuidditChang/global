@@ -119,43 +119,36 @@ static void assemble_ala_coupled_residual(
 }
 
 
-static void apply_ala_coupled_triangular_once(
+static void apply_ala_coupled_ldu_once(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction, double **pressure_work,
-    double **velocity_work, int lev, int iteration,
+    double **velocity_work, struct ala_block_vector *ldu_work,
+    int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache)
 {
     int m,e,i,valid,npno,neq;
     double inner_accuracy;
+    void assemble_div_rho_u();
     void parallel_process_termination();
 
     npno=E->lmesh.NPNO[lev];
     neq=E->lmesh.NEQ[lev];
     ala_block_vector_zero(E,correction);
 
-    /* Upper block-triangular inverse approximation:
+    /* Block-LDU inverse approximation:
      *
-     *   dp = -Sapprox^-1 rp,
-     *   du = K_gamma^-1 (ru-G^T dp).
+     *   u0 = K_gamma^-1 ru,
+     *   dp = Sapprox^-1 (G u0-rp),
+     *   du = u0-K_gamma^-1 G^T dp.
      *
-     * Pressure is deliberately handled first.  A diagonal block map would
-     * ask velocity MG to solve the tiny, slow-to-smooth tail left by the
-     * momentum initialization before using the much larger continuity
-     * defect.  The triangular map makes that pressure coupling part of the
-     * velocity right-hand side and retains one K_gamma solve per Arnoldi
-     * application. */
-    apply_ala_pressure_preconditioner(
-        E,residual->pressure,correction->pressure,pressure_work,lev,
-        iteration,cache);
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(e=1;e<=npno;e++)
-            correction->pressure[m][e]=-correction->pressure[m][e];
-
-    assemble_grad_rho_p(E,correction->pressure,velocity_work,lev);
+     * The Schur right-hand side must contain G K_gamma^-1 ru.  Omitting that
+     * cross term made the initial pressure action 16 times the residual and
+     * cannot be repaired by a scalar BPI weight.  The second bounded velocity
+     * solve feeds the pressure correction back into momentum, completing the
+     * factorization without changing the strict-ALA operator. */
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(i=0;i<neq;i++)
-            velocity_work[m][i]=residual->velocity[m][i]
-                                  -velocity_work[m][i];
+            velocity_work[m][i]=residual->velocity[m][i];
     inner_accuracy=strict_ala_inner_accuracy(
         E,velocity_work,lev,
         E->control.ala_coupled_inner_relative_tolerance);
@@ -165,6 +158,31 @@ static void apply_ala_coupled_triangular_once(
         E->control.ala_coupled_inner_progress_interval);
     if(!valid)
         parallel_process_termination();
+
+    assemble_div_rho_u(
+        E,correction->velocity,ldu_work->pressure,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        ldu_work->pressure[m][0]=0.0;
+        for(e=1;e<=npno;e++)
+            ldu_work->pressure[m][e] -= residual->pressure[m][e];
+    }
+    apply_ala_pressure_preconditioner(
+        E,ldu_work->pressure,correction->pressure,pressure_work,lev,
+        iteration,cache);
+
+    assemble_grad_rho_p(E,correction->pressure,velocity_work,lev);
+    inner_accuracy=strict_ala_inner_accuracy(
+        E,velocity_work,lev,
+        E->control.ala_coupled_inner_relative_tolerance);
+    valid=solve_del2_u_bounded(
+        E,ldu_work->velocity,velocity_work,inner_accuracy,lev,
+        E->control.ala_coupled_inner_max_cycles,
+        E->control.ala_coupled_inner_progress_interval);
+    if(!valid)
+        parallel_process_termination();
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            correction->velocity[m][i] -= ldu_work->velocity[m][i];
 }
 
 
@@ -663,7 +681,8 @@ static void apply_ala_coupled_block_preconditioner(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction,
     struct ala_block_vector *correction_work,
-    struct ala_block_vector *action_work, double **pressure_work,
+    struct ala_block_vector *action_work, struct ala_block_vector *ldu_work,
+    double **pressure_work,
     double **velocity_work, int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache)
 {
@@ -736,8 +755,9 @@ static void apply_ala_coupled_block_preconditioner(
             E,residual,correction,correction_work,lev);
         return;
     }
-    apply_ala_coupled_triangular_once(
-        E,residual,correction,pressure_work,velocity_work,lev,iteration,cache);
+    apply_ala_coupled_ldu_once(
+        E,residual,correction,pressure_work,velocity_work,ldu_work,
+        lev,iteration,cache);
 
     /* Multiplicative block defect correction:
      *
@@ -763,9 +783,9 @@ static void apply_ala_coupled_block_preconditioner(
                 action_work->pressure[m][e]=residual->pressure[m][e]
                                                 -action_work->pressure[m][e];
         }
-        apply_ala_coupled_triangular_once(
-            E,action_work,correction_work,pressure_work,velocity_work,lev,
-            iteration,cache);
+        apply_ala_coupled_ldu_once(
+            E,action_work,correction_work,pressure_work,velocity_work,
+            ldu_work,lev,iteration,cache);
         ala_block_vector_axpy(E,1.0,correction_work,correction);
     }
 }
@@ -840,7 +860,7 @@ static float solve_ala_coupled_fgmres_core(
     void assemble_div_u();
     void parallel_process_termination();
     struct ala_block_vector *rhs,*r,*explicit_r,*w,*operator_work;
-    struct ala_block_vector *preconditioner_delta;
+    struct ala_block_vector *preconditioner_delta,*ldu_work;
     struct ala_block_vector **vb,**zb;
     const char *acceptance_status;
     const char *preconditioner_name;
@@ -875,6 +895,7 @@ static float solve_ala_coupled_fgmres_core(
     w=ala_block_vector_create(E,lev);
     operator_work=ala_block_vector_create(E,lev);
     preconditioner_delta=ala_block_vector_create(E,lev);
+    ldu_work=ala_block_vector_create(E,lev);
     vb=(struct ala_block_vector **)calloc(
         max_basis,sizeof(struct ala_block_vector *));
     zb=(struct ala_block_vector **)calloc(
@@ -931,7 +952,7 @@ static float solve_ala_coupled_fgmres_core(
     preconditioner_name=E->control.ala_coupled_multilevel_vcycle
         ? "coupled_multilevel_vcycle"
         : (E->control.ala_coupled_element_vanka
-           ? "coupled_element_vanka" : "upper_block_triangular");
+           ? "coupled_element_vanka" : "block_ldu");
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
                 "preconditioner=%s "
@@ -987,8 +1008,8 @@ static float solve_ala_coupled_fgmres_core(
         used=0;
         for(j=0;j<restart && count<*steps_max;j++) {
             apply_ala_coupled_block_preconditioner(
-                E,vb[j],zb[j],preconditioner_delta,explicit_r,pressure_work,
-                operator_work->velocity,lev,count,cache);
+                E,vb[j],zb[j],preconditioner_delta,explicit_r,ldu_work,
+                pressure_work,operator_work->velocity,lev,count,cache);
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);
@@ -1219,6 +1240,7 @@ static float solve_ala_coupled_fgmres_core(
     ala_block_vector_destroy(E,w);
     ala_block_vector_destroy(E,operator_work);
     ala_block_vector_destroy(E,preconditioner_delta);
+    ala_block_vector_destroy(E,ldu_work);
     return((float)cancellation_l2);
 }
 
