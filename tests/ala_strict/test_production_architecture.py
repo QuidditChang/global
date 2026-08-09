@@ -140,7 +140,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_first_preconditioner_audit_only"
-            r"\s*=\s*off\s*$",
+            r"\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -598,7 +598,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             operator,
         )
         self.assertIn(
-            "Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e];",
+            "Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e]\n"
+            "                            /sqrt((double)(factor*factor*factor));",
             operator,
         )
         vcycle = stokes[
@@ -606,8 +607,12 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             stokes.index("static void apply_ala_pressure_multigrid_correction")
         ]
         self.assertIn("ala_pressure_multigrid_vcycle(E,level-1,cache);", vcycle)
-        self.assertIn("coarse_rhs[m][ce] += residual[m][e];", vcycle)
-        self.assertIn("x[m][e] += coarse_x[m][ce];", vcycle)
+        self.assertIn(
+            "coarse_rhs[m][ce] += residual[m][e]/sqrt(8.0);", vcycle
+        )
+        self.assertIn(
+            "x[m][e] += coarse_x[m][ce]/sqrt(8.0);", vcycle
+        )
         self.assertIn("ala_pressure_multigrid_post_smooth", vcycle)
         self.assertIn(
             "mpi_overlap_schwarz_plus_pressure_vcycle", stokes

@@ -2970,7 +2970,7 @@ static void build_ala_pressure_multigrid_cache(struct All_variables *E,
         fprintf(E->fp,"ALA pressure multigrid hierarchy levels=%d range=%d:%d "
                 "smooth=(pre:%d,post:%d,coarse:%d) damping=%e weight=%e "
                 "operator=%s "
-                "transfer=constant_P/sum_Pt\n",
+                "transfer=normalized_constant_P/Pt scale=1/sqrt(children)\n",
                 lev-cache->pressure_mg_min_level+1,
                 cache->pressure_mg_min_level,lev,
                 E->control.ala_pressure_multigrid_pre_smooth,
@@ -3016,7 +3016,8 @@ static void apply_ala_pressure_multigrid_operator(
                         cy=(ey-1)/factor+1;
                         cz=(ez-1)/factor+1;
                         ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                        cache->pressure_mg_galerkin_p[m][e]=p[m][ce];
+                        cache->pressure_mg_galerkin_p[m][e]=
+                            p[m][ce]/sqrt((double)(factor*factor*factor));
                     }
         apply_ala_pressure_multigrid_operator(
             E,cache->pressure_mg_galerkin_p,
@@ -3032,7 +3033,8 @@ static void apply_ala_pressure_multigrid_operator(
                         cy=(ey-1)/factor+1;
                         cz=(ez-1)/factor+1;
                         ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                        Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e];
+                        Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e]
+                            /sqrt((double)(factor*factor*factor));
                     }
         }
         return;
@@ -3126,7 +3128,7 @@ static void ala_pressure_multigrid_vcycle(struct All_variables *E, int level,
                     cy=(ey-1)/2+1;
                     cz=(ez-1)/2+1;
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                    coarse_rhs[m][ce] += residual[m][e];
+                    coarse_rhs[m][ce] += residual[m][e]/sqrt(8.0);
                 }
 
     ala_pressure_multigrid_vcycle(E,level-1,cache);
@@ -3140,7 +3142,7 @@ static void ala_pressure_multigrid_vcycle(struct All_variables *E, int level,
                     cy=(ey-1)/2+1;
                     cz=(ez-1)/2+1;
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                    x[m][e] += coarse_x[m][ce];
+                    x[m][e] += coarse_x[m][ce]/sqrt(8.0);
                 }
     smooth_ala_pressure_multigrid_level(
         E,level,E->control.ala_pressure_multigrid_post_smooth,cache);
