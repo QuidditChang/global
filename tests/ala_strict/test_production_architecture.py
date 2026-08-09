@@ -158,7 +158,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_element_vanka\s*=\s*on\s*$",
+            r"(?m)^\s*ala_coupled_element_vanka\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
