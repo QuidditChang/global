@@ -140,7 +140,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_coupled_first_preconditioner_audit_only"
-            r"\s*=\s*on\s*$",
+            r"\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -340,11 +340,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_multigrid\s*=\s*on\s*$",
+            r"(?m)^\s*ala_pressure_multigrid\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_multigrid_galerkin\s*=\s*on\s*$",
+            r"(?m)^\s*ala_pressure_multigrid_galerkin\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,

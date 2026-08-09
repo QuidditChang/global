@@ -58,32 +58,24 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "velocity_weight=1.0/max(force_norm*force_norm", self.core
         )
 
-    def test_right_preconditioner_is_complete_block_ldu(self) -> None:
+    def test_right_preconditioner_is_pressure_first_triangular(self) -> None:
         preconditioner = _between(
             self.stokes,
-            "static void apply_ala_coupled_ldu_once(",
+            "static void apply_ala_coupled_triangular_once(",
             "static void apply_ala_coupled_block_preconditioner(",
-        )
-        predictor = preconditioner.index("valid=solve_del2_u_bounded(")
-        schur_rhs = preconditioner.index(
-            "assemble_div_rho_u(", predictor
         )
         pressure = preconditioner.index("apply_ala_pressure_preconditioner(")
         gradient = preconditioner.index("assemble_grad_rho_p(")
-        velocity_correction = preconditioner.rindex(
-            "valid=solve_del2_u_bounded("
-        )
-        self.assertLess(predictor, schur_rhs)
-        self.assertLess(schur_rhs, pressure)
+        velocity = preconditioner.index("valid=solve_del2_u_bounded(")
         self.assertLess(pressure, gradient)
-        self.assertLess(gradient, velocity_correction)
+        self.assertLess(gradient, velocity)
         self.assertIn("apply_ala_pressure_preconditioner(", preconditioner)
         self.assertIn(
-            "ldu_work->pressure[m][e] -= residual->pressure[m][e]",
+            "correction->pressure[m][e]=-correction->pressure[m][e]",
             preconditioner,
         )
         self.assertIn(
-            "correction->velocity[m][i] -= ldu_work->velocity[m][i]",
+            "velocity_work[m][i]=residual->velocity[m][i]",
             preconditioner,
         )
 
@@ -177,8 +169,8 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_inner_progress_interval = 20", cfg
         )
         self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
-        self.assertIn("ala_pressure_multigrid                  = on", cfg)
-        self.assertIn("ala_pressure_multigrid_galerkin         = on", cfg)
+        self.assertIn("ala_pressure_multigrid                  = off", cfg)
+        self.assertIn("ala_pressure_multigrid_galerkin         = off", cfg)
         self.assertIn("ala_augmented_lagrangian_gamma = 0.0", cfg)
         self.assertIn("ala_element_vanka_damping      = 1.0", cfg)
         self.assertIn("ala_coupled_debug_stop_iteration            = 20", cfg)
