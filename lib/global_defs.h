@@ -527,6 +527,7 @@ struct CONTROL {
     double ala_two_level_velocity_eigenvalue_min;
     double ala_two_level_velocity_eigenvalue_max;
     int ala_pressure_multigrid;
+    double ala_pressure_bpi_weight;
     int ala_pressure_multigrid_min_level;
     int ala_pressure_multigrid_pre_smooth;
     int ala_pressure_multigrid_post_smooth;

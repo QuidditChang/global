@@ -106,6 +106,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
             "ala_pressure_multigrid",
+            "ala_pressure_bpi_weight",
             "ala_pressure_multigrid_min_level",
             "ala_pressure_multigrid_pre_smooth",
             "ala_pressure_multigrid_post_smooth",
@@ -342,6 +343,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
+            r"(?m)^\s*ala_pressure_bpi_weight\s*=\s*0\.1\s*$",
+        )
+        self.assertRegex(
+            strict_text,
             r"(?m)^\s*ala_pressure_multigrid_min_level\s*=\s*0\s*$",
         )
 
@@ -542,6 +547,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             self.assertIn(f'{name} = prop.', incompressible)
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)
         for name in (
+            "ala_pressure_bpi_weight",
             "ala_pressure_multigrid_damping",
             "ala_pressure_multigrid_weight",
         ):
@@ -549,6 +555,18 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             self.assertIn(
                 f'getDoubleProperty(properties, "{name}"', properties
             )
+
+    def test_pressure_bpi_weight_scales_only_the_legacy_schur_map(
+        self,
+    ) -> None:
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "z[m][j] *= E->control.ala_pressure_bpi_weight;",
+            stokes,
+        )
+        self.assertIn("BPI_weight=%e", stokes)
 
     def test_stage8_pressure_multigrid_is_recursive_strict_ala(
         self,

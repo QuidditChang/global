@@ -1724,6 +1724,8 @@ void h5output_meta(struct All_variables *E)
                                E->control.ala_element_vanka_rebuild_interval);
     status = set_attribute_int(input, "ala_pressure_multigrid",
                                E->control.ala_pressure_multigrid);
+    status = set_attribute_double(input, "ala_pressure_bpi_weight",
+                                  E->control.ala_pressure_bpi_weight);
     status = set_attribute_int(input, "ala_pressure_multigrid_min_level",
                                E->control.ala_pressure_multigrid_min_level);
     status = set_attribute_int(input, "ala_pressure_multigrid_pre_smooth",

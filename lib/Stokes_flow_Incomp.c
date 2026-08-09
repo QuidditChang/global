@@ -5303,6 +5303,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
             for(j=1;j<=npno;j++)
                 z[m][j]=E->BPI[lev][m][j]*r[m][j];
     }
+    /* The diagonal/radial-line Schur map has its own scale, independent of
+     * the velocity solve and optional additive pressure corrections.  This
+     * lets the current-rheology block-triangular path correct an over-strong
+     * pressure action without altering K, G, or the physical residual. */
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(j=1;j<=npno;j++)
+            z[m][j] *= E->control.ala_pressure_bpi_weight;
 
     if(E->control.ala_shallow_patch_preconditioner) {
         weight=E->control.ala_shallow_patch_weight;
@@ -6951,7 +6958,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
     if(E->parallel.me == 0) {
         fprintf(E->fp,
                 "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
+                "BPI_range=(%e,%e) BPI_weight=%e invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis_type=%s "
@@ -6960,7 +6967,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
-                global_bpi_min, global_bpi_max, global_invalid_bpi,
+                global_bpi_min, global_bpi_max,
+                E->control.ala_pressure_bpi_weight,global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
                 E->control.ala_beta_causal_diagnostics ? "on" : "off",
@@ -6979,7 +6987,7 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                     : "legacy_pressure_cache_active");
         fprintf(stderr,
                 "ALA pressure preconditioner = %s outer_solver=%s mode=%s "
-                "BPI_range=(%e,%e) invalid=%d restart_interval=%d "
+                "BPI_range=(%e,%e) BPI_weight=%e invalid=%d restart_interval=%d "
                 "beta_source=%s beta_causal_diagnostics=%s "
                 "gamma=%e global_coarse=%s global_basis=%d "
                 "global_weight=%e geneo=%s geneo_basis_type=%s "
@@ -6988,7 +6996,8 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                 E->control.precondition ? "on" : "off",
                 E->control.ala_outer_solver,
                 preconditioner_mode,
-                global_bpi_min, global_bpi_max, global_invalid_bpi,
+                global_bpi_min, global_bpi_max,
+                E->control.ala_pressure_bpi_weight,global_invalid_bpi,
                 E->control.ala_pcg_restart_interval,
                 E->control.ala_beta_element_source,
                 E->control.ala_beta_causal_diagnostics ? "on" : "off",
