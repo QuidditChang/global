@@ -160,6 +160,13 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "projected_defect=(velocity:%e,pressure:%e,block:%e)", audit
         )
         self.assertIn("pressure_optimal_scale=rap/max(ap*ap", audit)
+        self.assertIn("strict_ala_pressure_mode_audit(", audit)
+        self.assertIn(
+            "ALA PRESSURE MODE AUDIT iteration=%d offset=%d", self.stokes
+        )
+        self.assertIn(
+            "value_r=residual->pressure[m][e]-mean_r", self.stokes
+        )
         self.assertIn("strict_ala_coupled_preconditioner_audit(", self.core)
 
     def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:

@@ -769,6 +769,89 @@ static void apply_ala_coupled_block_preconditioner(
 }
 
 
+static void strict_ala_pressure_mode_audit(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    const struct ala_block_vector *action, int lev, int iteration)
+{
+    int offset,clev,factor,m,cx,cy,cz,fx,fy,fz,e,base,n_offsets;
+    int celx,cely,celz,elx,ely,elz,nchildren,i;
+    double mean_r,mean_a,value_r,value_a;
+    double local[24],global[24],coarse_cosine,fine_cosine;
+    double coarse_scale,fine_scale,total_r2;
+
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    n_offsets=min(4,lev-E->mesh.levmin);
+    for(i=0;i<24;i++)
+        local[i]=0.0;
+    for(offset=1;offset<=n_offsets;offset++) {
+        base=6*(offset-1);
+        clev=lev-offset;
+        factor=1<<offset;
+        celx=E->lmesh.ELX[clev];
+        cely=E->lmesh.ELY[clev];
+        celz=E->lmesh.ELZ[clev];
+        if(elx!=factor*celx || ely!=factor*cely || elz!=factor*celz)
+            myerror(E,"ALA pressure mode audit mesh mismatch");
+        nchildren=factor*factor*factor;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(cy=1;cy<=cely;cy++)
+                for(cx=1;cx<=celx;cx++)
+                    for(cz=1;cz<=celz;cz++) {
+                        mean_r=0.0;
+                        mean_a=0.0;
+                        for(fy=(cy-1)*factor+1;fy<=cy*factor;fy++)
+                            for(fx=(cx-1)*factor+1;fx<=cx*factor;fx++)
+                                for(fz=(cz-1)*factor+1;fz<=cz*factor;fz++) {
+                                    e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                    mean_r += residual->pressure[m][e];
+                                    mean_a += action->pressure[m][e];
+                                }
+                        mean_r /= (double)nchildren;
+                        mean_a /= (double)nchildren;
+                        local[base+0] += nchildren*mean_r*mean_r;
+                        local[base+1] += nchildren*mean_a*mean_a;
+                        local[base+2] += nchildren*mean_r*mean_a;
+                        for(fy=(cy-1)*factor+1;fy<=cy*factor;fy++)
+                            for(fx=(cx-1)*factor+1;fx<=cx*factor;fx++)
+                                for(fz=(cz-1)*factor+1;fz<=cz*factor;fz++) {
+                                    e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                    value_r=residual->pressure[m][e]-mean_r;
+                                    value_a=action->pressure[m][e]-mean_a;
+                                    local[base+3] += value_r*value_r;
+                                    local[base+4] += value_a*value_a;
+                                    local[base+5] += value_r*value_a;
+                                }
+                    }
+    }
+    MPI_Allreduce(local,global,6*n_offsets,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    for(offset=1;offset<=n_offsets;offset++) {
+        base=6*(offset-1);
+        factor=1<<offset;
+        coarse_cosine=global[base+2]
+            /sqrt(max(global[base+0]*global[base+1],1.0e-300));
+        fine_cosine=global[base+5]
+            /sqrt(max(global[base+3]*global[base+4],1.0e-300));
+        coarse_scale=global[base+2]/max(global[base+1],1.0e-300);
+        fine_scale=global[base+5]/max(global[base+4],1.0e-300);
+        total_r2=global[base+0]+global[base+3];
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"ALA PRESSURE MODE AUDIT iteration=%d offset=%d "
+                    "factor=%d residual_fraction=(coarse:%e,fine:%e) "
+                    "cosine=(coarse:%e,fine:%e) "
+                    "optimal_scale=(coarse:%e,fine:%e)\n",
+                    iteration,offset,factor,
+                    global[base+0]/max(total_r2,1.0e-300),
+                    global[base+3]/max(total_r2,1.0e-300),
+                    coarse_cosine,fine_cosine,coarse_scale,fine_scale);
+            fflush(E->fp);
+        }
+    }
+}
+
+
 static void strict_ala_coupled_preconditioner_audit(
     struct All_variables *E, const struct ala_block_vector *residual,
     const struct ala_block_vector *correction,
@@ -825,6 +908,8 @@ static void strict_ala_coupled_preconditioner_audit(
                 pressure_projected_defect,block_projected_defect);
         fflush(E->fp);
     }
+    strict_ala_pressure_mode_audit(
+        E,residual,action,E->mesh.levmax,iteration);
 }
 
 
