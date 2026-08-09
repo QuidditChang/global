@@ -1722,6 +1722,8 @@ struct ala_pressure_preconditioner_cache {
     double *pressure_mg_Ax[MAX_LEVELS][NCS];
     double *pressure_mg_velocity[NCS];
     double *pressure_mg_velocity_rhs[NCS];
+    double *pressure_mg_galerkin_p[NCS];
+    double *pressure_mg_galerkin_Ap[NCS];
     int pressure_mg_min_level;
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
@@ -2954,14 +2956,20 @@ static void build_ala_pressure_multigrid_cache(struct All_variables *E,
             (double *)calloc(neq+1,sizeof(double));
         cache->pressure_mg_velocity_rhs[m]=
             (double *)calloc(neq+1,sizeof(double));
+        cache->pressure_mg_galerkin_p[m]=
+            (double *)calloc(E->lmesh.NPNO[lev]+1,sizeof(double));
+        cache->pressure_mg_galerkin_Ap[m]=
+            (double *)calloc(E->lmesh.NPNO[lev]+1,sizeof(double));
         if(cache->pressure_mg_velocity[m]==NULL ||
-           cache->pressure_mg_velocity_rhs[m]==NULL)
+           cache->pressure_mg_velocity_rhs[m]==NULL ||
+           cache->pressure_mg_galerkin_p[m]==NULL ||
+           cache->pressure_mg_galerkin_Ap[m]==NULL)
             myerror(E,"Unable to allocate ALA pressure multigrid velocity work");
     }
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA pressure multigrid hierarchy levels=%d range=%d:%d "
                 "smooth=(pre:%d,post:%d,coarse:%d) damping=%e weight=%e "
-                "operator=(D+C)diag(Kgamma)^-1(D+C)^T "
+                "operator=%s "
                 "transfer=constant_P/sum_Pt\n",
                 lev-cache->pressure_mg_min_level+1,
                 cache->pressure_mg_min_level,lev,
@@ -2969,7 +2977,10 @@ static void build_ala_pressure_multigrid_cache(struct All_variables *E,
                 E->control.ala_pressure_multigrid_post_smooth,
                 E->control.ala_pressure_multigrid_coarse_iterations,
                 E->control.ala_pressure_multigrid_damping,
-                E->control.ala_pressure_multigrid_weight);
+                E->control.ala_pressure_multigrid_weight,
+                E->control.ala_pressure_multigrid_galerkin
+                    ? "Galerkin_Pt*((D+C)diag(Kgamma)^-1(D+C)^T)*P"
+                    : "rediscretized_(D+C)diag(Kgamma)^-1(D+C)^T");
         fflush(E->fp);
     }
 }
@@ -2979,9 +2990,53 @@ static void apply_ala_pressure_multigrid_operator(
     struct All_variables *E, double **p, double **Ap, int level,
     struct ala_pressure_preconditioner_cache *cache)
 {
-    int m,j,neq;
+    int m,j,neq,e,ex,ey,ez,cx,cy,cz,ce,factor;
+    int elx,ely,elz,celx,celz,cnpno,finest;
     void assemble_grad_rho_p();
     void assemble_div_rho_u();
+
+    finest=cache->pressure_mg_max_level;
+    if(E->control.ala_pressure_multigrid_galerkin && level<finest) {
+        factor=1<<(finest-level);
+        elx=E->lmesh.ELX[finest];
+        ely=E->lmesh.ELY[finest];
+        elz=E->lmesh.ELZ[finest];
+        celx=E->lmesh.ELX[level];
+        celz=E->lmesh.ELZ[level];
+        cnpno=E->lmesh.NPNO[level];
+        if(elx!=factor*celx || ely!=factor*E->lmesh.ELY[level] ||
+           elz!=factor*celz)
+            myerror(E,"ALA Galerkin pressure hierarchy mesh mismatch");
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ey=1;ey<=ely;ey++)
+                for(ex=1;ex<=elx;ex++)
+                    for(ez=1;ez<=elz;ez++) {
+                        e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                        cx=(ex-1)/factor+1;
+                        cy=(ey-1)/factor+1;
+                        cz=(ez-1)/factor+1;
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        cache->pressure_mg_galerkin_p[m][e]=p[m][ce];
+                    }
+        apply_ala_pressure_multigrid_operator(
+            E,cache->pressure_mg_galerkin_p,
+            cache->pressure_mg_galerkin_Ap,finest,cache);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(ce=1;ce<=cnpno;ce++)
+                Ap[m][ce]=0.0;
+            for(ey=1;ey<=ely;ey++)
+                for(ex=1;ex<=elx;ex++)
+                    for(ez=1;ez<=elz;ez++) {
+                        e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                        cx=(ex-1)/factor+1;
+                        cy=(ey-1)/factor+1;
+                        cz=(ez-1)/factor+1;
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e];
+                    }
+        }
+        return;
+    }
 
     neq=E->lmesh.NEQ[level];
     assemble_grad_rho_p(E,p,cache->pressure_mg_velocity_rhs,level);
@@ -3191,6 +3246,8 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->geneo_basis[m]);
         free((void *)cache->pressure_mg_velocity[m]);
         free((void *)cache->pressure_mg_velocity_rhs[m]);
+        free((void *)cache->pressure_mg_galerkin_p[m]);
+        free((void *)cache->pressure_mg_galerkin_Ap[m]);
         for(level=0;level<MAX_LEVELS;level++) {
             free((void *)cache->pressure_mg_rhs[level][m]);
             free((void *)cache->pressure_mg_x[level][m]);

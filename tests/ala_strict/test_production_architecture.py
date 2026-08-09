@@ -106,6 +106,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_geneo_preconditioner",
             "ala_geneo_basis_type",
             "ala_pressure_multigrid",
+            "ala_pressure_multigrid_galerkin",
             "ala_pressure_bpi_weight",
             "ala_pressure_multigrid_min_level",
             "ala_pressure_multigrid_pre_smooth",
@@ -339,7 +340,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_multigrid\s*=\s*off\s*$",
+            r"(?m)^\s*ala_pressure_multigrid\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_pressure_multigrid_galerkin\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -539,6 +544,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             self.assertIn(f'properties, "{name}"', properties)
         for name in (
             "ala_pressure_multigrid",
+            "ala_pressure_multigrid_galerkin",
             "ala_pressure_multigrid_min_level",
             "ala_pressure_multigrid_pre_smooth",
             "ala_pressure_multigrid_post_smooth",
@@ -585,6 +591,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn("assemble_grad_rho_p", operator)
         self.assertIn("E->ALA_velocity_BI[level]", operator)
         self.assertIn("assemble_div_rho_u", operator)
+        self.assertIn("pressure_mg_galerkin_p", operator)
+        self.assertIn(
+            "apply_ala_pressure_multigrid_operator(\n"
+            "            E,cache->pressure_mg_galerkin_p,",
+            operator,
+        )
+        self.assertIn(
+            "Ap[m][ce] += cache->pressure_mg_galerkin_Ap[m][e];",
+            operator,
+        )
         vcycle = stokes[
             stokes.index("static void ala_pressure_multigrid_vcycle"):
             stokes.index("static void apply_ala_pressure_multigrid_correction")

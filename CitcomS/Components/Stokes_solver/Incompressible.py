@@ -220,6 +220,8 @@ class Incompressible(CitcomComponent):
             "ala_two_level_velocity_eigenvalue_max", default=4.0)
         ala_pressure_multigrid = prop.bool(
             "ala_pressure_multigrid", default=False)
+        ala_pressure_multigrid_galerkin = prop.bool(
+            "ala_pressure_multigrid_galerkin", default=False)
         ala_pressure_bpi_weight = prop.float(
             "ala_pressure_bpi_weight", default=1.0)
         ala_pressure_multigrid_min_level = prop.int(

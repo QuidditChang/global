@@ -177,7 +177,8 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_inner_progress_interval = 20", cfg
         )
         self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
-        self.assertIn("ala_pressure_multigrid                  = off", cfg)
+        self.assertIn("ala_pressure_multigrid                  = on", cfg)
+        self.assertIn("ala_pressure_multigrid_galerkin         = on", cfg)
         self.assertIn("ala_augmented_lagrangian_gamma = 0.0", cfg)
         self.assertIn("ala_element_vanka_damping      = 1.0", cfg)
         self.assertIn("ala_coupled_debug_stop_iteration            = 20", cfg)

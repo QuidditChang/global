@@ -626,6 +626,8 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_two_level_velocity_eigenvalue_max),"4.0",m);
   input_boolean("ala_pressure_multigrid",
                 &(E->control.ala_pressure_multigrid),"off",m);
+  input_boolean("ala_pressure_multigrid_galerkin",
+                &(E->control.ala_pressure_multigrid_galerkin),"off",m);
   input_double("ala_pressure_bpi_weight",
                &(E->control.ala_pressure_bpi_weight),"1.0",m);
   input_int("ala_pressure_multigrid_min_level",
@@ -1057,11 +1059,14 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_pressure_multigrid &&
      (!E->control.precondition ||
       !E->control.ala_pressure_buoyancy ||
-      E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
       (strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
        strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)))
       myerror(E, "ala_pressure_multigrid requires precond=on, strict ALA, "
-              "positive gamma, and an FGMRES outer solver");
+              "and an FGMRES outer solver");
+  if(E->control.ala_pressure_multigrid_galerkin &&
+     !E->control.ala_pressure_multigrid)
+      myerror(E, "ala_pressure_multigrid_galerkin requires "
+              "ala_pressure_multigrid=on");
   if(E->control.ala_pressure_multigrid &&
      E->control.ala_two_level_preconditioner)
       myerror(E, "ALA pressure multigrid and legacy two-level "
@@ -1635,6 +1640,7 @@ void global_default_values(E)
     E->control.ala_two_level_velocity_eigenvalue_min = 0.01;
     E->control.ala_two_level_velocity_eigenvalue_max = 4.0;
     E->control.ala_pressure_multigrid = 0;
+    E->control.ala_pressure_multigrid_galerkin = 0;
     E->control.ala_pressure_bpi_weight = 1.0;
     E->control.ala_pressure_multigrid_min_level = 0;
     E->control.ala_pressure_multigrid_pre_smooth = 2;

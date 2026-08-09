@@ -1160,6 +1160,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_two_level_velocity_eigenvalue_max, fp);
     getIntProperty(properties, "ala_pressure_multigrid",
                    E->control.ala_pressure_multigrid, fp);
+    getIntProperty(properties, "ala_pressure_multigrid_galerkin",
+                   E->control.ala_pressure_multigrid_galerkin, fp);
     getDoubleProperty(properties, "ala_pressure_bpi_weight",
                       E->control.ala_pressure_bpi_weight, fp);
     getIntProperty(properties, "ala_pressure_multigrid_min_level",
@@ -1586,11 +1588,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_pressure_multigrid &&
        (!E->control.precondition ||
         !E->control.ala_pressure_buoyancy ||
-        E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
         (strcmp(E->control.ala_outer_solver,"fgmres") != 0 &&
          strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)))
         myerror(E, "ala_pressure_multigrid requires precond=on, strict ALA, "
-                "positive gamma, and an FGMRES outer solver");
+                "and an FGMRES outer solver");
+    if(E->control.ala_pressure_multigrid_galerkin &&
+       !E->control.ala_pressure_multigrid)
+        myerror(E, "ala_pressure_multigrid_galerkin requires "
+                "ala_pressure_multigrid=on");
     if(E->control.ala_pressure_multigrid &&
        E->control.ala_two_level_preconditioner)
         myerror(E, "ALA pressure multigrid and legacy two-level "
