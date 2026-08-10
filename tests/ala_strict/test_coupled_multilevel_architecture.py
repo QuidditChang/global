@@ -39,6 +39,9 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             GLOBAL_ROOT / "CitcomS/Components/Stokes_solver/Incompressible.py"
         ).read_text()
         cls.properties = (GLOBAL_ROOT / "module/setProperties.c").read_text()
+        cls.strict_cfg = (
+            GLOBAL_ROOT.parents[1] / "runs/cmbhf_ALA_strict.cfg"
+        ).read_text()
 
     def test_every_coupled_solve_enters_one_time_hierarchy_audit(self) -> None:
         core = _function_body(
@@ -643,6 +646,27 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("finest_external_diagonal_weight=%e", builder)
         self.assertIn(
             "coarse_external_diagonal_weight=1.000000e+00", builder
+        )
+
+    def test_pressure_aggregate_uses_current_rheology_vanka_metric(self) -> None:
+        self.assertIn(
+            "static double ala_element_vanka_schur_entry(", self.stokes
+        )
+        self.assertIn("ala_solve_cached_element_k(chol,rhs2,sol2)", self.stokes)
+        self.assertIn(
+            '"element_vanka")==0', self.stokes
+        )
+        self.assertIn(
+            "=ala_element_vanka_schur_entry(E,e1,e2,lev,m);", self.stokes
+        )
+        self.assertIn(
+            "ala_shallow_patch_horizontal_elements = 2", self.strict_cfg
+        )
+        self.assertIn(
+            "ala_shallow_patch_horizontal_stride   = 2", self.strict_cfg
+        )
+        self.assertIn(
+            "ala_shallow_patch_mpi_overlap      = 1", self.strict_cfg
         )
 
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:

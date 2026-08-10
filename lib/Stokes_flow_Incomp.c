@@ -2369,6 +2369,81 @@ static double ala_velocity_block_schur_entry(struct All_variables *E,
 }
 
 
+/* Couple two P0 pressure rows through the existing current-rheology
+   element-Vanka inverse.  For every velocity element touching e1, restrict
+   both pressure gradients to that element's Q1 velocity support and form
+
+       (W G_e1^T)^T Kpatch^-1 (W G_e2^T).
+
+   Summing these Gram products produces a symmetric positive-semidefinite
+   pressure metric with genuine neighbour off-diagonals.  Unlike the former
+   nodal diagonal and 3x3 approximations, this metric can represent the
+   factor-two alternating P0 mode while reusing the already cached 24x24
+   K_gamma factors. */
+static double ala_element_vanka_schur_entry(struct All_variables *E,
+    int e1, int e2, int lev, int m)
+{
+    int ex1,ey1,ez1,px,py,pz,pe,a,b,d,node,node1,node2,i,j;
+    int elx,ely,elz,found1,found2;
+    double rhs1[ALA_VANKA_DOF],rhs2[ALA_VANKA_DOF];
+    double sol2[ALA_VANKA_DOF],weight,sum,value;
+    higher_precision *chol;
+    const int dims=E->mesh.nsd;
+    const int ends=enodes[dims];
+
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    ez1=(e1-1)%elz+1;
+    ex1=((e1-1)/elz)%elx+1;
+    ey1=(e1-1)/(elz*elx)+1;
+    value=0.0;
+    for(py=max(1,ey1-1);py<=min(ely,ey1+1);py++)
+        for(px=max(1,ex1-1);px<=min(elx,ex1+1);px++)
+            for(pz=max(1,ez1-1);pz<=min(elz,ez1+1);pz++) {
+                pe=pz+(px-1)*elz+(py-1)*elz*elx;
+                if(!E->ALA_vanka_valid[lev][m][pe])
+                    myerror(E,"ALA pressure aggregate found invalid Vanka factor");
+                for(i=0;i<ALA_VANKA_DOF;i++)
+                    rhs1[i]=rhs2[i]=sol2[i]=0.0;
+                found1=found2=0;
+                for(a=1;a<=ends;a++) {
+                    node=E->IEN[lev][m][pe].node[a];
+                    for(b=1;b<=ends;b++) {
+                        node1=E->IEN[lev][m][e1].node[b];
+                        node2=E->IEN[lev][m][e2].node[b];
+                        for(d=0;d<dims;d++) {
+                            i=(a-1)*dims+d;
+                            j=(b-1)*dims+d;
+                            weight=sqrt(E->ALA_vanka_overlap_BI[lev][m]
+                                [E->ID[lev][m][node].doff[d+1]]);
+                            if(node==node1) {
+                                rhs1[i]=weight*(E->elt_del[lev][m][e1].g[j][0]
+                                    +E->elt_c[lev][m][e1].c[j][0]);
+                                found1=1;
+                            }
+                            if(node==node2) {
+                                rhs2[i]=weight*(E->elt_del[lev][m][e2].g[j][0]
+                                    +E->elt_c[lev][m][e2].c[j][0]);
+                                found2=1;
+                            }
+                        }
+                    }
+                }
+                if(!found1 || !found2)
+                    continue;
+                chol=E->ALA_vanka_chol[lev][m]+pe*ALA_VANKA_CHOL_SIZE;
+                if(!ala_solve_cached_element_k(chol,rhs2,sol2))
+                    myerror(E,"ALA pressure aggregate Vanka solve failed");
+                sum=0.0;
+                for(i=0;i<ALA_VANKA_DOF;i++)
+                    sum += rhs1[i]*sol2[i];
+                value += sum;
+            }
+    return(value);
+}
+
+
 /* Build a pressure-space principal block of the complete strict-ALA nodal
    velocity-metric Schur approximation.  Stage 6c uses Gram operators
    G Mv^-1 G^T, so its principal submatrices are symmetric positive
@@ -2394,6 +2469,10 @@ static void ala_build_pressure_patch_schur(struct All_variables *E,
             ey2=(e2-1)/(elz*elx)+1;
             if(abs(ex1-ex2)>1 || abs(ey1-ey2)>1 || abs(ez1-ez2)>1)
                 schur[i*ALA_PATCH_MAX_ELEMENTS+j]=0.0;
+            else if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                           "element_vanka")==0)
+                schur[i*ALA_PATCH_MAX_ELEMENTS+j]
+                    =ala_element_vanka_schur_entry(E,e1,e2,lev,m);
             else if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                            "node_block")==0)
                 schur[i*ALA_PATCH_MAX_ELEMENTS+j]

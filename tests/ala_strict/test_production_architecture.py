@@ -75,6 +75,9 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_velocity_solver",
             "ala_shallow_patch_preconditioner",
             "ala_shallow_patch_weight",
+            "ala_shallow_patch_horizontal_elements",
+            "ala_shallow_patch_horizontal_stride",
+            "ala_shallow_patch_mpi_overlap",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
             "ala_coupled_initial_velocity_relative_tolerance",
@@ -179,11 +182,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_velocity_solver\s*="
-            r"\s*diagonal\s*$",
+            r"\s*element_vanka\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*off\s*$",
+            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -284,7 +287,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*1\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -313,7 +316,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_element_vanka_external_diagonal_weight\s*=\s*0\.1\s*$",
+            r"(?m)^\s*ala_element_vanka_external_diagonal_weight\s*=\s*1\.0\s*$",
         )
         self.assertRegex(
             strict_text,
