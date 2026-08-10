@@ -321,7 +321,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_element_vanka_external_diagonal_weight\s*=\s*0\.0\s*$",
+            r"(?m)^\s*ala_element_vanka_external_diagonal_weight\s*=\s*0\.5\s*$",
         )
         self.assertRegex(
             strict_text,
