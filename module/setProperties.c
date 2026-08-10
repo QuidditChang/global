@@ -1412,6 +1412,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        strcmp(E->control.ala_two_level_coarse_solver,"scaled_diagonal") != 0)
         myerror(E, "ala_two_level_coarse_solver must be jacobi, chebyshev, "
                 "or scaled_diagonal");
+    if(strcmp(E->control.ala_two_level_coarse_solver,"scaled_diagonal") == 0 &&
+       E->control.ala_radial_line_preconditioner)
+        myerror(E, "scaled_diagonal coarse solver requires diagonal pressure BPI");
     if(E->control.ala_two_level_coarse_eigenvalue_min <= 0.0 ||
        E->control.ala_two_level_coarse_eigenvalue_max <=
          E->control.ala_two_level_coarse_eigenvalue_min)

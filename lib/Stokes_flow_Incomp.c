@@ -5974,9 +5974,47 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
        linear symmetric maps for the outer standard PCG. */
     if(strcmp(E->control.ala_two_level_coarse_solver,
               "scaled_diagonal")==0) {
-        /* A deliberately recurrence-free coarse map.  Repeated diagonal
-           actions are accumulated algebraically so the result is exactly
-           alpha*P*D_c^-1*P^T and remains symmetric across MPI ranks. */
+        /* Balance the diagonal fine map before adding the recurrence-free
+           coarse map.  With Q=P*(P^T*P)^-1*P^T and diagonal M, replace M by
+           (I-Q)*M*(I-Q); this prevents the factor-two coarse component from
+           being counted once by BPI and again by P*D_c^-1*P^T. */
+        n=factor*factor*factor;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+                for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
+                    for(ez=1;ez<=E->lmesh.ELZ[lev];ez++) {
+                        e=ez+(ex-1)*E->lmesh.ELZ[lev]
+                            +(ey-1)*E->lmesh.ELZ[lev]*E->lmesh.ELX[lev];
+                        cx=(ex-1)/factor+1;
+                        cy=(ey-1)/factor+1;
+                        cz=(ez-1)/factor+1;
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        coarse_residual[m][ce] +=
+                            E->control.ala_pressure_bpi_weight
+                            *E->BPI[lev][m][e]*r[m][e];
+                        coarse_Ax[m][ce] +=
+                            E->control.ala_pressure_bpi_weight
+                            *E->BPI[lev][m][e]
+                            *coarse_rhs[m][ce]/(double)n;
+                    }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+                for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
+                    for(ez=1;ez<=E->lmesh.ELZ[lev];ez++) {
+                        e=ez+(ex-1)*E->lmesh.ELZ[lev]
+                            +(ey-1)*E->lmesh.ELZ[lev]*E->lmesh.ELX[lev];
+                        cx=(ex-1)/factor+1;
+                        cy=(ey-1)/factor+1;
+                        cz=(ez-1)/factor+1;
+                        ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
+                        z[m][e] += -coarse_residual[m][ce]/(double)n
+                            -E->control.ala_pressure_bpi_weight
+                             *E->BPI[lev][m][e]
+                             *coarse_rhs[m][ce]/(double)n
+                            +coarse_Ax[m][ce]/(double)n;
+                    }
+        /* Repeated diagonal actions are accumulated algebraically so the
+           coarse result is exactly alpha*P*D_c^-1*P^T. */
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(ce=1;ce<=cnpno;ce++)
                 coarse_x[m][ce]=

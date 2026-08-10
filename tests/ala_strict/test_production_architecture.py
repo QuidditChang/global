@@ -641,10 +641,17 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertIn('"scaled_diagonal") != 0', instructions)
         self.assertIn('["jacobi", "chebyshev", "scaled_diagonal"]', pyre)
         self.assertIn('"scaled_diagonal") != 0', properties)
+        self.assertIn(
+            "scaled_diagonal coarse solver requires diagonal pressure BPI",
+            instructions,
+        )
         branch = stokes[stokes.index('"scaled_diagonal")==0') :]
         branch = branch[: branch.index("else if")]
         self.assertIn("ala_two_level_coarse_iterations*damping", branch)
         self.assertIn("*cache->coarse_bpi[m][ce]*coarse_rhs[m][ce]", branch)
+        self.assertIn("n=factor*factor*factor", branch)
+        self.assertIn("-coarse_residual[m][ce]/(double)n", branch)
+        self.assertIn("+coarse_Ax[m][ce]/(double)n", branch)
         self.assertNotIn("apply_ala_galerkin_fixed_schur", branch)
 
     def test_stage8_pressure_multigrid_is_recursive_strict_ala(
