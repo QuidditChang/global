@@ -192,7 +192,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*off\s*$",
+            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -293,7 +293,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*1\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_sweeps\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -342,7 +342,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_factor2_coarse_correction\s*=\s*on\s*$",
+            r"(?m)^\s*ala_coupled_factor2_coarse_correction\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,

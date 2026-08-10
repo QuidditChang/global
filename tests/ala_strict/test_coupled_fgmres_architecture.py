@@ -130,6 +130,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             block.index("apply_ala_coupled_triangular_once("),
         )
         self.assertIn("projection=orthogonal_mean", block)
+        self.assertIn("coarse_solver=triangular", block)
         for path in (
             LIB_ROOT / "Instructions.c",
             GLOBAL_ROOT / "module/setProperties.c",
@@ -230,12 +231,22 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_shallow_vanka_layers             = 23", cfg
         )
         self.assertIn(
-            "ala_coupled_shallow_vanka_sweeps             = 1", cfg
+            "ala_coupled_shallow_vanka_sweeps             = 0", cfg
         )
-        self.assertIn("ala_shallow_patch_preconditioner   = off", cfg)
+        self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn(
+            "ala_shallow_patch_horizontal_elements = 6", cfg
+        )
+        self.assertIn(
+            "ala_shallow_patch_horizontal_stride   = 3", cfg
+        )
+        self.assertIn("ala_shallow_patch_mpi_overlap      = 3", cfg)
+        self.assertIn(
             "ala_shallow_patch_velocity_solver  = element_vanka", cfg
+        )
+        self.assertIn(
+            "ala_coupled_factor2_coarse_correction = off", cfg
         )
 
     def test_coupled_path_prebalances_every_momentum_residual(self) -> None:
