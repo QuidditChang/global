@@ -621,6 +621,31 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
         self.assertIn("schur=E->ALA_vanka_schur[lev][m][e];", region)
 
+    def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
+        block = _function_body(
+            self.stokes, "static void apply_ala_coupled_block_preconditioner("
+        )
+        triangular = block.index("apply_ala_coupled_triangular_once(")
+        defect = block.index("assemble_ala_coupled_block_defect(", triangular)
+        regional = block.index(
+            "apply_ala_coupled_element_vanka_region(", defect
+        )
+        update = block.index(
+            "ala_block_vector_axpy(E,1.0,correction_work,correction);",
+            regional,
+        )
+        self.assertLess(triangular, defect)
+        self.assertLess(defect, regional)
+        self.assertLess(regional, update)
+        self.assertIn("ala_coupled_shallow_vanka_layers,-1,0", block)
+        self.assertIn(
+            "upper_block_triangular_plus_shallow_vanka", self.stokes
+        )
+        for source in (self.instructions, self.properties):
+            self.assertIn(
+                '"a coupled V-cycle or triangular coupled_fgmres"', source
+            )
+
     def test_unaugmented_current_rheology_vanka_is_allowed(self) -> None:
         for source in (self.instructions, self.properties):
             self.assertIn(

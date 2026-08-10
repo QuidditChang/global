@@ -661,7 +661,8 @@ static void apply_ala_coupled_block_preconditioner(
     struct All_variables *E, const struct ala_block_vector *residual,
     struct ala_block_vector *correction,
     struct ala_block_vector *correction_work,
-    struct ala_block_vector *action_work, double **pressure_work,
+    struct ala_block_vector *action_work,
+    struct ala_block_vector *vanka_delta, double **pressure_work,
     double **velocity_work, int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache)
 {
@@ -736,6 +737,29 @@ static void apply_ala_coupled_block_preconditioner(
     }
     apply_ala_coupled_triangular_once(
         E,residual,correction,pressure_work,velocity_work,lev,iteration,cache);
+
+    /* Current-rheology shallow defect correction:
+     *
+     *   z_0 = P_tri^-1 r,
+     *   d   = r-A z_0,
+     *   z_1 = z_0+P_Vanka,shallow^-1 d.
+     *
+     * The triangular map retains the globally useful pressure direction;
+     * the true element K_gamma inverse is allowed to act only on the shallow
+     * fine-scale defect that dominated the completed 220-iteration audit.
+     * This avoids letting element-local coarse modes replace the global BPI
+     * direction, which the standalone gamma=1 and gamma=10 audits rejected. */
+    if(E->control.ala_coupled_shallow_vanka_sweeps>0) {
+        for(pass=0;pass<E->control.ala_coupled_shallow_vanka_sweeps;pass++) {
+            assemble_ala_coupled_block_defect(
+                E,residual,correction,action_work,vanka_delta,velocity_work,
+                lev);
+            apply_ala_coupled_element_vanka_region(
+                E,action_work,correction_work,vanka_delta,lev,
+                E->control.ala_coupled_shallow_vanka_layers,-1,0);
+            ala_block_vector_axpy(E,1.0,correction_work,correction);
+        }
+    }
 
     /* Multiplicative block defect correction:
      *
@@ -938,7 +962,7 @@ static float solve_ala_coupled_fgmres_core(
     void assemble_div_u();
     void parallel_process_termination();
     struct ala_block_vector *rhs,*r,*explicit_r,*w,*operator_work;
-    struct ala_block_vector *preconditioner_delta;
+    struct ala_block_vector *preconditioner_delta,*preconditioner_vanka_delta;
     struct ala_block_vector **vb,**zb;
     const char *acceptance_status;
     const char *preconditioner_name;
@@ -973,6 +997,7 @@ static float solve_ala_coupled_fgmres_core(
     w=ala_block_vector_create(E,lev);
     operator_work=ala_block_vector_create(E,lev);
     preconditioner_delta=ala_block_vector_create(E,lev);
+    preconditioner_vanka_delta=ala_block_vector_create(E,lev);
     vb=(struct ala_block_vector **)calloc(
         max_basis,sizeof(struct ala_block_vector *));
     zb=(struct ala_block_vector **)calloc(
@@ -1029,7 +1054,10 @@ static float solve_ala_coupled_fgmres_core(
     preconditioner_name=E->control.ala_coupled_multilevel_vcycle
         ? "coupled_multilevel_vcycle"
         : (E->control.ala_coupled_element_vanka
-           ? "coupled_element_vanka" : "upper_block_triangular");
+           ? "coupled_element_vanka"
+           : (E->control.ala_coupled_shallow_vanka_sweeps>0
+              ? "upper_block_triangular_plus_shallow_vanka"
+              : "upper_block_triangular"));
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA COUPLED FGMRES startup restart=%d "
                 "preconditioner=%s "
@@ -1085,7 +1113,8 @@ static float solve_ala_coupled_fgmres_core(
         used=0;
         for(j=0;j<restart && count<*steps_max;j++) {
             apply_ala_coupled_block_preconditioner(
-                E,vb[j],zb[j],preconditioner_delta,explicit_r,pressure_work,
+                E,vb[j],zb[j],preconditioner_delta,explicit_r,
+                preconditioner_vanka_delta,pressure_work,
                 operator_work->velocity,lev,count,cache);
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
@@ -1317,6 +1346,7 @@ static float solve_ala_coupled_fgmres_core(
     ala_block_vector_destroy(E,w);
     ala_block_vector_destroy(E,operator_work);
     ala_block_vector_destroy(E,preconditioner_delta);
+    ala_block_vector_destroy(E,preconditioner_vanka_delta);
     return((float)cancellation_l2);
 }
 

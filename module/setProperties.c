@@ -1359,9 +1359,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_coupled_shallow_vanka_layers and sweeps must both "
                 "be zero or both be positive");
     if(E->control.ala_coupled_shallow_vanka_sweeps > 0 &&
-       !E->control.ala_coupled_multilevel_vcycle)
+       !E->control.ala_coupled_multilevel_vcycle &&
+       (strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0 ||
+        E->control.ala_coupled_element_vanka))
         myerror(E, "ala_coupled_shallow_vanka_sweeps requires "
-                "ala_coupled_multilevel_vcycle=on");
+                "a coupled V-cycle or triangular coupled_fgmres");
     if(E->control.ala_coupled_shallow_vanka_warm_sweeps >= 0 &&
        E->control.ala_coupled_shallow_vanka_layers == 0)
         myerror(E, "ala_coupled_shallow_vanka_warm_sweeps requires "
