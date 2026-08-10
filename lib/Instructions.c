@@ -1001,8 +1001,9 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_element_vanka_damping > 1.0)
       myerror(E, "ala_element_vanka_damping must be in (0,1]");
   if(E->control.ala_element_vanka_pressure_damping <= 0.0 ||
-     E->control.ala_element_vanka_pressure_damping > 1.0)
-      myerror(E, "ala_element_vanka_pressure_damping must be in (0,1]");
+     E->control.ala_element_vanka_damping *
+       E->control.ala_element_vanka_pressure_damping > 1.0)
+      myerror(E, "effective element Vanka pressure damping must be in (0,1]");
   if(E->control.ala_element_vanka_regularization < 0.0 ||
      E->control.ala_element_vanka_regularization > 0.1)
       myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");

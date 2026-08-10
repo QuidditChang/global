@@ -1039,7 +1039,11 @@ class StrictProductionArchitectureTest(unittest.TestCase):
                 source,
             )
             self.assertIn(
-                "ala_element_vanka_pressure_damping must be in (0,1]",
+                "effective element Vanka pressure damping must be in (0,1]",
+                source,
+            )
+            self.assertIn(
+                "ala_element_vanka_damping *",
                 source,
             )
             self.assertIn(
