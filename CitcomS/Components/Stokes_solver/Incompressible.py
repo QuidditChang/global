@@ -202,7 +202,8 @@ class Incompressible(CitcomComponent):
             "ala_two_level_coarse_damping", default=0.03)
         ala_two_level_coarse_solver = prop.str(
             "ala_two_level_coarse_solver", default="chebyshev",
-            validator=prop.choice(["jacobi", "chebyshev"]))
+            validator=prop.choice(
+                ["jacobi", "chebyshev", "scaled_diagonal"]))
         ala_two_level_coarse_eigenvalue_min = prop.float(
             "ala_two_level_coarse_eigenvalue_min", default=0.01)
         ala_two_level_coarse_eigenvalue_max = prop.float(

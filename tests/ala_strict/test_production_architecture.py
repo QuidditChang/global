@@ -628,10 +628,19 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         instructions = (
             GLOBAL_ROOT / "lib" / "Instructions.c"
         ).read_text(encoding="utf-8")
+        pyre = (
+            GLOBAL_ROOT
+            / "CitcomS/Components/Stokes_solver/Incompressible.py"
+        ).read_text(encoding="utf-8")
+        properties = (
+            GLOBAL_ROOT / "module" / "setProperties.c"
+        ).read_text(encoding="utf-8")
         stokes = (
             GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
         ).read_text(encoding="utf-8")
         self.assertIn('"scaled_diagonal") != 0', instructions)
+        self.assertIn('["jacobi", "chebyshev", "scaled_diagonal"]', pyre)
+        self.assertIn('"scaled_diagonal") != 0', properties)
         branch = stokes[stokes.index('"scaled_diagonal")==0') :]
         branch = branch[: branch.index("else if")]
         self.assertIn("ala_two_level_coarse_iterations*damping", branch)
