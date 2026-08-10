@@ -699,6 +699,13 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         ):
             self.assertIn(token, apply)
 
+        interface = apply[apply.index("cache->interface_blocks[m]") :]
+        backward_solve = interface.index("for(i=n-1;i>=0;i--)")
+        solution_projection = interface.index(
+            "numerator += constant_mode[i]*solution[i]"
+        )
+        self.assertLess(backward_solve, solution_projection)
+
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
         block = _function_body(
             self.stokes, "static void apply_ala_coupled_block_preconditioner("

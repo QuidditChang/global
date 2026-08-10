@@ -5846,6 +5846,12 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         sum -= L[i*cache->interface_capacity+j]*solution[j];
                     solution[i]=sum/L[i*cache->interface_capacity+i];
                 }
+                for(i=n-1;i>=0;i--) {
+                    sum=solution[i];
+                    for(j=i+1;j<n;j++)
+                        sum -= L[j*cache->interface_capacity+i]*solution[j];
+                    solution[i]=sum/L[i*cache->interface_capacity+i];
+                }
                 if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                           "element_vanka")==0) {
                     numerator=denominator=0.0;
@@ -5856,12 +5862,6 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     sum=numerator/max(denominator,1.0e-300);
                     for(i=0;i<n;i++)
                         solution[i] -= sum*constant_mode[i];
-                }
-                for(i=n-1;i>=0;i--) {
-                    sum=solution[i];
-                    for(j=i+1;j<n;j++)
-                        sum -= L[j*cache->interface_capacity+i]*solution[j];
-                    solution[i]=sum/L[i*cache->interface_capacity+i];
                 }
                 for(i=0;i<n;i++) {
                     ref=cache->interface_elements[m]
