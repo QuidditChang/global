@@ -660,10 +660,10 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "=ala_element_vanka_schur_entry(E,e1,e2,lev,m);", self.stokes
         )
         self.assertIn(
-            "ala_shallow_patch_horizontal_elements = 2", self.strict_cfg
+            "ala_shallow_patch_horizontal_elements = 4", self.strict_cfg
         )
         self.assertIn(
-            "ala_shallow_patch_horizontal_stride   = 2", self.strict_cfg
+            "ala_shallow_patch_horizontal_stride   = 4", self.strict_cfg
         )
         self.assertIn(
             "ala_shallow_patch_mpi_overlap      = 1", self.strict_cfg
