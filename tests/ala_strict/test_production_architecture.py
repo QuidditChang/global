@@ -358,7 +358,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_two_level_preconditioner\s*=\s*on\s*$",
+            r"(?m)^\s*ala_two_level_preconditioner\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,

@@ -649,6 +649,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         )
 
     def test_pressure_aggregate_uses_current_rheology_vanka_metric(self) -> None:
+        self.assertIn("#define ALA_PATCH_RADIAL_ELEMENTS 3", self.stokes)
         self.assertIn(
             "static double ala_element_vanka_schur_entry(", self.stokes
         )

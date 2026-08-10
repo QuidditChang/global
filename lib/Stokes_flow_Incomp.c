@@ -1808,7 +1808,7 @@ static double strict_ala_inner_relative_accuracy(struct All_variables *E,
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
-#define ALA_PATCH_RADIAL_ELEMENTS 2
+#define ALA_PATCH_RADIAL_ELEMENTS 3
 #define ALA_PATCH_RADIAL_STRIDE 1
 #define ALA_PATCH_MPI_FACES 4
 #define ALA_PATCH_MAX_HORIZONTAL_ELEMENTS 8
