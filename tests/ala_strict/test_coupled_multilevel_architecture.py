@@ -669,6 +669,21 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_mpi_overlap      = 1", self.strict_cfg
         )
 
+    def test_pressure_aggregate_interface_carries_vanka_factors(self) -> None:
+        for token in (
+            "ALA_HALO_ELEMENT_RECORD_BASE_DOUBLES+ALA_VANKA_CHOL_SIZE",
+            "ALA_vanka_chol[lev][m]+e*ALA_VANKA_CHOL_SIZE",
+            "static double ala_halo_element_vanka_coupling(",
+            "patch_records,n,i,j",
+            '"halo_element_vanka"',
+        ):
+            self.assertIn(token, self.stokes)
+        interface = _function_body(
+            self.stokes, "static double ala_halo_element_vanka_coupling("
+        )
+        self.assertIn("support[50+i]", interface)
+        self.assertIn("rhs_left[i]*solution[i]", interface)
+
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
         block = _function_body(
             self.stokes, "static void apply_ala_coupled_block_preconditioner("

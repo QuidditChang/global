@@ -1813,7 +1813,9 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 #define ALA_PATCH_MPI_FACES 4
 #define ALA_PATCH_MAX_HORIZONTAL_ELEMENTS 8
 #define ALA_PATCH_MAX_MPI_OVERLAP 4
-#define ALA_HALO_ELEMENT_RECORD_DOUBLES 98
+#define ALA_HALO_ELEMENT_RECORD_BASE_DOUBLES 98
+#define ALA_HALO_ELEMENT_RECORD_DOUBLES \
+    (ALA_HALO_ELEMENT_RECORD_BASE_DOUBLES+ALA_VANKA_CHOL_SIZE)
 #define ALA_COARSE_POWER_ITERATIONS 6
 #define ALA_VELOCITY_POWER_ITERATIONS 6
 #define ALA_GLOBAL_ANGULAR_BASIS 16
@@ -2171,11 +2173,14 @@ static void ala_fill_halo_element_record(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache,
     int e, int lev, int m, int normal_layer, double *record)
 {
-    int a,d,node,p,eq;
+    int a,d,node,p,eq,k;
     double gradient[3],feature[3];
+    higher_precision *chol;
     const int ends=enodes[E->mesh.nsd];
     const int dims=E->mesh.nsd;
 
+    for(k=0;k<ALA_HALO_ELEMENT_RECORD_DOUBLES;k++)
+        record[k]=0.0;
     record[0]=(double)normal_layer;
     record[1]=1.0/E->BPI[lev][m][e];
     for(a=1;a<=ends;a++) {
@@ -2188,11 +2193,23 @@ static void ala_fill_halo_element_record(struct All_variables *E,
                 gradient[d-1] += E->elt_c[lev][m][e].c[p][0];
             eq=E->ID[lev][m][node].doff[d];
             record[26+p]=gradient[d-1];
-            record[50+p]=E->ALA_velocity_BI[lev][m][eq];
+            record[50+p]=
+                strcmp(E->control.ala_shallow_patch_velocity_solver,
+                       "element_vanka")==0
+                ? E->ALA_vanka_overlap_BI[lev][m][eq]
+                : E->ALA_velocity_BI[lev][m][eq];
         }
         ala_velocity_node_feature(cache,m,node,dims,gradient,feature);
         for(d=0;d<dims;d++)
             record[74+(a-1)*dims+d]=feature[d];
+    }
+    if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+              "element_vanka")==0) {
+        if(!E->ALA_vanka_valid[lev][m][e])
+            myerror(E,"ALA halo record found invalid Vanka factor");
+        chol=E->ALA_vanka_chol[lev][m]+e*ALA_VANKA_CHOL_SIZE;
+        for(k=0;k<ALA_VANKA_CHOL_SIZE;k++)
+            record[ALA_HALO_ELEMENT_RECORD_BASE_DOUBLES+k]=(double)chol[k];
     }
 }
 
@@ -2226,6 +2243,81 @@ static double ala_halo_record_coupling(struct All_variables *E,
                 }
             }
         }
+    return(value);
+}
+
+
+/* Build an interface pressure Gram entry from the Vanka factors carried by
+   every local-plus-ghost pressure element in this interface block.  Each
+   pressure element also acts as one additive velocity patch.  Restrict both
+   pressure gradients to that patch with the same inverse-square-root
+   multiplicity used by the rank-local aggregate, solve its cached K_gamma
+   factor, and accumulate the cross product.  Using the identical patch list
+   for every matrix entry makes the MPI interface block symmetric positive
+   semidefinite before regularization. */
+static double ala_halo_element_vanka_coupling(
+    const double records[ALA_PATCH_MAX_ELEMENTS]
+                        [ALA_HALO_ELEMENT_RECORD_DOUBLES],
+    int n, int left_index, int right_index)
+{
+    int patch,a,b,d,i,j,k;
+    double rhs_left[ALA_VANKA_DOF],rhs_right[ALA_VANKA_DOF];
+    double forward[ALA_VANKA_DOF],solution[ALA_VANKA_DOF];
+    double dx,dy,dz,distance2,weight,sum,value,diagonal;
+    const double *left,*right,*support,*chol;
+    const double coordinate_tolerance2=1.0e-18;
+
+    left=records[left_index];
+    right=records[right_index];
+    value=0.0;
+    for(patch=0;patch<n;patch++) {
+        support=records[patch];
+        chol=support+ALA_HALO_ELEMENT_RECORD_BASE_DOUBLES;
+        for(i=0;i<ALA_VANKA_DOF;i++)
+            rhs_left[i]=rhs_right[i]=forward[i]=solution[i]=0.0;
+        for(a=0;a<8;a++)
+            for(b=0;b<8;b++) {
+                dx=support[2+3*a]-left[2+3*b];
+                dy=support[3+3*a]-left[3+3*b];
+                dz=support[4+3*a]-left[4+3*b];
+                distance2=dx*dx+dy*dy+dz*dz;
+                if(distance2<=coordinate_tolerance2)
+                    for(d=0;d<3;d++) {
+                        i=3*a+d;
+                        j=3*b+d;
+                        weight=sqrt(max(support[50+i],0.0));
+                        rhs_left[i]=weight*left[26+j];
+                    }
+                dx=support[2+3*a]-right[2+3*b];
+                dy=support[3+3*a]-right[3+3*b];
+                dz=support[4+3*a]-right[4+3*b];
+                distance2=dx*dx+dy*dy+dz*dz;
+                if(distance2<=coordinate_tolerance2)
+                    for(d=0;d<3;d++) {
+                        i=3*a+d;
+                        j=3*b+d;
+                        weight=sqrt(max(support[50+i],0.0));
+                        rhs_right[i]=weight*right[26+j];
+                    }
+            }
+        for(i=0;i<ALA_VANKA_DOF;i++) {
+            sum=rhs_right[i];
+            for(k=0;k<i;k++)
+                sum -= chol[i*(i+1)/2+k]*forward[k];
+            diagonal=chol[i*(i+1)/2+i];
+            if(!isfinite(diagonal) || diagonal<=0.0)
+                return(NAN);
+            forward[i]=sum/diagonal;
+        }
+        for(i=ALA_VANKA_DOF-1;i>=0;i--) {
+            sum=forward[i];
+            for(k=i+1;k<ALA_VANKA_DOF;k++)
+                sum -= chol[k*(k+1)/2+i]*solution[k];
+            solution[i]=sum/chol[i*(i+1)/2+i];
+        }
+        for(i=0;i<ALA_VANKA_DOF;i++)
+            value += rhs_left[i]*solution[i];
+    }
     return(value);
 }
 
@@ -2864,6 +2956,11 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         for(j=0;j<=i;j++) {
                             if(strcmp(E->control
                                       .ala_shallow_patch_velocity_solver,
+                                      "element_vanka")==0)
+                                matrix[i][j]=ala_halo_element_vanka_coupling(
+                                    patch_records,n,i,j);
+                            else if(strcmp(E->control
+                                      .ala_shallow_patch_velocity_solver,
                                       "node_block")==0)
                                 matrix[i][j]=ala_halo_record_coupling(
                                     E,patch_records[i],patch_records[j]);
@@ -2996,6 +3093,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
+                "interface_velocity_metric=%s "
                 "operator=principal((D+C)Mv^-1(D+C)^T) "
                 "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
@@ -3012,6 +3110,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
+                strcmp(E->control.ala_shallow_patch_velocity_solver,
+                       "element_vanka")==0
+                    ? "halo_element_vanka" : "halo_nodal",
                 global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
@@ -3023,6 +3124,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "interface_block=%dx%dx2 partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
+                "interface_velocity_metric=%s "
                 "operator=principal((D+C)Mv^-1(D+C)^T) "
                 "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
@@ -3039,6 +3141,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
+                strcmp(E->control.ala_shallow_patch_velocity_solver,
+                       "element_vanka")==0
+                    ? "halo_element_vanka" : "halo_nodal",
                 global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
