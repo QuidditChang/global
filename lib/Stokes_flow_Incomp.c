@@ -5972,7 +5972,18 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     /* Both coarse solvers are fixed polynomials of the Galerkin ALA operator.
        With zero initial state and the BPI similarity transform, they define
        linear symmetric maps for the outer standard PCG. */
-    if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi")==0) {
+    if(strcmp(E->control.ala_two_level_coarse_solver,
+              "scaled_diagonal")==0) {
+        /* A deliberately recurrence-free coarse map.  Repeated diagonal
+           actions are accumulated algebraically so the result is exactly
+           alpha*P*D_c^-1*P^T and remains symmetric across MPI ranks. */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ce=1;ce<=cnpno;ce++)
+                coarse_x[m][ce]=
+                    E->control.ala_two_level_coarse_iterations*damping
+                    *cache->coarse_bpi[m][ce]*coarse_rhs[m][ce];
+    }
+    else if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi")==0) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(ce=1;ce<=cnpno;ce++)
                 coarse_residual[m][ce]=coarse_rhs[m][ce];

@@ -362,7 +362,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_two_level_coarse_solver\s*=\s*chebyshev\s*$",
+            r"(?m)^\s*ala_two_level_coarse_solver\s*=\s*scaled_diagonal\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -623,6 +623,20 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             stokes,
         )
         self.assertIn("BPI_weight=%e", stokes)
+
+    def test_scaled_diagonal_coarse_map_is_recurrence_free(self) -> None:
+        instructions = (
+            GLOBAL_ROOT / "lib" / "Instructions.c"
+        ).read_text(encoding="utf-8")
+        stokes = (
+            GLOBAL_ROOT / "lib" / "Stokes_flow_Incomp.c"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"scaled_diagonal") != 0', instructions)
+        branch = stokes[stokes.index('"scaled_diagonal")==0') :]
+        branch = branch[: branch.index("else if")]
+        self.assertIn("ala_two_level_coarse_iterations*damping", branch)
+        self.assertIn("*cache->coarse_bpi[m][ce]*coarse_rhs[m][ce]", branch)
+        self.assertNotIn("apply_ala_galerkin_fixed_schur", branch)
 
     def test_stage8_pressure_multigrid_is_recursive_strict_ala(
         self,

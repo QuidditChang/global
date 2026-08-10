@@ -871,8 +871,10 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_two_level_coarse_damping >= 2.0/27.0)
       myerror(E, "ala_two_level_coarse_damping must be in (0,2/27)");
   if(strcmp(E->control.ala_two_level_coarse_solver,"jacobi") != 0 &&
-     strcmp(E->control.ala_two_level_coarse_solver,"chebyshev") != 0)
-      myerror(E, "ala_two_level_coarse_solver must be jacobi or chebyshev");
+     strcmp(E->control.ala_two_level_coarse_solver,"chebyshev") != 0 &&
+     strcmp(E->control.ala_two_level_coarse_solver,"scaled_diagonal") != 0)
+      myerror(E, "ala_two_level_coarse_solver must be jacobi, chebyshev, "
+              "or scaled_diagonal");
   if(E->control.ala_two_level_coarse_eigenvalue_min <= 0.0 ||
      E->control.ala_two_level_coarse_eigenvalue_max <=
        E->control.ala_two_level_coarse_eigenvalue_min)
