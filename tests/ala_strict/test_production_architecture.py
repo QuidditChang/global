@@ -73,6 +73,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
             "ala_shallow_patch_preconditioner",
+            "ala_shallow_patch_weight",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
             "ala_coupled_initial_velocity_relative_tolerance",
@@ -144,7 +145,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*0\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -181,7 +182,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*off\s*$",
+            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
