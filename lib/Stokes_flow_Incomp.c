@@ -1808,7 +1808,7 @@ static double strict_ala_inner_relative_accuracy(struct All_variables *E,
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
-#define ALA_PATCH_RADIAL_ELEMENTS 3
+#define ALA_PATCH_RADIAL_ELEMENTS 2
 #define ALA_PATCH_RADIAL_STRIDE 1
 #define ALA_PATCH_MPI_FACES 4
 #define ALA_PATCH_MAX_HORIZONTAL_ELEMENTS 8
@@ -3089,8 +3089,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     if(E->parallel.me==0) {
         fprintf(E->fp,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
-                "interface_block=%dx%dx2 partition_of_unity=global "
+                "block=%dx%dx%d stride=%dx%dx1 mpi_halo_overlap=%d "
+                "interface_block=%dx%dx%d partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
                 "interface_velocity_metric=%s "
@@ -3105,8 +3105,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 horizontal_elements,horizontal_elements,
+                ALA_PATCH_RADIAL_ELEMENTS,
                 horizontal_stride,horizontal_stride,overlap,
-                2*overlap,horizontal_elements,
+                2*overlap,horizontal_elements,ALA_PATCH_RADIAL_ELEMENTS,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
@@ -3120,8 +3121,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 global_fallback,global_min_pivot_ratio,
                 global_cache_bytes/(1024.0*1024.0),global_build_seconds);
         fprintf(stderr,"ALA shallow-patch preconditioner depth_km=%e "
-                "block=%dx%dx2 stride=%dx%dx1 mpi_halo_overlap=%d "
-                "interface_block=%dx%dx2 partition_of_unity=global "
+                "block=%dx%dx%d stride=%dx%dx1 mpi_halo_overlap=%d "
+                "interface_block=%dx%dx%d partition_of_unity=global "
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
                 "interface_velocity_metric=%s "
@@ -3136,8 +3137,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "build_seconds_max=%e\n",
                 E->control.ala_shallow_patch_depth_km,
                 horizontal_elements,horizontal_elements,
+                ALA_PATCH_RADIAL_ELEMENTS,
                 horizontal_stride,horizontal_stride,overlap,
-                2*overlap,horizontal_elements,
+                2*overlap,horizontal_elements,ALA_PATCH_RADIAL_ELEMENTS,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
