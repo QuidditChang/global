@@ -1232,6 +1232,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_element_vanka_pressure_damping, fp);
     getDoubleProperty(properties, "ala_element_vanka_regularization",
                       E->control.ala_element_vanka_regularization, fp);
+    getDoubleProperty(properties, "ala_element_vanka_external_diagonal_weight",
+                      E->control.ala_element_vanka_external_diagonal_weight,
+                      fp);
     getIntProperty(properties, "ala_element_vanka_galerkin_schur",
                    E->control.ala_element_vanka_galerkin_schur, fp);
     getIntProperty(properties, "ala_element_vanka_rebuild_interval",
@@ -1536,6 +1539,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_element_vanka_regularization < 0.0 ||
        E->control.ala_element_vanka_regularization > 0.1)
         myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
+    if(E->control.ala_element_vanka_external_diagonal_weight < 0.0 ||
+       E->control.ala_element_vanka_external_diagonal_weight > 1.0)
+        myerror(E, "ala_element_vanka_external_diagonal_weight must be in [0,1]");
     if(E->control.ala_element_vanka_rebuild_interval < 1 ||
        E->control.ala_element_vanka_rebuild_interval > 100)
         myerror(E, "ala_element_vanka_rebuild_interval must be in [1,100]");

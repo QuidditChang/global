@@ -566,7 +566,9 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                                     matrix[i*n+i]);
                             myerror(E,"ALA element-Vanka external diagonal is negative");
                         }
-                        matrix[i*n+i] += max(external,0.0);
+                        matrix[i*n+i] +=
+                            E->control.ala_element_vanka_external_diagonal_weight
+                            *max(external,0.0);
                         maxdiag=max(maxdiag,matrix[i*n+i]);
                     }
                 }
@@ -703,18 +705,22 @@ void build_ala_element_vanka_factors(struct All_variables *E)
         fprintf(E->fp,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
                 "regularization=%e min_pivot_ratio=%e "
+                "external_diagonal_weight=%e "
                 "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
                 E->control.ala_element_vanka_regularization,global_min_ratio,
+                E->control.ala_element_vanka_external_diagonal_weight,
                 global_build_seconds,E->monitor.solution_cycles);
         fprintf(stderr,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
                 "regularization=%e min_pivot_ratio=%e "
+                "external_diagonal_weight=%e "
                 "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
                 E->control.ala_element_vanka_regularization,global_min_ratio,
+                E->control.ala_element_vanka_external_diagonal_weight,
                 global_build_seconds,E->monitor.solution_cycles);
         fflush(E->fp);
         fflush(stderr);

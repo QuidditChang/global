@@ -698,6 +698,9 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_element_vanka_pressure_damping),"1.0",m);
   input_double("ala_element_vanka_regularization",
                &(E->control.ala_element_vanka_regularization),"1.0e-8",m);
+  input_double("ala_element_vanka_external_diagonal_weight",
+               &(E->control.ala_element_vanka_external_diagonal_weight),
+               "1.0",m);
   input_boolean("ala_element_vanka_galerkin_schur",
                 &(E->control.ala_element_vanka_galerkin_schur),"off",m);
   input_int("ala_element_vanka_rebuild_interval",
@@ -997,6 +1000,9 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_element_vanka_regularization < 0.0 ||
      E->control.ala_element_vanka_regularization > 0.1)
       myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
+  if(E->control.ala_element_vanka_external_diagonal_weight < 0.0 ||
+     E->control.ala_element_vanka_external_diagonal_weight > 1.0)
+      myerror(E, "ala_element_vanka_external_diagonal_weight must be in [0,1]");
   if(E->control.ala_element_vanka_rebuild_interval < 1 ||
      E->control.ala_element_vanka_rebuild_interval > 100)
       myerror(E, "ala_element_vanka_rebuild_interval must be in [1,100]");
@@ -1678,6 +1684,7 @@ void global_default_values(E)
     E->control.ala_element_vanka_damping = 0.8;
     E->control.ala_element_vanka_pressure_damping = 1.0;
     E->control.ala_element_vanka_regularization = 1.0e-8;
+    E->control.ala_element_vanka_external_diagonal_weight = 1.0;
     E->control.ala_element_vanka_galerkin_schur = 0;
     E->control.ala_element_vanka_rebuild_interval = 1;
     E->control.ala_element_vanka_last_build_cycle = -1;

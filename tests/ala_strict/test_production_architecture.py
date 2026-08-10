@@ -65,6 +65,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_augmented_lagrangian_gamma",
             "ala_element_vanka_damping",
             "ala_element_vanka_pressure_damping",
+            "ala_element_vanka_external_diagonal_weight",
             "ala_element_vanka_galerkin_schur",
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
@@ -309,6 +310,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*0\.25\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_element_vanka_external_diagonal_weight\s*=\s*0\.0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -910,6 +915,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             'input_double("ala_element_vanka_pressure_damping",', instructions
         )
         self.assertIn(
+            'input_double("ala_element_vanka_external_diagonal_weight",',
+            instructions,
+        )
+        self.assertIn(
             'input_boolean("ala_element_vanka_galerkin_schur",', instructions
         )
         self.assertIn(
@@ -917,6 +926,9 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertIn(
             '"ala_element_vanka_pressure_damping", default=1.0', pyre
+        )
+        self.assertIn(
+            '"ala_element_vanka_external_diagonal_weight", default=1.0', pyre
         )
         self.assertIn(
             '"ala_element_vanka_galerkin_schur", default=False', pyre
@@ -930,11 +942,16 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             properties,
         )
         self.assertIn(
+            'getDoubleProperty(properties, '
+            '"ala_element_vanka_external_diagonal_weight",', properties
+        )
+        self.assertIn(
             'getIntProperty(properties, "ala_element_vanka_galerkin_schur",',
             properties,
         )
         self.assertIn("ala_element_vanka_rebuild_interval", output)
         self.assertIn("ala_element_vanka_pressure_damping", output)
+        self.assertIn("ala_element_vanka_external_diagonal_weight", output)
         self.assertIn("ala_element_vanka_last_build_cycle", construct)
         self.assertIn("factor_age>=0", construct)
         self.assertIn("build_ala_element_vanka_factors(E);", construct)
@@ -949,6 +966,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             )
             self.assertIn(
                 "ala_element_vanka_pressure_damping must be in (0,1]",
+                source,
+            )
+            self.assertIn(
+                "ala_element_vanka_external_diagonal_weight must be in [0,1]",
                 source,
             )
 

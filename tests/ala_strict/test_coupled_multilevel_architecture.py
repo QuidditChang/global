@@ -629,6 +629,17 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("region_weight*local_weight[i]", region)
         self.assertIn("overlap_contract=sqrt_partition", region)
 
+    def test_vanka_velocity_factor_can_remove_external_diagonal(self) -> None:
+        builder = _function_body(
+            self.construct, "void build_ala_element_vanka_factors("
+        )
+        self.assertIn(
+            "E->control.ala_element_vanka_external_diagonal_weight",
+            builder,
+        )
+        self.assertIn("*max(external,0.0)", builder)
+        self.assertIn("external_diagonal_weight=%e", builder)
+
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
         block = _function_body(
             self.stokes, "static void apply_ala_coupled_block_preconditioner("

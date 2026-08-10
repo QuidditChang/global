@@ -563,6 +563,7 @@ struct CONTROL {
     double ala_element_vanka_damping;
     double ala_element_vanka_pressure_damping;
     double ala_element_vanka_regularization;
+    double ala_element_vanka_external_diagonal_weight;
     int ala_element_vanka_galerkin_schur;
     int ala_element_vanka_rebuild_interval;
     int ala_element_vanka_last_build_cycle;
