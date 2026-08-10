@@ -105,6 +105,9 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coarse_residual_interval",
             "ala_coarse_residual_levels",
             "ala_two_level_preconditioner",
+            "ala_two_level_coarse_solver",
+            "ala_two_level_coarse_iterations",
+            "ala_two_level_coarse_damping",
             "file_vbcs",
             "lith_age",
             "lith_age_time",
@@ -355,6 +358,18 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_two_level_preconditioner\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_two_level_coarse_solver\s*=\s*jacobi\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_two_level_coarse_iterations\s*=\s*1\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*0\.2\s*$",
         )
         self.assertRegex(
             strict_text,
