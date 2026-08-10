@@ -1478,9 +1478,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "twice ala_shallow_patch_mpi_overlap must not exceed "
                 "ala_shallow_patch_horizontal_elements");
     if(strcmp(E->control.ala_shallow_patch_velocity_solver,"diagonal") != 0 &&
-       strcmp(E->control.ala_shallow_patch_velocity_solver,"node_block") != 0)
-        myerror(E, "ala_shallow_patch_velocity_solver must be diagonal or "
-                "node_block");
+       strcmp(E->control.ala_shallow_patch_velocity_solver,"node_block") != 0 &&
+       strcmp(E->control.ala_shallow_patch_velocity_solver,"element_vanka") != 0)
+        myerror(E, "ala_shallow_patch_velocity_solver must be diagonal, "
+                "node_block, or element_vanka");
     if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
         myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
     if(strcmp(E->control.ala_geneo_basis_type,"spectral") != 0 &&

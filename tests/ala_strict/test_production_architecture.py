@@ -516,8 +516,17 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             incompressible,
         )
         self.assertIn(
+            '["diagonal", "node_block", "element_vanka"]',
+            incompressible,
+        )
+        self.assertIn(
             'getStringProperty(properties, '
             '"ala_shallow_patch_velocity_solver"',
+            properties,
+        )
+        self.assertIn(
+            'strcmp(E->control.ala_shallow_patch_velocity_solver,'
+            '"element_vanka") != 0',
             properties,
         )
         self.assertIn(
