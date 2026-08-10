@@ -149,7 +149,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*20\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*5\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -357,7 +357,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_bpi_weight\s*=\s*1\.0\s*$",
+            r"(?m)^\s*ala_pressure_bpi_weight\s*=\s*0\.35\s*$",
         )
         self.assertRegex(
             strict_text,
