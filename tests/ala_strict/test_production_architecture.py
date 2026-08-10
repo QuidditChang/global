@@ -300,7 +300,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_augmented_lagrangian_gamma\s*=\s*1\.0\s*$",
+            r"(?m)^\s*ala_augmented_lagrangian_gamma\s*=\s*10\.0\s*$",
         )
         self.assertRegex(
             strict_text,
