@@ -220,6 +220,7 @@ static void apply_ala_coupled_element_vanka_region(
     static int reported_band_cycle[MAX_LEVELS];
     static unsigned char reported_band_valid[MAX_LEVELS];
     double velocity_rhs[ALA_VANKA_DOF],gradient[ALA_VANKA_DOF];
+    double local_weight[ALA_VANKA_DOF];
     double velocity_base[ALA_VANKA_DOF],velocity_pressure[ALA_VANKA_DOF];
     double pressure_rhs,pressure_solution,schur;
     double damping,weight,region_weight,taper_position;
@@ -251,6 +252,45 @@ static void apply_ala_coupled_element_vanka_region(
     local_min=1.0e300;
     local_max=0.0;
 
+    /* Build the regional velocity partition before any local solve.  The
+     * same inverse-square-root multiplicity is used to restrict the velocity
+     * residual and G^T column and to prolong the velocity correction.  This
+     * makes the local mixed Schur denominator belong to the actual weighted
+     * patch map instead of combining an unweighted Schur with a one-sided
+     * overlap average. */
+    if(shallow) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NEL[lev];e++) {
+                radial_element=(e-1)%elz;
+                global_radial_element=E->lmesh.EZS[lev]+radial_element;
+                if(global_radial_element<
+                   E->mesh.ELZ[lev]-selected_layers)
+                    continue;
+                depth_layer=E->mesh.ELZ[lev]-1-global_radial_element;
+                if(band_only && depth_layer<selected_core)
+                    continue;
+                for(a=1;a<=ends;a++) {
+                    node=E->IEN[lev][m][e].node[a];
+                    for(d=0;d<dims;d++) {
+                        eq=E->ID[lev][m][node].doff[d+1];
+                        fixed=(d==0 && (E->NODE[lev][m][node]&VBX)) ||
+                              (d==1 && (E->NODE[lev][m][node]&VBY)) ||
+                              (d==2 && (E->NODE[lev][m][node]&VBZ));
+                        if(!fixed)
+                            correction->velocity[m][eq] += 1.0;
+                    }
+                }
+            }
+        (E->solver.exchange_id_d)(E,correction->velocity,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(eq=0;eq<neq;eq++)
+                correction->velocity[m][eq]=
+                    correction->velocity[m][eq]>0.0
+                    ? 1.0/sqrt(correction->velocity[m][eq]) : 0.0;
+            correction->velocity[m][neq]=0.0;
+        }
+    }
+
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NEL[lev];e++) {
             radial_element=(e-1)%elz;
@@ -278,12 +318,15 @@ static void apply_ala_coupled_element_vanka_region(
                     fixed=(d==0 && (E->NODE[lev][m][node]&VBX)) ||
                           (d==1 && (E->NODE[lev][m][node]&VBY)) ||
                           (d==2 && (E->NODE[lev][m][node]&VBZ));
-                    if(shallow && !fixed)
-                        correction->velocity[m][eq] += 1.0;
-                    velocity_rhs[i]=fixed ? 0.0 : residual->velocity[m][eq];
-                    gradient[i]=fixed ? 0.0 :
-                        E->elt_del[lev][m][e].g[i][0]
-                       +E->elt_c[lev][m][e].c[i][0];
+                    weight=shallow
+                        ? correction->velocity[m][eq]
+                        : sqrt(E->ALA_vanka_overlap_BI[lev][m][eq]);
+                    local_weight[i]=fixed ? 0.0 : weight;
+                    velocity_rhs[i]=local_weight[i]
+                        *residual->velocity[m][eq];
+                    gradient[i]=local_weight[i]
+                        *(E->elt_del[lev][m][e].g[i][0]
+                          +E->elt_c[lev][m][e].c[i][0]);
                 }
             }
             for(i=0;i<ALA_VANKA_DOF;i++)
@@ -294,10 +337,12 @@ static void apply_ala_coupled_element_vanka_region(
                    chol,gradient,velocity_pressure))
                 myerror(E,"Coupled element-Vanka velocity solve failed");
             pressure_rhs=residual->pressure[m][e];
-            schur=E->ALA_vanka_schur[lev][m][e];
+            schur=E->control.ala_element_vanka_regularization
+                *E->ECO[lev][m][e].area;
             pressure_solution=-pressure_rhs;
             for(i=0;i<ALA_VANKA_DOF;i++) {
                 pressure_solution += gradient[i]*velocity_base[i];
+                schur += gradient[i]*velocity_pressure[i];
             }
             if(!isfinite(schur) || schur<=1.0e-300)
                 myerror(E,"Coupled element-Vanka pressure Schur is invalid");
@@ -313,7 +358,7 @@ static void apply_ala_coupled_element_vanka_region(
                 for(d=0;d<dims;d++) {
                     i=(a-1)*dims+d;
                     eq=E->ID[lev][m][node].doff[d+1];
-                    delta->velocity[m][eq] += region_weight
+                    delta->velocity[m][eq] += region_weight*local_weight[i]
                         *(velocity_base[i]
                           -velocity_pressure[i]*pressure_solution);
                 }
@@ -326,17 +371,9 @@ static void apply_ala_coupled_element_vanka_region(
         }
 
     (E->solver.exchange_id_d)(E,delta->velocity,lev);
-    if(shallow)
-        (E->solver.exchange_id_d)(E,correction->velocity,lev);
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         for(eq=0;eq<neq;eq++) {
-            if(shallow)
-                weight=correction->velocity[m][eq]>0.0
-                    ? 1.0/correction->velocity[m][eq] : 0.0;
-            else
-                weight=E->ALA_vanka_overlap_BI[lev][m][eq];
-            correction->velocity[m][eq]=damping*weight
-                                            *delta->velocity[m][eq];
+            correction->velocity[m][eq]=damping*delta->velocity[m][eq];
         }
         correction->velocity[m][neq]=0.0;
         correction->pressure[m][0]=0.0;
@@ -369,6 +406,7 @@ static void apply_ala_coupled_element_vanka_region(
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
                     "region=%s radial_layers=%d core_layers=%d window=%s "
+                    "overlap_contract=sqrt_partition "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     E->control.ala_element_vanka_pressure_damping,
@@ -383,6 +421,7 @@ static void apply_ala_coupled_element_vanka_region(
                     "pressure_regularization=%e "
                     "local_schur_range=[%e,%e] fallback_count=0 "
                     "region=%s radial_layers=%d core_layers=%d window=%s "
+                    "overlap_contract=sqrt_partition "
                     "diagnostic_scope=first_application_per_cycle\n",
                     lev,E->monitor.solution_cycles,global_patches,damping,
                     E->control.ala_element_vanka_pressure_damping,

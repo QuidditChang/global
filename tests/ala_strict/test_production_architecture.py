@@ -308,7 +308,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*2\.0\s*$",
+            r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*0\.25\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -948,7 +948,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
                 source,
             )
             self.assertIn(
-                "ala_element_vanka_pressure_damping must be in (0,4]",
+                "ala_element_vanka_pressure_damping must be in (0,1]",
                 source,
             )
 

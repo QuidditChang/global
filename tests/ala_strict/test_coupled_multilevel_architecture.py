@@ -606,7 +606,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("shallow_cold_sweeps=%d shallow_warm_sweeps=%d", block)
         self.assertIn('solution_start=%s', block)
 
-    def test_viscosity_spectrum_reuses_cached_local_schur(self) -> None:
+    def test_vanka_application_rebuilds_overlap_consistent_local_schur(self) -> None:
         builder = _function_body(
             self.construct, "void build_ala_element_vanka_factors("
         )
@@ -619,7 +619,15 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             self.stokes,
             "static void apply_ala_coupled_element_vanka_region(",
         )
-        self.assertIn("schur=E->ALA_vanka_schur[lev][m][e];", region)
+        self.assertIn("1.0/sqrt(correction->velocity[m][eq])", region)
+        self.assertIn(
+            "sqrt(E->ALA_vanka_overlap_BI[lev][m][eq])", region
+        )
+        self.assertIn("velocity_rhs[i]=local_weight[i]", region)
+        self.assertIn("gradient[i]=local_weight[i]", region)
+        self.assertIn("schur += gradient[i]*velocity_pressure[i];", region)
+        self.assertIn("region_weight*local_weight[i]", region)
+        self.assertIn("overlap_contract=sqrt_partition", region)
 
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
         block = _function_body(
@@ -736,7 +744,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "E->mesh.ELZ[lev]-selected_layers",
             "correction->velocity[m][eq] += 1.0",
             "exchange_id_d)(E,correction->velocity,lev)",
-            "1.0/correction->velocity[m][eq]",
+            "1.0/sqrt(correction->velocity[m][eq])",
             'shallow ? "shallow_core" : "full"',
         ):
             self.assertIn(token, region)
