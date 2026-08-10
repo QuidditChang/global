@@ -663,7 +663,7 @@ static void apply_ala_coupled_block_preconditioner(
     struct ala_block_vector *correction_work,
     struct ala_block_vector *action_work,
     struct ala_block_vector *vanka_delta, double **pressure_work,
-    double **velocity_work, int lev, int iteration,
+    struct ala_block_vector *operator_work, int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache)
 {
     int m,i,e,pass,neq,npno;
@@ -736,7 +736,8 @@ static void apply_ala_coupled_block_preconditioner(
         return;
     }
     apply_ala_coupled_triangular_once(
-        E,residual,correction,pressure_work,velocity_work,lev,iteration,cache);
+        E,residual,correction,pressure_work,operator_work->velocity,lev,
+        iteration,cache);
 
     /* Current-rheology shallow defect correction:
      *
@@ -752,7 +753,7 @@ static void apply_ala_coupled_block_preconditioner(
     if(E->control.ala_coupled_shallow_vanka_sweeps>0) {
         for(pass=0;pass<E->control.ala_coupled_shallow_vanka_sweeps;pass++) {
             assemble_ala_coupled_block_defect(
-                E,residual,correction,action_work,vanka_delta,velocity_work,
+                E,residual,correction,action_work,vanka_delta,operator_work,
                 lev);
             apply_ala_coupled_element_vanka_region(
                 E,action_work,correction_work,vanka_delta,lev,
@@ -774,7 +775,8 @@ static void apply_ala_coupled_block_preconditioner(
     for(pass=0;pass<E->control.ala_coupled_defect_corrections;pass++) {
         apply_ala_coupled_operator(
             E,correction->velocity,correction->pressure,
-            action_work->velocity,action_work->pressure,velocity_work,lev);
+            action_work->velocity,action_work->pressure,
+            operator_work->velocity,lev);
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             for(i=0;i<neq;i++)
                 action_work->velocity[m][i]=residual->velocity[m][i]
@@ -786,8 +788,8 @@ static void apply_ala_coupled_block_preconditioner(
                                                 -action_work->pressure[m][e];
         }
         apply_ala_coupled_triangular_once(
-            E,action_work,correction_work,pressure_work,velocity_work,lev,
-            iteration,cache);
+            E,action_work,correction_work,pressure_work,
+            operator_work->velocity,lev,iteration,cache);
         ala_block_vector_axpy(E,1.0,correction_work,correction);
     }
 }
@@ -1115,7 +1117,7 @@ static float solve_ala_coupled_fgmres_core(
             apply_ala_coupled_block_preconditioner(
                 E,vb[j],zb[j],preconditioner_delta,explicit_r,
                 preconditioner_vanka_delta,pressure_work,
-                operator_work->velocity,lev,count,cache);
+                operator_work,lev,count,cache);
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);

@@ -638,6 +638,13 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertLess(defect, regional)
         self.assertLess(regional, update)
         self.assertIn("ala_coupled_shallow_vanka_layers,-1,0", block)
+        self.assertIn("struct ala_block_vector *operator_work", block)
+        self.assertIn(
+            "action_work,vanka_delta,operator_work,", block
+        )
+        self.assertNotIn(
+            "action_work,vanka_delta,velocity_work,", block
+        )
         self.assertIn(
             "upper_block_triangular_plus_shallow_vanka", self.stokes
         )
