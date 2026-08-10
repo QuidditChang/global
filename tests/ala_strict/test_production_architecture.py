@@ -104,6 +104,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coarse_residual_diagnostics",
             "ala_coarse_residual_interval",
             "ala_coarse_residual_levels",
+            "ala_two_level_preconditioner",
             "file_vbcs",
             "lith_age",
             "lith_age_time",
@@ -350,6 +351,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_pressure_multigrid\s*=\s*off\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_two_level_preconditioner\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,

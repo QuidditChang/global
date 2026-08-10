@@ -663,7 +663,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_horizontal_elements = 2", self.strict_cfg
         )
         self.assertIn(
-            "ala_shallow_patch_horizontal_stride   = 1", self.strict_cfg
+            "ala_shallow_patch_horizontal_stride   = 2", self.strict_cfg
         )
         self.assertIn(
             "ala_shallow_patch_mpi_overlap      = 1", self.strict_cfg
