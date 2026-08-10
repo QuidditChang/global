@@ -369,8 +369,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*0\.2\s*$",
+            r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*0\.07\s*$",
         )
+        damping_match = re.search(
+            r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*([0-9.eE+-]+)",
+            strict_text,
+        )
+        self.assertIsNotNone(damping_match)
+        self.assertGreater(float(damping_match.group(1)), 0.0)
+        self.assertLess(float(damping_match.group(1)), 2.0 / 27.0)
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_pressure_multigrid_galerkin\s*=\s*off\s*$",
