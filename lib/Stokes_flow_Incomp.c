@@ -705,7 +705,9 @@ static void apply_ala_coupled_block_preconditioner(
     struct ala_block_vector *operator_work, int lev, int iteration,
     struct ala_pressure_preconditioner_cache *cache)
 {
-    int m,i,e,pass,neq,npno;
+    int m,i,e,pass,neq,npno,ex,ey,ez,fx,fy,fz,elx,ely,elz;
+    int first_ez,projected_layers;
+    double mean;
 
     neq=E->lmesh.NEQ[lev];
     npno=E->lmesh.NPNO[lev];
@@ -798,6 +800,80 @@ static void apply_ala_coupled_block_preconditioner(
                 E,action_work,correction_work,vanka_delta,lev,
                 E->control.ala_coupled_shallow_vanka_layers,-1,0);
             ala_block_vector_axpy(E,1.0,correction_work,correction);
+        }
+    }
+
+    /* Multiplicative shallow factor-two coarse correction.
+     *
+     * Form the true coupled defect after the proven triangular plus shallow
+     * Vanka map, project only its pressure component onto piecewise constants
+     * over aligned 2x2x2 pressure cells, and apply one complete triangular
+     * block correction.  Because this acts on r-Az rather than r, the coarse
+     * component is not counted once by BPI and then added a second time.  The
+     * arithmetic block mean is the Euclidean orthogonal projector Q=Q^T=Q^2;
+     * rounding the configured shallow extent to a full radial pair preserves
+     * both the factor-two hierarchy and the constant-pressure mode. */
+    if(E->control.ala_coupled_factor2_coarse_correction) {
+        static int reported_cycle;
+        static int report_valid;
+
+        elx=E->lmesh.ELX[lev];
+        ely=E->lmesh.ELY[lev];
+        elz=E->lmesh.ELZ[lev];
+        if(elx%2 || ely%2 || elz%2)
+            myerror(E,"ALA factor-two coarse defect requires even mesh");
+        projected_layers=2*((min(E->control.ala_coupled_shallow_vanka_layers,
+                                 elz)+1)/2);
+        projected_layers=min(projected_layers,elz);
+        first_ez=elz-projected_layers+1;
+        assemble_ala_coupled_block_defect(
+            E,residual,correction,action_work,vanka_delta,operator_work,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(i=0;i<neq;i++)
+                action_work->velocity[m][i]=0.0;
+            action_work->velocity[m][neq]=0.0;
+            for(e=1;e<=npno;e++) {
+                vanka_delta->pressure[m][e]=action_work->pressure[m][e];
+                action_work->pressure[m][e]=0.0;
+            }
+            action_work->pressure[m][0]=0.0;
+            for(ey=1;ey<=ely;ey+=2)
+                for(ex=1;ex<=elx;ex+=2)
+                    for(ez=first_ez;ez<=elz;ez+=2) {
+                        mean=0.0;
+                        for(fy=ey;fy<=ey+1;fy++)
+                            for(fx=ex;fx<=ex+1;fx++)
+                                for(fz=ez;fz<=ez+1;fz++) {
+                                    e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                    mean += vanka_delta->pressure[m][e];
+                                }
+                        mean /= 8.0;
+                        for(fy=ey;fy<=ey+1;fy++)
+                            for(fx=ex;fx<=ex+1;fx++)
+                                for(fz=ez;fz<=ez+1;fz++) {
+                                    e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                    action_work->pressure[m][e]=mean;
+                                }
+                    }
+        }
+        apply_ala_coupled_triangular_once(
+            E,action_work,correction_work,pressure_work,
+            operator_work->velocity,lev,iteration,cache);
+        ala_block_vector_axpy(E,1.0,correction_work,correction);
+        if(E->parallel.me==0 &&
+           (!report_valid || reported_cycle!=E->monitor.solution_cycles)) {
+            fprintf(E->fp,"ALA COUPLED FACTOR2 DEFECT CORRECTION "
+                    "level=%d projected_layers=%d block=2x2x2 "
+                    "projection=orthogonal_mean application=multiplicative "
+                    "coarse_solver=triangular\n",lev,projected_layers);
+            fprintf(stderr,"ALA COUPLED FACTOR2 DEFECT CORRECTION "
+                    "level=%d projected_layers=%d block=2x2x2 "
+                    "projection=orthogonal_mean application=multiplicative "
+                    "coarse_solver=triangular\n",lev,projected_layers);
+            fflush(E->fp);
+            fflush(stderr);
+            reported_cycle=E->monitor.solution_cycles;
+            report_valid=1;
         }
     }
 

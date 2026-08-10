@@ -541,6 +541,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_coupled_inner_progress_interval),"20",m);
   input_int("ala_coupled_defect_corrections",
             &(E->control.ala_coupled_defect_corrections),"0",m);
+  input_boolean("ala_coupled_factor2_coarse_correction",
+                &(E->control.ala_coupled_factor2_coarse_correction),"off",m);
   input_boolean("ala_coupled_multilevel_audit_only",
                 &(E->control.ala_coupled_multilevel_audit_only),"off",m);
   input_boolean("ala_coupled_first_preconditioner_audit_only",
@@ -755,6 +757,14 @@ void read_initial_settings(struct All_variables *E)
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_coupled_defect_corrections requires "
               "ala_outer_solver=coupled_fgmres");
+  if(E->control.ala_coupled_factor2_coarse_correction &&
+     strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
+      myerror(E, "ala_coupled_factor2_coarse_correction requires "
+              "ala_outer_solver=coupled_fgmres");
+  if(E->control.ala_coupled_factor2_coarse_correction &&
+     E->control.ala_coupled_shallow_vanka_layers < 1)
+      myerror(E, "ala_coupled_factor2_coarse_correction requires "
+              "ala_coupled_shallow_vanka_layers > 0");
   if(E->control.ala_coupled_initial_velocity_relative_tolerance > 0.0 &&
      strcmp(E->control.ala_outer_solver,"coupled_fgmres") != 0)
       myerror(E, "ala_coupled_initial_velocity_relative_tolerance requires "
@@ -1613,6 +1623,7 @@ void global_default_values(E)
     E->control.ala_coupled_inner_max_cycles = 200;
     E->control.ala_coupled_inner_progress_interval = 20;
     E->control.ala_coupled_defect_corrections = 0;
+    E->control.ala_coupled_factor2_coarse_correction = 0;
     E->control.ala_coupled_multilevel_audit_only = 0;
     E->control.ala_coupled_first_preconditioner_audit_only = 0;
     E->control.ala_coupled_debug_stop_iteration = 0;

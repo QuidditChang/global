@@ -104,6 +104,44 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
                 "ala_coupled_defect_corrections requires", path.read_text()
             )
 
+    def test_factor2_coarse_correction_projects_true_shallow_defect(self) -> None:
+        preconditioner = _between(
+            self.stokes,
+            "static void apply_ala_coupled_block_preconditioner(",
+            "static void strict_ala_coupled_preconditioner_audit(",
+        )
+        start = preconditioner.index(
+            "if(E->control.ala_coupled_factor2_coarse_correction)"
+        )
+        block = preconditioner[start:preconditioner.index(
+            "/* Multiplicative block defect correction:", start
+        )]
+        self.assertIn("assemble_ala_coupled_block_defect(", block)
+        self.assertIn("projected_layers=2*((min(", block)
+        self.assertIn("mean /= 8.0", block)
+        self.assertIn("mean += vanka_delta->pressure[m][e]", block)
+        self.assertIn("action_work->velocity[m][i]=0.0", block)
+        self.assertIn("apply_ala_coupled_triangular_once(", block)
+        self.assertIn(
+            "ala_block_vector_axpy(E,1.0,correction_work,correction)", block
+        )
+        self.assertLess(
+            block.index("assemble_ala_coupled_block_defect("),
+            block.index("apply_ala_coupled_triangular_once("),
+        )
+        self.assertIn("projection=orthogonal_mean", block)
+        for path in (
+            LIB_ROOT / "Instructions.c",
+            GLOBAL_ROOT / "module/setProperties.c",
+        ):
+            text = path.read_text()
+            self.assertIn(
+                "ala_coupled_factor2_coarse_correction requires", text
+            )
+            self.assertIn(
+                "ala_coupled_shallow_vanka_layers > 0", text
+            )
+
     def test_coupled_velocity_solve_is_bounded_and_observable(self) -> None:
         matrix = (LIB_ROOT / "General_matrix_functions.c").read_text()
         self.assertIn("int solve_del2_u_bounded(", matrix)

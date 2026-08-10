@@ -85,6 +85,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_inner_max_cycles",
             "ala_coupled_inner_progress_interval",
             "ala_coupled_defect_corrections",
+            "ala_coupled_factor2_coarse_correction",
             "ala_coupled_multilevel_audit_only",
             "ala_coupled_first_preconditioner_audit_only",
             "ala_coupled_debug_stop_iteration",
@@ -341,6 +342,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
+            r"(?m)^\s*ala_coupled_factor2_coarse_correction\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
             r"(?m)^\s*ala_unaugmented_momentum_tolerance\s*=\s*1e-3\s*$",
         )
         self.assertRegex(
@@ -585,6 +590,15 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         ):
             self.assertIn(f'{name} = prop.int(', incompressible)
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)
+        self.assertIn(
+            "ala_coupled_factor2_coarse_correction = prop.bool(",
+            incompressible,
+        )
+        self.assertIn(
+            'getIntProperty(properties, '
+            '"ala_coupled_factor2_coarse_correction"',
+            properties,
+        )
         for name in (
             "ala_coupled_initial_velocity_relative_tolerance",
             "ala_coupled_inner_relative_tolerance",
