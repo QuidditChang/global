@@ -161,7 +161,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_element_vanka\s*=\s*off\s*$",
+            r"(?m)^\s*ala_coupled_element_vanka\s*=\s*on\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -182,7 +182,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
+            r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -300,7 +300,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_augmented_lagrangian_gamma\s*=\s*0\.0\s*$",
+            r"(?m)^\s*ala_augmented_lagrangian_gamma\s*=\s*1\.0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -308,7 +308,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*0\.25\s*$",
+            r"(?m)^\s*ala_element_vanka_pressure_damping\s*=\s*1\.0\s*$",
         )
         self.assertRegex(
             strict_text,

@@ -185,10 +185,10 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ala_coupled_defect_corrections       = 0", cfg)
         self.assertIn("ala_pressure_multigrid                  = off", cfg)
         self.assertIn("ala_pressure_multigrid_galerkin         = off", cfg)
-        self.assertIn("ala_augmented_lagrangian_gamma = 0.0", cfg)
+        self.assertIn("ala_augmented_lagrangian_gamma = 1.0", cfg)
         self.assertIn("ala_element_vanka_damping      = 1.0", cfg)
         self.assertIn("ala_coupled_debug_stop_iteration            = 5", cfg)
-        self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
+        self.assertIn("ala_shallow_patch_preconditioner   = off", cfg)
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn("ala_coupled_shallow_vanka_layers             = 0", cfg)
 
