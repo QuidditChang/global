@@ -108,6 +108,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_two_level_coarse_solver",
             "ala_two_level_coarse_iterations",
             "ala_two_level_coarse_damping",
+            "ala_two_level_velocity_solver",
             "file_vbcs",
             "lith_age",
             "lith_age_time",
@@ -361,15 +362,19 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_two_level_coarse_solver\s*=\s*jacobi\s*$",
+            r"(?m)^\s*ala_two_level_coarse_solver\s*=\s*chebyshev\s*$",
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_two_level_coarse_iterations\s*=\s*1\s*$",
+            r"(?m)^\s*ala_two_level_coarse_iterations\s*=\s*8\s*$",
         )
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*0\.07\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_two_level_velocity_solver\s*=\s*diagonal\s*$",
         )
         damping_match = re.search(
             r"(?m)^\s*ala_two_level_coarse_damping\s*=\s*([0-9.eE+-]+)",
