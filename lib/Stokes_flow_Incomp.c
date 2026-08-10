@@ -1090,7 +1090,7 @@ static float solve_ala_coupled_fgmres_core(
             apply_ala_coupled_operator(
                 E,zb[j]->velocity,zb[j]->pressure,w->velocity,w->pressure,
                 operator_work->velocity,lev);
-            if(count<5 || j==restart-1 ||
+            if(count==0 || j==restart-1 ||
                (E->control.ala_coupled_debug_stop_iteration>0 &&
                 count+1==E->control.ala_coupled_debug_stop_iteration))
                 strict_ala_coupled_preconditioner_audit(

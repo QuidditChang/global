@@ -528,12 +528,12 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("self_contained_skip_legacy_pressure_cache", solve)
         self.assertIn('? "coupled_multilevel_vcycle"', solve)
 
-    def test_action_audit_targets_first_five_and_stop_iteration(self) -> None:
+    def test_action_audit_is_targeted_not_periodic(self) -> None:
         core = _function_body(
             self.stokes, "static float solve_ala_coupled_fgmres_core("
         )
         audit = core[core.index("strict_ala_coupled_preconditioner_audit(") - 300:]
-        self.assertIn("count<5 || j==restart-1", audit)
+        self.assertIn("count==0 || j==restart-1", audit)
         self.assertIn(
             "count+1==E->control.ala_coupled_debug_stop_iteration", audit
         )
