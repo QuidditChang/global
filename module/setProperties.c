@@ -1531,8 +1531,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.ala_element_vanka_damping > 1.0)
         myerror(E, "ala_element_vanka_damping must be in (0,1]");
     if(E->control.ala_element_vanka_pressure_damping <= 0.0 ||
-       E->control.ala_element_vanka_pressure_damping > 1.0)
-        myerror(E, "ala_element_vanka_pressure_damping must be in (0,1]");
+       E->control.ala_element_vanka_pressure_damping > 4.0)
+        myerror(E, "ala_element_vanka_pressure_damping must be in (0,4]");
     if(E->control.ala_element_vanka_regularization < 0.0 ||
        E->control.ala_element_vanka_regularization > 0.1)
         myerror(E, "ala_element_vanka_regularization must be in [0,0.1]");
