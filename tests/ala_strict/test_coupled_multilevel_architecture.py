@@ -637,8 +637,13 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "E->control.ala_element_vanka_external_diagonal_weight",
             builder,
         )
+        self.assertIn("level==E->mesh.gridmax", builder)
+        self.assertIn(": 1.0", builder)
         self.assertIn("*max(external,0.0)", builder)
-        self.assertIn("external_diagonal_weight=%e", builder)
+        self.assertIn("finest_external_diagonal_weight=%e", builder)
+        self.assertIn(
+            "coarse_external_diagonal_weight=1.000000e+00", builder
+        )
 
     def test_triangular_map_can_correct_only_its_shallow_defect(self) -> None:
         block = _function_body(

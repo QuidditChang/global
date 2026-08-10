@@ -504,7 +504,7 @@ void build_ala_element_vanka_factors(struct All_variables *E)
     double L[ALA_VANKA_DOF*ALA_VANKA_DOF];
     double gradient[ALA_VANKA_DOF],forward[ALA_VANKA_DOF];
     double velocity_pressure[ALA_VANKA_DOF];
-    double sum,pivot,maxdiag,global_diag,external,shift;
+    double sum,pivot,maxdiag,global_diag,external,external_weight,shift;
     double schur,diagonal;
     double local_min_ratio,global_min_ratio,local_megabytes,global_max_megabytes;
     double build_start,build_seconds,global_build_seconds;
@@ -526,6 +526,13 @@ void build_ala_element_vanka_factors(struct All_variables *E)
     local_min_ratio=1.0e300;
     for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            /* The coupled Schur correction consumes the finest-level patch
+             * factors.  Coarser caches are also the production velocity-MG
+             * smoother and must retain their assembled-diagonal completion.
+             * Keeping one cache avoids another 43 MB/rank allocation. */
+            external_weight=(level==E->mesh.gridmax)
+                ? E->control.ala_element_vanka_external_diagonal_weight
+                : 1.0;
             local_elements += E->lmesh.NEL[level];
             local_megabytes += (E->lmesh.NEL[level]+1)
                 *(ALA_VANKA_CHOL_SIZE*sizeof(higher_precision)
@@ -567,8 +574,7 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                             myerror(E,"ALA element-Vanka external diagonal is negative");
                         }
                         matrix[i*n+i] +=
-                            E->control.ala_element_vanka_external_diagonal_weight
-                            *max(external,0.0);
+                            external_weight*max(external,0.0);
                         maxdiag=max(maxdiag,matrix[i*n+i]);
                     }
                 }
@@ -705,7 +711,8 @@ void build_ala_element_vanka_factors(struct All_variables *E)
         fprintf(E->fp,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
                 "regularization=%e min_pivot_ratio=%e "
-                "external_diagonal_weight=%e "
+                "finest_external_diagonal_weight=%e "
+                "coarse_external_diagonal_weight=1.000000e+00 "
                 "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
@@ -715,7 +722,8 @@ void build_ala_element_vanka_factors(struct All_variables *E)
         fprintf(stderr,"ALA full element-Vanka factors levels=%d "
                 "global_elements=%d max_cache_per_rank_mb=%g "
                 "regularization=%e min_pivot_ratio=%e "
-                "external_diagonal_weight=%e "
+                "finest_external_diagonal_weight=%e "
+                "coarse_external_diagonal_weight=1.000000e+00 "
                 "build_seconds_max=%e cycle=%d\n",
                 E->mesh.gridmax-E->mesh.gridmin+1,global_elements,
                 global_max_megabytes,
