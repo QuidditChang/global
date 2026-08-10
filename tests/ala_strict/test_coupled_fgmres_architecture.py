@@ -195,7 +195,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_shallow_vanka_sweeps             = 0", cfg
         )
         self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
-        self.assertIn("ala_shallow_patch_weight           = 0.2", cfg)
+        self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn(
             "ala_shallow_patch_velocity_solver  = element_vanka", cfg
         )
