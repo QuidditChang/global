@@ -215,6 +215,21 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         )
         self.assertIn("strict_ala_coupled_preconditioner_audit(", self.core)
 
+    def test_pressure_fgmres_audits_true_preconditioned_action(self) -> None:
+        core = self.stokes[
+            self.stokes.index("static float solve_ala_fgmres_core("):
+        ]
+        action = core.index("assemble_div_rho_u(E,tmpU,w,lev);")
+        audit = core.index("ALA FGMRES PRECONDITIONER ACTION", action)
+        orthogonalize = core.index(
+            "h[i][j]=global_pdot(E,w,vb[i],lev);", audit
+        )
+        self.assertLess(action, audit)
+        self.assertLess(audit, orthogonalize)
+        audited = core[action:orthogonalize]
+        self.assertIn("strict_ala_pressure_depth_action_audit(", audited)
+        self.assertIn("strict_ala_pressure_mode_audit(", audited)
+
     def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = fgmres", cfg)
@@ -241,7 +256,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_shallow_vanka_sweeps             = 0", cfg
         )
         self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
-        self.assertIn("ala_shallow_patch_depth_km         = 660.0", cfg)
+        self.assertIn("ala_shallow_patch_depth_km         = 410.0", cfg)
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn("ala_shallow_patch_regularization   = 1.0e-3", cfg)
         self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)

@@ -1564,10 +1564,14 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double initial_rnorm,residual_est,residual,delta;
     double audit_best_cancellation;
     double sum,explicit_norm;
+    double preconditioned_action2,preconditioned_product;
+    double preconditioned_cosine,preconditioned_optimal_scale;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
     double **w,**tmpF,**tmpU;
     double ***vb,***zb,***ub;
     int max_basis;
+    struct ala_block_vector pressure_residual_view;
+    struct ala_block_vector pressure_action_view;
     const char *acceptance_status;
 
     levnpno=E->lmesh.NPNO[lev];
@@ -1709,6 +1713,38 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 parallel_process_termination();
             strip_bcs_from_residual(E,tmpU,lev);
             assemble_div_rho_u(E,tmpU,w,lev);
+            if(E->control.ala_depth_diagnostics &&
+               (count==0 ||
+                (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
+                count+1==*steps_max)) {
+                preconditioned_action2=global_pdot(E,w,w,lev);
+                preconditioned_product=global_pdot(E,vb[j],w,lev);
+                preconditioned_cosine=preconditioned_product
+                    /sqrt(max(preconditioned_action2,1.0e-300));
+                preconditioned_optimal_scale=preconditioned_product
+                    /max(preconditioned_action2,1.0e-300);
+                if(E->parallel.me==0) {
+                    fprintf(E->fp,
+                            "ALA FGMRES PRECONDITIONER ACTION iteration=%d "
+                            "action_norm=%e cosine=%e optimal_scale=%e\n",
+                            count+1,sqrt(preconditioned_action2),
+                            preconditioned_cosine,
+                            preconditioned_optimal_scale);
+                    fflush(E->fp);
+                }
+                pressure_residual_view.velocity=NULL;
+                pressure_residual_view.pressure=vb[j];
+                pressure_residual_view.level=lev;
+                pressure_action_view.velocity=NULL;
+                pressure_action_view.pressure=w;
+                pressure_action_view.level=lev;
+                strict_ala_pressure_depth_action_audit(
+                    E,&pressure_residual_view,&pressure_action_view,
+                    lev,count+1);
+                strict_ala_pressure_mode_audit(
+                    E,&pressure_residual_view,&pressure_action_view,
+                    lev,count+1);
+            }
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(e=0;e<neq;e++)
                     ub[j][m][e]=tmpU[m][e];

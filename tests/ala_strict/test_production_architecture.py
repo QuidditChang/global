@@ -197,7 +197,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*660\.0\s*$",
+            r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*410\.0\s*$",
         )
         self.assertRegex(
             strict_text,
