@@ -245,6 +245,15 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ala_shallow_patch_regularization   = 1.0e-3", cfg)
         self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)
         self.assertIn(
+            "ala_pressure_shallow_depth_km           = 200.0", cfg
+        )
+        self.assertIn(
+            "ala_pressure_shallow_action_scale       = 0.17", cfg
+        )
+        self.assertIn("operator=W*P^-1*W", self.stokes)
+        self.assertIn("effective_r=cache->pressure_depth_weighted_r", self.stokes)
+        self.assertIn("z[m][e] *= depth_weight", self.stokes)
+        self.assertIn(
             "ala_shallow_patch_horizontal_elements = 6", cfg
         )
         self.assertIn(

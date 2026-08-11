@@ -2016,6 +2016,7 @@ struct ala_pressure_preconditioner_cache {
     double *pressure_mg_velocity_rhs[NCS];
     double *pressure_mg_galerkin_p[NCS];
     double *pressure_mg_galerkin_Ap[NCS];
+    double *pressure_depth_weighted_r[NCS];
     int pressure_mg_min_level;
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
@@ -3726,6 +3727,7 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->pressure_mg_velocity_rhs[m]);
         free((void *)cache->pressure_mg_galerkin_p[m]);
         free((void *)cache->pressure_mg_galerkin_Ap[m]);
+        free((void *)cache->pressure_depth_weighted_r[m]);
         for(level=0;level<MAX_LEVELS;level++) {
             free((void *)cache->pressure_mg_rhs[level][m]);
             free((void *)cache->pressure_mg_x[level][m]);
@@ -5824,8 +5826,41 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *fine_velocity_direction[NCS];
     double *ghost_r[NCS][ALA_PATCH_MPI_FACES];
     double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
+    double **effective_r,depth_km,depth_weight;
 
     npno=E->lmesh.NPNO[lev];
+    effective_r=r;
+    if(fabs(E->control.ala_pressure_shallow_action_scale-1.0)>1.0e-12) {
+        elz=E->lmesh.ELZ[lev];
+        depth_weight=sqrt(E->control.ala_pressure_shallow_action_scale);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            if(cache->pressure_depth_weighted_r[m]==NULL) {
+                cache->pressure_depth_weighted_r[m]=(double *)calloc(
+                    npno+1,sizeof(double));
+                if(cache->pressure_depth_weighted_r[m]==NULL)
+                    myerror(E,"Unable to allocate ALA depth-weighted pressure residual");
+            }
+            cache->pressure_depth_weighted_r[m][0]=0.0;
+            for(e=1;e<=npno;e++) {
+                ez=(e-1)%elz+1;
+                depth_km=(1.0-0.5*(E->sx[m][3][ez]
+                                  +E->sx[m][3][ez+1]))*E->data.radius_km;
+                cache->pressure_depth_weighted_r[m][e]=r[m][e]
+                    *(depth_km<E->control.ala_pressure_shallow_depth_km
+                      ? depth_weight : 1.0);
+            }
+        }
+        effective_r=cache->pressure_depth_weighted_r;
+        if(iteration==0 && E->parallel.me==0) {
+            fprintf(E->fp,"ALA PRESSURE DEPTH SIMILARITY depth_km=%e "
+                    "shallow_action_scale=%e shallow_weight=%e "
+                    "operator=W*P^-1*W\n",
+                    E->control.ala_pressure_shallow_depth_km,
+                    E->control.ala_pressure_shallow_action_scale,
+                    depth_weight);
+            fflush(E->fp);
+        }
+    }
     if(E->control.ala_radial_line_preconditioner) {
         elz=E->lmesh.ELZ[lev];
         ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
@@ -5834,16 +5869,16 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 if(!E->ALA_BPI_line_valid[lev][m][col+1]) {
                     for(k=0;k<elz;k++) {
                         e=col*elz+k+1;
-                        z[m][e]=E->BPI[lev][m][e]*r[m][e];
+                        z[m][e]=E->BPI[lev][m][e]*effective_r[m][e];
                     }
                     continue;
                 }
 
                 e=col*elz+1;
-                work[m][e]=r[m][e];
+                work[m][e]=effective_r[m][e];
                 for(k=1;k<elz;k++) {
                     e=col*elz+k+1;
-                    work[m][e]=r[m][e]-
+                    work[m][e]=effective_r[m][e]-
                         E->ALA_BPI_line_lower[lev][m][e]*work[m][e-1];
                 }
                 for(k=0;k<elz;k++) {
@@ -5859,7 +5894,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     else {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=1;j<=npno;j++)
-                z[m][j]=E->BPI[lev][m][j]*r[m][j];
+                z[m][j]=E->BPI[lev][m][j]*effective_r[m][j];
     }
     /* The diagonal/radial-line Schur map has its own scale, independent of
      * the velocity solve and optional additive pressure corrections.  This
@@ -5882,13 +5917,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 if(ghost_r[m][face]==NULL || ghost_work[m][face]==NULL)
                     myerror(E,"Unable to allocate ALA MPI-overlap work");
             }
-            exchange_ala_shallow_halo_values(E,cache,lev,m,r,
+            exchange_ala_shallow_halo_values(E,cache,lev,m,effective_r,
                                               ghost_r[m],0);
             for(e=1;e<=npno;e++) {
                 work[m][e]=0.0;
                 if(cache->multiplicity[m][e]>0)
-                    local_patch_energy[0] += r[m][e]*E->BPI[lev][m][e]
-                        *r[m][e];
+                    local_patch_energy[0] += effective_r[m][e]
+                        *E->BPI[lev][m][e]*effective_r[m][e];
             }
         }
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -5902,7 +5937,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     e=cache->elements[m][b*cache->patch_capacity+i];
                     constant_mode[i]=1.0
                         /sqrt((double)cache->multiplicity[m][e]);
-                    rhs[i]=r[m][e]*constant_mode[i];
+                    rhs[i]=effective_r[m][e]*constant_mode[i];
                 }
                 if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                           "element_vanka")==0) {
@@ -5961,7 +5996,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                             myerror(E,"ALA local partition weight is zero");
                         constant_mode[i]=1.0
                             /sqrt((double)cache->multiplicity[m][ref]);
-                        rhs[i]=r[m][ref]*constant_mode[i];
+                        rhs[i]=effective_r[m][ref]*constant_mode[i];
                     }
                     else {
                         ghost_index=-ref-1;
@@ -6028,7 +6063,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=npno;e++)
                 if(cache->multiplicity[m][e]>0) {
-                    local_patch_energy[1] += r[m][e]*work[m][e];
+                    local_patch_energy[1] += effective_r[m][e]*work[m][e];
                     if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                               "element_vanka")==0)
                         z[m][e] += weight*work[m][e];
@@ -6061,14 +6096,14 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     }
 
     if(E->control.ala_geneo_preconditioner)
-        apply_ala_geneo_correction(E,r,z,lev,iteration,cache);
+        apply_ala_geneo_correction(E,effective_r,z,lev,iteration,cache);
 
     if(E->control.ala_pressure_multigrid)
         apply_ala_pressure_multigrid_correction(
-            E,r,z,lev,iteration,cache);
+            E,effective_r,z,lev,iteration,cache);
 
     if(!E->control.ala_two_level_preconditioner)
-        return;
+        goto pressure_depth_prolongation;
 
     clev=lev-E->control.ala_two_level_offset;
     factor=1 << E->control.ala_two_level_offset;
@@ -6111,7 +6146,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     cy=(ey-1)/factor+1;
                     cz=(ez-1)/factor+1;
                     ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
-                    coarse_rhs[m][ce] += r[m][e];
+                    coarse_rhs[m][ce] += effective_r[m][e];
                 }
 
     /* Both coarse solvers are fixed polynomials of the Galerkin ALA operator.
@@ -6136,7 +6171,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         ce=cz+(cx-1)*celz+(cy-1)*celz*celx;
                         coarse_residual[m][ce] +=
                             E->control.ala_pressure_bpi_weight
-                            *E->BPI[lev][m][e]*r[m][e];
+                            *E->BPI[lev][m][e]*effective_r[m][e];
                         coarse_Ax[m][ce] +=
                             E->control.ala_pressure_bpi_weight
                             *E->BPI[lev][m][e]
@@ -6293,7 +6328,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         local_energy[3]=0.0;
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             for(e=1;e<=npno;e++)
-                local_energy[0] += r[m][e]*z[m][e];
+                local_energy[0] += effective_r[m][e]*z[m][e];
             for(ce=1;ce<=cnpno;ce++) {
                 local_energy[1] += E->control.ala_two_level_coarse_weight
                     *coarse_rhs[m][ce]*coarse_x[m][ce];
@@ -6346,6 +6381,20 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         free((void *)fine_velocity_rhs[m]);
         free((void *)fine_velocity_Ax[m]);
         free((void *)fine_velocity_direction[m]);
+    }
+
+pressure_depth_prolongation:
+    if(fabs(E->control.ala_pressure_shallow_action_scale-1.0)>1.0e-12) {
+        elz=E->lmesh.ELZ[lev];
+        depth_weight=sqrt(E->control.ala_pressure_shallow_action_scale);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=npno;e++) {
+                ez=(e-1)%elz+1;
+                depth_km=(1.0-0.5*(E->sx[m][3][ez]
+                                  +E->sx[m][3][ez+1]))*E->data.radius_km;
+                if(depth_km<E->control.ala_pressure_shallow_depth_km)
+                    z[m][e] *= depth_weight;
+            }
     }
 }
 

@@ -119,6 +119,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_pressure_multigrid",
             "ala_pressure_multigrid_galerkin",
             "ala_pressure_bpi_weight",
+            "ala_pressure_shallow_depth_km",
+            "ala_pressure_shallow_action_scale",
             "ala_pressure_multigrid_min_level",
             "ala_pressure_multigrid_pre_smooth",
             "ala_pressure_multigrid_post_smooth",
@@ -622,6 +624,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)
         for name in (
             "ala_pressure_bpi_weight",
+            "ala_pressure_shallow_depth_km",
+            "ala_pressure_shallow_action_scale",
             "ala_pressure_multigrid_damping",
             "ala_pressure_multigrid_weight",
         ):
