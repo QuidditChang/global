@@ -1572,6 +1572,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double pressure_action2,pressure_product,pressure_cross;
     double pressure_correction_action2,pressure_correction_product;
     double pressure_gram_determinant,pressure_residual_product;
+    double pressure_velocity_action_defect,pressure_velocity_action_norm;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
     double **w,**tmpF,**tmpU,**pressure_defect,**pressure_correction;
     double **pressure_correction_action;
@@ -1745,6 +1746,13 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                     parallel_process_termination();
                 strip_bcs_from_residual(E,tmpU,lev);
                 assemble_div_rho_u(E,tmpU,w,lev);
+                /* Preserve the velocity image paired with the unscaled
+                 * pressure-preconditioner direction.  The correction solve
+                 * below reuses tmpU, while FGMRES must retain the same linear
+                 * combination for (z, K^-1 G z, S z). */
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=0;e<neq;e++)
+                        ub[j][m][e]=tmpU[m][e];
                 pressure_action2=global_pdot(E,w,w,lev);
                 pressure_product=global_pdot(E,vb[j],w,lev);
                 pressure_initial_step=pressure_defect_damping;
@@ -1825,6 +1833,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                     }
                 }
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=0;e<neq;e++)
+                        ub[j][m][e]=pressure_base_step*ub[j][m][e]
+                            +pressure_correction_step*tmpU[m][e];
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(e=1;e<=levnpno;e++) {
                         zb[j][m][e]=pressure_base_step*zb[j][m][e]
                             +pressure_correction_step
@@ -1865,6 +1877,35 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                (count==0 ||
                 (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
                 count+1==*steps_max)) {
+                if(E->control.ala_pressure_defect_corrections>0) {
+                    assemble_div_rho_u(E,ub[j],pressure_defect,lev);
+                    for(m=1;m<=E->sphere.caps_per_proc;m++)
+                        for(e=1;e<=levnpno;e++)
+                            pressure_defect[m][e]-=w[m][e];
+                    pressure_velocity_action_defect=sqrt(global_pdot(
+                        E,pressure_defect,pressure_defect,lev));
+                    pressure_velocity_action_norm=sqrt(global_pdot(
+                        E,w,w,lev));
+                    pressure_velocity_action_defect /=
+                        max(pressure_velocity_action_norm,1.0e-300);
+                    if(E->parallel.me==0) {
+                        fprintf(E->fp,
+                                "ALA FGMRES TRIPLE CONSISTENCY iteration=%d "
+                                "relative_defect=%e tolerance=1.000000e-08\n",
+                                count+1,pressure_velocity_action_defect);
+                        fflush(E->fp);
+                    }
+                    if(!isfinite(pressure_velocity_action_defect) ||
+                       pressure_velocity_action_defect>1.0e-8) {
+                        if(E->parallel.me==0)
+                            fprintf(stderr,
+                                    "ALA FGMRES inconsistent pressure, "
+                                    "velocity, and Schur bases at iteration "
+                                    "%d: relative_defect=%e\n",count+1,
+                                    pressure_velocity_action_defect);
+                        parallel_process_termination();
+                    }
+                }
                 preconditioned_action2=global_pdot(E,w,w,lev);
                 preconditioned_product=global_pdot(E,vb[j],w,lev);
                 preconditioned_cosine=preconditioned_product
@@ -1893,9 +1934,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                     E,&pressure_residual_view,&pressure_action_view,
                     lev,count+1);
             }
-            for(m=1;m<=E->sphere.caps_per_proc;m++)
-                for(e=0;e<neq;e++)
-                    ub[j][m][e]=tmpU[m][e];
+            if(E->control.ala_pressure_defect_corrections==0)
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=0;e<neq;e++)
+                        ub[j][m][e]=tmpU[m][e];
             for(i=0;i<=j;i++) {
                 h[i][j]=global_pdot(E,w,vb[i],lev);
                 for(m=1;m<=E->sphere.caps_per_proc;m++)

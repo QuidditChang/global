@@ -260,6 +260,9 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         correction = core.index(
             "*pressure_correction[m][e]", two_direction_fit
         )
+        velocity_combination = core.index(
+            "pressure_base_step*ub[j][m][e]", two_direction_fit
+        )
         self.assertLess(first_preconditioner, first_action)
         self.assertLess(first_action, line_search)
         self.assertLess(line_search, defect)
@@ -267,6 +270,20 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertLess(second_preconditioner, correction_action)
         self.assertLess(correction_action, two_direction_fit)
         self.assertLess(two_direction_fit, correction)
+        self.assertLess(two_direction_fit, velocity_combination)
+        self.assertIn(
+            "+pressure_correction_step*tmpU[m][e]", core
+        )
+        self.assertIn(
+            "ala_pressure_defect_corrections==0", core
+        )
+        self.assertIn("ALA FGMRES TRIPLE CONSISTENCY", core)
+        self.assertIn(
+            "assemble_div_rho_u(E,ub[j],pressure_defect,lev)", core
+        )
+        self.assertIn(
+            "pressure_velocity_action_defect>1.0e-8", core
+        )
         self.assertIn("pressure_correction_action", core)
         self.assertRegex(
             core,
