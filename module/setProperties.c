@@ -1166,6 +1166,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_pressure_multigrid_galerkin, fp);
     getDoubleProperty(properties, "ala_pressure_bpi_weight",
                       E->control.ala_pressure_bpi_weight, fp);
+    getDoubleProperty(properties, "ala_pressure_shallow_depth_km",
+                      E->control.ala_pressure_shallow_depth_km, fp);
+    getDoubleProperty(properties, "ala_pressure_shallow_action_scale",
+                      E->control.ala_pressure_shallow_action_scale, fp);
     getIntProperty(properties, "ala_pressure_multigrid_min_level",
                    E->control.ala_pressure_multigrid_min_level, fp);
     getIntProperty(properties, "ala_pressure_multigrid_pre_smooth",
@@ -1466,6 +1470,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_pressure_bpi_weight <= 0.0 ||
        E->control.ala_pressure_bpi_weight > 1.0)
         myerror(E, "ala_pressure_bpi_weight must be in (0,1]");
+    if(E->control.ala_pressure_shallow_depth_km <= 0.0)
+        myerror(E, "ala_pressure_shallow_depth_km must be positive");
+    if(E->control.ala_pressure_shallow_action_scale <= 0.0 ||
+       E->control.ala_pressure_shallow_action_scale > 4.0)
+        myerror(E, "ala_pressure_shallow_action_scale must be in (0,4]");
     if(E->control.ala_global_coarse_regularization < 0.0 ||
        E->control.ala_global_coarse_regularization > 1.0e-4)
         myerror(E, "ala_global_coarse_regularization must be in [0,1e-4]");

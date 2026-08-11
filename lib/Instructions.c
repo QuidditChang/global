@@ -632,6 +632,10 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_pressure_multigrid_galerkin),"off",m);
   input_double("ala_pressure_bpi_weight",
                &(E->control.ala_pressure_bpi_weight),"1.0",m);
+  input_double("ala_pressure_shallow_depth_km",
+               &(E->control.ala_pressure_shallow_depth_km),"200.0",m);
+  input_double("ala_pressure_shallow_action_scale",
+               &(E->control.ala_pressure_shallow_action_scale),"1.0",m);
   input_int("ala_pressure_multigrid_min_level",
             &(E->control.ala_pressure_multigrid_min_level),"0",m);
   input_int("ala_pressure_multigrid_pre_smooth",
@@ -929,6 +933,11 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_pressure_bpi_weight <= 0.0 ||
      E->control.ala_pressure_bpi_weight > 1.0)
       myerror(E, "ala_pressure_bpi_weight must be in (0,1]");
+  if(E->control.ala_pressure_shallow_depth_km <= 0.0)
+      myerror(E, "ala_pressure_shallow_depth_km must be positive");
+  if(E->control.ala_pressure_shallow_action_scale <= 0.0 ||
+     E->control.ala_pressure_shallow_action_scale > 4.0)
+      myerror(E, "ala_pressure_shallow_action_scale must be in (0,4]");
   if(E->control.ala_global_coarse_regularization < 0.0 ||
      E->control.ala_global_coarse_regularization > 1.0e-4)
       myerror(E, "ala_global_coarse_regularization must be in [0,1e-4]");
@@ -1668,6 +1677,8 @@ void global_default_values(E)
     E->control.ala_pressure_multigrid = 0;
     E->control.ala_pressure_multigrid_galerkin = 0;
     E->control.ala_pressure_bpi_weight = 1.0;
+    E->control.ala_pressure_shallow_depth_km = 200.0;
+    E->control.ala_pressure_shallow_action_scale = 1.0;
     E->control.ala_pressure_multigrid_min_level = 0;
     E->control.ala_pressure_multigrid_pre_smooth = 2;
     E->control.ala_pressure_multigrid_post_smooth = 2;

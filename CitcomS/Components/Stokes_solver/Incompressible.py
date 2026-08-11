@@ -227,6 +227,10 @@ class Incompressible(CitcomComponent):
             "ala_pressure_multigrid_galerkin", default=False)
         ala_pressure_bpi_weight = prop.float(
             "ala_pressure_bpi_weight", default=1.0)
+        ala_pressure_shallow_depth_km = prop.float(
+            "ala_pressure_shallow_depth_km", default=200.0)
+        ala_pressure_shallow_action_scale = prop.float(
+            "ala_pressure_shallow_action_scale", default=1.0)
         ala_pressure_multigrid_min_level = prop.int(
             "ala_pressure_multigrid_min_level", default=0)
         ala_pressure_multigrid_pre_smooth = prop.int(
