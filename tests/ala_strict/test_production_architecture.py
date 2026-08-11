@@ -75,7 +75,6 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_velocity_solver",
             "ala_shallow_patch_preconditioner",
             "ala_shallow_patch_weight",
-            "ala_shallow_patch_regularization",
             "ala_shallow_patch_horizontal_elements",
             "ala_shallow_patch_horizontal_stride",
             "ala_shallow_patch_mpi_overlap",
@@ -197,7 +196,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_regularization\s*=\s*1\.0e-4\s*$",
+            r"(?m)^\s*ala_shallow_patch_regularization\s*=\s*1\.0e-3\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -331,7 +330,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_inner_relative_tolerance\s*=\s*1e-2\s*$",
+            r"(?m)^\s*ala_coupled_inner_relative_tolerance\s*=\s*1e-3\s*$",
         )
         self.assertRegex(
             strict_text,
