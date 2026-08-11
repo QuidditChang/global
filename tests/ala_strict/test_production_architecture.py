@@ -74,6 +74,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
             "ala_shallow_patch_preconditioner",
+            "ala_shallow_patch_depth_km",
             "ala_shallow_patch_weight",
             "ala_shallow_patch_horizontal_elements",
             "ala_shallow_patch_horizontal_stride",
@@ -193,6 +194,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*660\.0\s*$",
         )
         self.assertRegex(
             strict_text,
