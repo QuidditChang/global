@@ -3168,7 +3168,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "block=%dx%dx%d stride=%dx%dx1 mpi_halo_overlap=%d "
                 "interface_block=%dx%dx%d partition_of_unity=global "
                 "weight=%e regularization=%e "
-                "velocity_solver=%s "
+                "velocity_solver=%s pressure_mode=%s "
                 "interface_velocity_metric=%s "
                 "operator=principal((D+C)Mv^-1(D+C)^T) "
                 "velocity_block_fallbacks=%d "
@@ -3187,6 +3187,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
+                (strcmp(E->control.ala_shallow_patch_velocity_solver,
+                        "element_vanka")==0 &&
+                 E->control.ala_shallow_patch_highpass)
+                    ? "highpass" : "full_local_schur",
                 strcmp(E->control.ala_shallow_patch_velocity_solver,
                        "element_vanka")==0
                     ? "halo_element_vanka" : "halo_nodal",
@@ -3200,7 +3204,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "block=%dx%dx%d stride=%dx%dx1 mpi_halo_overlap=%d "
                 "interface_block=%dx%dx%d partition_of_unity=global "
                 "weight=%e regularization=%e "
-                "velocity_solver=%s "
+                "velocity_solver=%s pressure_mode=%s "
                 "interface_velocity_metric=%s "
                 "operator=principal((D+C)Mv^-1(D+C)^T) "
                 "velocity_block_fallbacks=%d "
@@ -3219,6 +3223,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 E->control.ala_shallow_patch_weight,
                 E->control.ala_shallow_patch_regularization,
                 E->control.ala_shallow_patch_velocity_solver,
+                (strcmp(E->control.ala_shallow_patch_velocity_solver,
+                        "element_vanka")==0 &&
+                 E->control.ala_shallow_patch_highpass)
+                    ? "highpass" : "full_local_schur",
                 strcmp(E->control.ala_shallow_patch_velocity_solver,
                        "element_vanka")==0
                     ? "halo_element_vanka" : "halo_nodal",
@@ -5737,7 +5745,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache)
 {
     int m,j,col,k,e,ex,ey,ez,elz,ncolumns,npno,b,n,i;
-    int face,ref,ghost_index;
+    int face,ref,ghost_index,element_vanka_highpass;
     int clev,factor,celx,celz,cnpno,ce,cx,cy,cz,neq;
     double damping,theta,delta,sigma,rho_cheb,rho_new;
     double velocity_residual_reduction;
@@ -5759,6 +5767,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
 
     npno=E->lmesh.NPNO[lev];
+    element_vanka_highpass=
+        strcmp(E->control.ala_shallow_patch_velocity_solver,
+               "element_vanka")==0 &&
+        E->control.ala_shallow_patch_highpass;
     if(E->control.ala_radial_line_preconditioner) {
         elz=E->lmesh.ELZ[lev];
         ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
@@ -5837,8 +5849,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         /sqrt((double)cache->multiplicity[m][e]);
                     rhs[i]=r[m][e]*constant_mode[i];
                 }
-                if(strcmp(E->control.ala_shallow_patch_velocity_solver,
-                          "element_vanka")==0) {
+                if(element_vanka_highpass) {
                     numerator=denominator=0.0;
                     for(i=0;i<n;i++) {
                         numerator += constant_mode[i]*rhs[i];
@@ -5860,8 +5871,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         sum -= L[j*cache->patch_capacity+i]*solution[j];
                     solution[i]=sum/L[i*cache->patch_capacity+i];
                 }
-                if(strcmp(E->control.ala_shallow_patch_velocity_solver,
-                          "element_vanka")==0) {
+                if(element_vanka_highpass) {
                     numerator=denominator=0.0;
                     for(i=0;i<n;i++) {
                         numerator += constant_mode[i]*solution[i];
@@ -5907,8 +5917,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                             *constant_mode[i];
                     }
                 }
-                if(strcmp(E->control.ala_shallow_patch_velocity_solver,
-                          "element_vanka")==0) {
+                if(element_vanka_highpass) {
                     numerator=denominator=0.0;
                     for(i=0;i<n;i++) {
                         numerator += constant_mode[i]*rhs[i];
@@ -5930,8 +5939,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         sum -= L[j*cache->interface_capacity+i]*solution[j];
                     solution[i]=sum/L[i*cache->interface_capacity+i];
                 }
-                if(strcmp(E->control.ala_shallow_patch_velocity_solver,
-                          "element_vanka")==0) {
+                if(element_vanka_highpass) {
                     numerator=denominator=0.0;
                     for(i=0;i<n;i++) {
                         numerator += constant_mode[i]*solution[i];
@@ -5962,8 +5970,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
             for(e=1;e<=npno;e++)
                 if(cache->multiplicity[m][e]>0) {
                     local_patch_energy[1] += r[m][e]*work[m][e];
-                    if(strcmp(E->control.ala_shallow_patch_velocity_solver,
-                              "element_vanka")==0)
+                    if(element_vanka_highpass)
                         z[m][e] += weight*work[m][e];
                     else
                         z[m][e]=(1.0-weight)*z[m][e]+weight*work[m][e];
@@ -5979,9 +5986,9 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         global_patch_energy[0],global_patch_energy[1],
                         global_patch_energy[1]
                         /max(global_patch_energy[0],1.0e-300),
-                        strcmp(E->control.ala_shallow_patch_velocity_solver,
-                               "element_vanka")==0
-                            ? "additive_weighted_highpass" : "convex_blend",
+                        element_vanka_highpass
+                            ? "additive_weighted_highpass"
+                            : "convex_blend_full_local_schur",
                         weight);
                 fflush(E->fp);
                 }

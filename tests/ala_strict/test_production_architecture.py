@@ -73,6 +73,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
+            "ala_shallow_patch_highpass",
             "ala_shallow_patch_preconditioner",
             "ala_shallow_patch_weight",
             "ala_shallow_patch_horizontal_elements",
@@ -155,7 +156,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*50\s*$",
+            r"(?m)^\s*ala_coupled_debug_stop_iteration\s*=\s*20\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -193,6 +194,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_preconditioner\s*=\s*on\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_shallow_patch_highpass\s*=\s*off\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -562,6 +567,13 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             properties,
         )
         self.assertIn(
+            'ala_shallow_patch_highpass = prop.bool(', incompressible
+        )
+        self.assertIn(
+            'getIntProperty(properties, "ala_shallow_patch_highpass"',
+            properties,
+        )
+        self.assertIn(
             'strcmp(E->control.ala_shallow_patch_velocity_solver,'
             '"element_vanka") != 0',
             properties,
@@ -776,6 +788,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "char ala_shallow_patch_velocity_solver[20];",
             definitions,
         )
+        self.assertIn("int ala_shallow_patch_highpass;", definitions)
 
     def test_stage6d_cross_rank_radial_partition_is_fixed_galerkin(
         self,

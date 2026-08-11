@@ -685,7 +685,7 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
         self.assertIn("support[50+i]", interface)
         self.assertIn("rhs_left[i]*solution[i]", interface)
 
-    def test_vanka_pressure_aggregate_is_additive_weighted_highpass(self) -> None:
+    def test_vanka_pressure_aggregate_supports_full_local_schur(self) -> None:
         signature = "static void apply_ala_pressure_preconditioner("
         definition = self.stokes[self.stokes.rindex(signature) :]
         apply = _function_body(definition, signature)
@@ -697,8 +697,14 @@ class CoupledMultilevelArchitectureTest(unittest.TestCase):
             "solution[i] -= sum*constant_mode[i]",
             "z[m][e] += weight*work[m][e]",
             '"additive_weighted_highpass"',
+            '"convex_blend_full_local_schur"',
+            "if(element_vanka_highpass)",
         ):
             self.assertIn(token, apply)
+
+        self.assertIn(
+            "ala_shallow_patch_highpass         = off", self.strict_cfg
+        )
 
         interface = apply[apply.index("cache->interface_blocks[m]") :]
         backward_solve = interface.index("for(i=n-1;i>=0;i--)")

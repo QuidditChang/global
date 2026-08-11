@@ -666,6 +666,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_shallow_patch_mpi_overlap),"2",m);
   input_string("ala_shallow_patch_velocity_solver",
                E->control.ala_shallow_patch_velocity_solver,"diagonal",m);
+  input_boolean("ala_shallow_patch_highpass",
+                &(E->control.ala_shallow_patch_highpass),"on",m);
   input_boolean("ala_geneo_preconditioner",
                 &(E->control.ala_geneo_preconditioner),"off",m);
   input_string("ala_geneo_basis_type",
@@ -1685,6 +1687,7 @@ void global_default_values(E)
     E->control.ala_shallow_patch_horizontal_stride = 2;
     E->control.ala_shallow_patch_mpi_overlap = 2;
     strcpy(E->control.ala_shallow_patch_velocity_solver,"diagonal");
+    E->control.ala_shallow_patch_highpass = 1;
     E->control.ala_geneo_preconditioner = 0;
     strcpy(E->control.ala_geneo_basis_type,"spectral");
     E->control.ala_geneo_eigenvalue_threshold = 0.20;

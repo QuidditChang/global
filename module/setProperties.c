@@ -1200,6 +1200,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_shallow_patch_mpi_overlap, fp);
     getStringProperty(properties, "ala_shallow_patch_velocity_solver",
                       E->control.ala_shallow_patch_velocity_solver, fp);
+    getIntProperty(properties, "ala_shallow_patch_highpass",
+                   E->control.ala_shallow_patch_highpass, fp);
     getIntProperty(properties, "ala_geneo_preconditioner",
                    E->control.ala_geneo_preconditioner, fp);
     getStringProperty(properties, "ala_geneo_basis_type",
