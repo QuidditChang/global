@@ -230,9 +230,65 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("strict_ala_pressure_depth_action_audit(", audited)
         self.assertIn("strict_ala_pressure_mode_audit(", audited)
 
+    def test_pressure_fgmres_uses_damped_true_schur_defect_correction(self) -> None:
+        core = self.stokes[
+            self.stokes.index("static float solve_ala_fgmres_core("):
+        ]
+        first_preconditioner = core.index(
+            "apply_ala_pressure_preconditioner(E,vb[j],zb[j]"
+        )
+        damping = core.index(
+            "zb[j][m][e] *= pressure_defect_damping", first_preconditioner
+        )
+        true_schur = core.index("assemble_grad_rho_p(E,zb[j],tmpF,lev);", damping)
+        defect = core.index(
+            "pressure_defect[m][e]=vb[j][m][e]-w[m][e]", true_schur
+        )
+        second_preconditioner = core.index(
+            "E,pressure_defect,pressure_correction", defect
+        )
+        correction = core.index(
+            "*pressure_correction[m][e]", second_preconditioner
+        )
+        final_true_schur = core.index(
+            "assemble_grad_rho_p(E,zb[j],tmpF,lev);", correction
+        )
+        self.assertLess(first_preconditioner, damping)
+        self.assertLess(damping, true_schur)
+        self.assertLess(true_schur, defect)
+        self.assertLess(defect, second_preconditioner)
+        self.assertLess(second_preconditioner, correction)
+        self.assertLess(correction, final_true_schur)
+        self.assertIn("ALA FGMRES SCHUR DEFECT", core)
+
+    def test_pressure_defect_controls_are_registered_and_validated(self) -> None:
+        definitions = (LIB_ROOT / "global_defs.h").read_text()
+        instructions = (LIB_ROOT / "Instructions.c").read_text()
+        properties = (GLOBAL_ROOT / "module/setProperties.c").read_text()
+        pyre = (
+            GLOBAL_ROOT
+            / "CitcomS/Components/Stokes_solver/Incompressible.py"
+        ).read_text()
+        output = (LIB_ROOT / "Output_h5.c").read_text()
+        self.assertIn("int ala_pressure_defect_corrections;", definitions)
+        self.assertIn("double ala_pressure_defect_damping;", definitions)
+        for text in (instructions, properties, pyre, output):
+            self.assertIn("ala_pressure_defect_corrections", text)
+            self.assertIn("ala_pressure_defect_damping", text)
+        for text in (instructions, properties):
+            self.assertIn(
+                "ala_pressure_defect_corrections requires", text
+            )
+            self.assertIn(
+                "ala_pressure_defect_damping must be in (0,1]", text
+            )
+
     def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = fgmres", cfg)
+        self.assertIn("ala_inner_accuracy_max    = 1e-2", cfg)
+        self.assertIn("ala_pressure_defect_corrections = 1", cfg)
+        self.assertIn("ala_pressure_defect_damping     = 0.13", cfg)
         self.assertIn(
             "ala_coupled_initial_velocity_relative_tolerance = 0.0", cfg
         )

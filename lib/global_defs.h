@@ -480,6 +480,8 @@ struct CONTROL {
     double ala_inner_accuracy_factor;
     int ala_pcg_restart_interval;
     char ala_outer_solver[20];
+    int ala_pressure_defect_corrections;
+    double ala_pressure_defect_damping;
     double ala_coupled_initial_velocity_relative_tolerance;
     double ala_coupled_inner_relative_tolerance;
     int ala_coupled_inner_max_cycles;

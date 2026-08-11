@@ -70,6 +70,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_element_vanka_rebuild_interval",
             "refstate_file",
             "piterations",
+            "ala_inner_accuracy_max",
             "ala_beta_element_source",
             "ala_beta_interval_file",
             "ala_shallow_patch_velocity_solver",
@@ -81,6 +82,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_mpi_overlap",
             "ala_pcg_restart_interval",
             "ala_outer_solver",
+            "ala_pressure_defect_corrections",
+            "ala_pressure_defect_damping",
             "ala_coupled_initial_velocity_relative_tolerance",
             "ala_coupled_inner_relative_tolerance",
             "ala_coupled_inner_max_cycles",
@@ -198,6 +201,22 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         self.assertRegex(
             strict_text,
             r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*410\.0\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_inner_accuracy_max\s*=\s*1e-2\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_pressure_defect_corrections\s*=\s*1\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_pressure_defect_damping\s*=\s*0\.13\s*$",
+        )
+        self.assertRegex(
+            strict_text,
+            r"(?m)^\s*ala_shallow_patch_weight\s*=\s*1\.0\s*$",
         )
         self.assertRegex(
             strict_text,

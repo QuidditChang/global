@@ -1784,6 +1784,10 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_beta_element_source);
     status = set_attribute_string(input, "ala_outer_solver",
                                   E->control.ala_outer_solver);
+    status = set_attribute_int(input, "ala_pressure_defect_corrections",
+                               E->control.ala_pressure_defect_corrections);
+    status = set_attribute_double(input, "ala_pressure_defect_damping",
+                                  E->control.ala_pressure_defect_damping);
     status = set_attribute_double(
         input, "ala_coupled_initial_velocity_relative_tolerance",
         E->control.ala_coupled_initial_velocity_relative_tolerance);

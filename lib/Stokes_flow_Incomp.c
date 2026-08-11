@@ -1552,7 +1552,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     void parallel_process_termination();
     double global_pdot();
     double global_vdot();
-    int m,j,i,e,count,valid,levnpno,neq,restart,used;
+    int m,j,i,k,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
     int momentum_gate,continuity_converged,momentum_converged;
     double beta,norm,inner_accuracy,relative_residual;
@@ -1566,8 +1566,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double sum,explicit_norm;
     double preconditioned_action2,preconditioned_product;
     double preconditioned_cosine,preconditioned_optimal_scale;
+    double pressure_defect_norm,pressure_defect_damping;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
-    double **w,**tmpF,**tmpU;
+    double **w,**tmpF,**tmpU,**pressure_defect,**pressure_correction;
     double ***vb,***zb,***ub;
     int max_basis;
     struct ala_block_vector pressure_residual_view;
@@ -1586,8 +1587,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     w=(double **)calloc(NCS,sizeof(double *));
     tmpF=(double **)calloc(NCS,sizeof(double *));
     tmpU=(double **)calloc(NCS,sizeof(double *));
+    pressure_defect=(double **)calloc(NCS,sizeof(double *));
+    pressure_correction=(double **)calloc(NCS,sizeof(double *));
     if(vb==NULL || zb==NULL || ub==NULL || w==NULL || tmpF==NULL ||
-       tmpU==NULL)
+       tmpU==NULL || pressure_defect==NULL || pressure_correction==NULL)
         myerror(E,"Unable to allocate ALA FGMRES basis tables");
     for(j=0;j<max_basis;j++) {
         vb[j]=(double **)calloc(NCS,sizeof(double *));
@@ -1609,7 +1612,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
          */
         tmpF[m]=(double *)calloc(neq+1,sizeof(double));
         tmpU[m]=(double *)calloc(neq+1,sizeof(double));
-        if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL)
+        pressure_defect[m]=(double *)calloc(levnpno+1,sizeof(double));
+        pressure_correction[m]=(double *)calloc(levnpno+1,sizeof(double));
+        if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL ||
+           pressure_defect[m]==NULL || pressure_correction[m]==NULL)
             myerror(E,"Unable to allocate ALA FGMRES operator workspace");
         for(j=0;j<max_basis;j++) {
             vb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
@@ -1650,8 +1656,16 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     converged=0;
     arnoldi_breakdown=0;
     if(E->parallel.me==0) {
-        fprintf(E->fp,"ALA FGMRES startup restart=%d\n",restart);
-        fprintf(stderr,"ALA FGMRES startup restart=%d\n",restart);
+        fprintf(E->fp,"ALA FGMRES startup restart=%d "
+                "pressure_defect_corrections=%d "
+                "pressure_defect_damping=%e\n",restart,
+                E->control.ala_pressure_defect_corrections,
+                E->control.ala_pressure_defect_damping);
+        fprintf(stderr,"ALA FGMRES startup restart=%d "
+                "pressure_defect_corrections=%d "
+                "pressure_defect_damping=%e\n",restart,
+                E->control.ala_pressure_defect_corrections,
+                E->control.ala_pressure_defect_damping);
         fprintf(E->fp,"ALA FGMRES continuity iteration=0 "
                 "cancellation=%e mass_norm=%e mass_relative=1.000000e+00 "
                 "algebraic_relative=1.000000e+00 "
@@ -1705,6 +1719,45 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             apply_ala_pressure_preconditioner(E,vb[j],zb[j],
                                               preconditioner_work,lev,count,
                                               cache);
+            if(E->control.ala_pressure_defect_corrections>0) {
+                pressure_defect_damping=
+                    E->control.ala_pressure_defect_damping;
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=1;e<=levnpno;e++)
+                        zb[j][m][e] *= pressure_defect_damping;
+                for(k=0;k<E->control.ala_pressure_defect_corrections;k++) {
+                    assemble_grad_rho_p(E,zb[j],tmpF,lev);
+                    inner_accuracy=strict_ala_inner_accuracy(
+                        E,tmpF,lev,E->control.ala_inner_accuracy_max);
+                    valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                    if(!valid)
+                        parallel_process_termination();
+                    strip_bcs_from_residual(E,tmpU,lev);
+                    assemble_div_rho_u(E,tmpU,w,lev);
+                    for(m=1;m<=E->sphere.caps_per_proc;m++)
+                        for(e=1;e<=levnpno;e++)
+                            pressure_defect[m][e]=vb[j][m][e]-w[m][e];
+                    pressure_defect_norm=sqrt(global_pdot(
+                        E,pressure_defect,pressure_defect,lev));
+                    if(E->parallel.me==0 &&
+                       (count==0 ||
+                        (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
+                        count+1==*steps_max)) {
+                        fprintf(E->fp,"ALA FGMRES SCHUR DEFECT iteration=%d "
+                                "correction=%d relative=%e damping=%e\n",
+                                count+1,k+1,pressure_defect_norm,
+                                pressure_defect_damping);
+                        fflush(E->fp);
+                    }
+                    apply_ala_pressure_preconditioner(
+                        E,pressure_defect,pressure_correction,
+                        preconditioner_work,lev,-1,cache);
+                    for(m=1;m<=E->sphere.caps_per_proc;m++)
+                        for(e=1;e<=levnpno;e++)
+                            zb[j][m][e] += pressure_defect_damping
+                                *pressure_correction[m][e];
+                }
+            }
             assemble_grad_rho_p(E,zb[j],tmpF,lev);
             inner_accuracy=strict_ala_inner_accuracy(
                 E,tmpF,lev,E->control.ala_inner_accuracy_max);
@@ -1938,6 +1991,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         free((void *)w[m]);
         free((void *)tmpF[m]);
         free((void *)tmpU[m]);
+        free((void *)pressure_defect[m]);
+        free((void *)pressure_correction[m]);
         for(j=0;j<max_basis;j++)
             free((void *)vb[j][m]);
         for(j=0;j<restart;j++) {
@@ -1957,6 +2012,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     free((void *)w);
     free((void *)tmpF);
     free((void *)tmpU);
+    free((void *)pressure_defect);
+    free((void *)pressure_correction);
     return((float)residual);
 }
 

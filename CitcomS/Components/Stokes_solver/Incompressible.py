@@ -126,6 +126,10 @@ class Incompressible(CitcomComponent):
                                     validator=prop.choice(
                                         ["pcg", "fgmres",
                                          "coupled_fgmres"]))
+        ala_pressure_defect_corrections = prop.int(
+            "ala_pressure_defect_corrections", default=0)
+        ala_pressure_defect_damping = prop.float(
+            "ala_pressure_defect_damping", default=1.0)
         ala_coupled_initial_velocity_relative_tolerance = prop.float(
             "ala_coupled_initial_velocity_relative_tolerance", default=0.0)
         ala_coupled_inner_relative_tolerance = prop.float(
