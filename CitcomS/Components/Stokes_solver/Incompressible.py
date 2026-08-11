@@ -263,8 +263,6 @@ class Incompressible(CitcomComponent):
             "ala_shallow_patch_velocity_solver", default="diagonal",
             validator=prop.choice(
                 ["diagonal", "node_block", "element_vanka"]))
-        ala_shallow_patch_highpass = prop.bool(
-            "ala_shallow_patch_highpass", default=True)
         ala_geneo_preconditioner = prop.bool(
             "ala_geneo_preconditioner", default=False)
         ala_geneo_basis_type = prop.str(

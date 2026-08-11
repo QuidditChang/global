@@ -235,6 +235,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         )
         self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
+        self.assertIn("ala_shallow_patch_regularization   = 1.0e-4", cfg)
         self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)
         self.assertIn(
             "ala_shallow_patch_horizontal_elements = 6", cfg
@@ -246,7 +247,6 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn(
             "ala_shallow_patch_velocity_solver  = element_vanka", cfg
         )
-        self.assertIn("ala_shallow_patch_highpass         = off", cfg)
         self.assertIn(
             "ala_coupled_factor2_coarse_correction = off", cfg
         )
