@@ -281,7 +281,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*23\s*$",
+            r"(?m)^\s*ala_coupled_shallow_vanka_layers\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,

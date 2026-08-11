@@ -228,7 +228,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ala_coupled_debug_stop_iteration            = 20", cfg)
         self.assertIn("ala_element_vanka_damping      = 0.2", cfg)
         self.assertIn(
-            "ala_coupled_shallow_vanka_layers             = 23", cfg
+            "ala_coupled_shallow_vanka_layers             = 0", cfg
         )
         self.assertIn(
             "ala_coupled_shallow_vanka_sweeps             = 0", cfg
