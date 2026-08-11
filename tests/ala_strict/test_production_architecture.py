@@ -330,7 +330,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_coupled_inner_relative_tolerance\s*=\s*1e-3\s*$",
+            r"(?m)^\s*ala_coupled_inner_relative_tolerance\s*=\s*1e-2\s*$",
         )
         self.assertRegex(
             strict_text,

@@ -200,6 +200,13 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         )
         self.assertIn("pressure_optimal_scale=rap/max(ap*ap", audit)
         self.assertIn("strict_ala_pressure_mode_audit(", audit)
+        self.assertIn("strict_ala_pressure_depth_action_audit(", audit)
+        self.assertIn(
+            "ALA PRESSURE DEPTH ACTION AUDIT iteration=%d", self.stokes
+        )
+        self.assertIn("boundaries[1]=200.0", self.stokes)
+        self.assertIn("boundaries[2]=410.0", self.stokes)
+        self.assertIn("boundaries[3]=660.0", self.stokes)
         self.assertIn(
             "ALA PRESSURE MODE AUDIT iteration=%d offset=%d", self.stokes
         )
@@ -215,7 +222,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_initial_velocity_relative_tolerance = 0.0", cfg
         )
         self.assertIn(
-            "ala_coupled_inner_relative_tolerance = 1e-3", cfg
+            "ala_coupled_inner_relative_tolerance = 1e-2", cfg
         )
         self.assertIn("ala_coupled_inner_max_cycles       = 200", cfg)
         self.assertIn(

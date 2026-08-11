@@ -993,6 +993,71 @@ static void strict_ala_pressure_mode_audit(
 }
 
 
+/* Resolve the pressure part of A P^-1 r by physical depth before changing
+ * the shallow Schwarz weights.  The same residual/action pair used by the
+ * block audit is split into fixed mantle bands, so each reported least-squares
+ * scale is a direct property of the current Tref rheology and preconditioner
+ * action rather than a residual-amplitude guess. */
+static void strict_ala_pressure_depth_action_audit(
+    struct All_variables *E, const struct ala_block_vector *residual,
+    const struct ala_block_vector *action, int lev, int iteration)
+{
+    int m,e,ez,bin,elz,i;
+    double depth_km,total_r2,cosine,optimal_scale,action_to_residual;
+    double boundaries[7],local[18],global[18];
+
+    boundaries[0]=0.0;
+    boundaries[1]=200.0;
+    boundaries[2]=410.0;
+    boundaries[3]=660.0;
+    boundaries[4]=1000.0;
+    boundaries[5]=2000.0;
+    boundaries[6]=1.0e30;
+    for(i=0;i<18;i++)
+        local[i]=0.0;
+    elz=E->lmesh.ELZ[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+            ez=(e-1)%elz+1;
+            depth_km=(1.0-0.5*(E->sx[m][3][ez]
+                              +E->sx[m][3][ez+1]))*E->data.radius_km;
+            bin=5;
+            for(i=0;i<5;i++)
+                if(depth_km<boundaries[i+1]) {
+                    bin=i;
+                    break;
+                }
+            local[3*bin+0] += residual->pressure[m][e]
+                                  *residual->pressure[m][e];
+            local[3*bin+1] += action->pressure[m][e]
+                                  *action->pressure[m][e];
+            local[3*bin+2] += residual->pressure[m][e]
+                                  *action->pressure[m][e];
+        }
+    MPI_Allreduce(local,global,18,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    total_r2=0.0;
+    for(bin=0;bin<6;bin++)
+        total_r2 += global[3*bin+0];
+    if(E->parallel.me==0)
+        for(bin=0;bin<6;bin++) {
+            cosine=global[3*bin+2]
+                /sqrt(max(global[3*bin+0]*global[3*bin+1],1.0e-300));
+            optimal_scale=global[3*bin+2]
+                /max(global[3*bin+1],1.0e-300);
+            action_to_residual=sqrt(global[3*bin+1]
+                /max(global[3*bin+0],1.0e-300));
+            fprintf(E->fp,"ALA PRESSURE DEPTH ACTION AUDIT iteration=%d "
+                    "bin=%d depth_km=[%e,%e) residual_fraction=%e "
+                    "action_to_residual=%e cosine=%e optimal_scale=%e\n",
+                    iteration,bin,boundaries[bin],boundaries[bin+1],
+                    global[3*bin+0]/max(total_r2,1.0e-300),
+                    action_to_residual,cosine,optimal_scale);
+        }
+    if(E->parallel.me==0)
+        fflush(E->fp);
+}
+
+
 static void strict_ala_coupled_preconditioner_audit(
     struct All_variables *E, const struct ala_block_vector *residual,
     const struct ala_block_vector *correction,
@@ -1049,6 +1114,8 @@ static void strict_ala_coupled_preconditioner_audit(
                 pressure_projected_defect,block_projected_defect);
         fflush(E->fp);
     }
+    strict_ala_pressure_depth_action_audit(
+        E,residual,action,E->mesh.levmax,iteration);
     strict_ala_pressure_mode_audit(
         E,residual,action,E->mesh.levmax,iteration);
 }
