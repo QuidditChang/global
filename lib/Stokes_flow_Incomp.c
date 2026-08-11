@@ -1552,7 +1552,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     void parallel_process_termination();
     double global_pdot();
     double global_vdot();
-    int m,j,i,k,e,count,valid,levnpno,neq,restart,used;
+    int m,j,i,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
     int momentum_gate,continuity_converged,momentum_converged;
     double beta,norm,inner_accuracy,relative_residual;
@@ -1566,9 +1566,15 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double sum,explicit_norm;
     double preconditioned_action2,preconditioned_product;
     double preconditioned_cosine,preconditioned_optimal_scale;
-    double pressure_defect_norm,pressure_defect_damping;
+    double pressure_defect_norm,pressure_defect_after;
+    double pressure_defect_damping,pressure_initial_step;
+    double pressure_base_step,pressure_correction_step;
+    double pressure_action2,pressure_product,pressure_cross;
+    double pressure_correction_action2,pressure_correction_product;
+    double pressure_gram_determinant,pressure_residual_product;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
     double **w,**tmpF,**tmpU,**pressure_defect,**pressure_correction;
+    double **pressure_correction_action;
     double ***vb,***zb,***ub;
     int max_basis;
     struct ala_block_vector pressure_residual_view;
@@ -1589,8 +1595,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     tmpU=(double **)calloc(NCS,sizeof(double *));
     pressure_defect=(double **)calloc(NCS,sizeof(double *));
     pressure_correction=(double **)calloc(NCS,sizeof(double *));
+    pressure_correction_action=(double **)calloc(NCS,sizeof(double *));
     if(vb==NULL || zb==NULL || ub==NULL || w==NULL || tmpF==NULL ||
-       tmpU==NULL || pressure_defect==NULL || pressure_correction==NULL)
+       tmpU==NULL || pressure_defect==NULL || pressure_correction==NULL ||
+       pressure_correction_action==NULL)
         myerror(E,"Unable to allocate ALA FGMRES basis tables");
     for(j=0;j<max_basis;j++) {
         vb[j]=(double **)calloc(NCS,sizeof(double *));
@@ -1614,8 +1622,11 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         tmpU[m]=(double *)calloc(neq+1,sizeof(double));
         pressure_defect[m]=(double *)calloc(levnpno+1,sizeof(double));
         pressure_correction[m]=(double *)calloc(levnpno+1,sizeof(double));
+        pressure_correction_action[m]=
+            (double *)calloc(levnpno+1,sizeof(double));
         if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL ||
-           pressure_defect[m]==NULL || pressure_correction[m]==NULL)
+           pressure_defect[m]==NULL || pressure_correction[m]==NULL ||
+           pressure_correction_action[m]==NULL)
             myerror(E,"Unable to allocate ALA FGMRES operator workspace");
         for(j=0;j<max_basis;j++) {
             vb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
@@ -1722,50 +1733,134 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             if(E->control.ala_pressure_defect_corrections>0) {
                 pressure_defect_damping=
                     E->control.ala_pressure_defect_damping;
+                /* Compute the true Schur action of the unscaled local map,
+                 * then minimize ||v-alpha*S*M^-1*v|| on this Krylov vector.
+                 * The configured damping is retained only as a safe fallback
+                 * for a non-positive or non-finite line-search curvature. */
+                assemble_grad_rho_p(E,zb[j],tmpF,lev);
+                inner_accuracy=strict_ala_inner_accuracy(
+                    E,tmpF,lev,E->control.ala_inner_accuracy_max);
+                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                if(!valid)
+                    parallel_process_termination();
+                strip_bcs_from_residual(E,tmpU,lev);
+                assemble_div_rho_u(E,tmpU,w,lev);
+                pressure_action2=global_pdot(E,w,w,lev);
+                pressure_product=global_pdot(E,vb[j],w,lev);
+                pressure_initial_step=pressure_defect_damping;
+                if(isfinite(pressure_action2) &&
+                   isfinite(pressure_product) &&
+                   pressure_action2>1.0e-300 && pressure_product>0.0)
+                    pressure_initial_step=pressure_product/pressure_action2;
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(e=1;e<=levnpno;e++)
-                        zb[j][m][e] *= pressure_defect_damping;
-                for(k=0;k<E->control.ala_pressure_defect_corrections;k++) {
-                    assemble_grad_rho_p(E,zb[j],tmpF,lev);
-                    inner_accuracy=strict_ala_inner_accuracy(
-                        E,tmpF,lev,E->control.ala_inner_accuracy_max);
-                    valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
-                    if(!valid)
-                        parallel_process_termination();
-                    strip_bcs_from_residual(E,tmpU,lev);
-                    assemble_div_rho_u(E,tmpU,w,lev);
-                    for(m=1;m<=E->sphere.caps_per_proc;m++)
-                        for(e=1;e<=levnpno;e++)
-                            pressure_defect[m][e]=vb[j][m][e]-w[m][e];
-                    pressure_defect_norm=sqrt(global_pdot(
-                        E,pressure_defect,pressure_defect,lev));
-                    if(E->parallel.me==0 &&
-                       (count==0 ||
-                        (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
-                        count+1==*steps_max)) {
-                        fprintf(E->fp,"ALA FGMRES SCHUR DEFECT iteration=%d "
-                                "correction=%d relative=%e damping=%e\n",
-                                count+1,k+1,pressure_defect_norm,
-                                pressure_defect_damping);
-                        fflush(E->fp);
+                        pressure_defect[m][e]=vb[j][m][e]
+                            -pressure_initial_step*w[m][e];
+                pressure_defect_norm=sqrt(global_pdot(
+                    E,pressure_defect,pressure_defect,lev));
+                apply_ala_pressure_preconditioner(
+                    E,pressure_defect,pressure_correction,
+                    preconditioner_work,lev,-1,cache);
+                assemble_grad_rho_p(E,pressure_correction,tmpF,lev);
+                inner_accuracy=strict_ala_inner_accuracy(
+                    E,tmpF,lev,E->control.ala_inner_accuracy_max);
+                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                if(!valid)
+                    parallel_process_termination();
+                strip_bcs_from_residual(E,tmpU,lev);
+                assemble_div_rho_u(
+                    E,tmpU,pressure_correction_action,lev);
+
+                /* Refit both coefficients in span{S*M^-1*v,
+                 * S*M^-1*(v-alpha*S*M^-1*v)}.  This two-dimensional normal
+                 * equation costs only global dot products and guarantees a
+                 * defect no worse than either one-direction line search. */
+                pressure_cross=global_pdot(
+                    E,w,pressure_correction_action,lev);
+                pressure_correction_action2=global_pdot(
+                    E,pressure_correction_action,
+                    pressure_correction_action,lev);
+                pressure_correction_product=global_pdot(
+                    E,vb[j],pressure_correction_action,lev);
+                pressure_base_step=pressure_initial_step;
+                pressure_correction_step=pressure_defect_damping;
+                if(isfinite(pressure_correction_action2) &&
+                   pressure_correction_action2>1.0e-300) {
+                    pressure_residual_product=pressure_correction_product
+                        -pressure_initial_step*pressure_cross;
+                    if(isfinite(pressure_residual_product) &&
+                       pressure_residual_product>0.0)
+                        pressure_correction_step=pressure_residual_product
+                            /pressure_correction_action2;
+                }
+                pressure_gram_determinant=pressure_action2
+                    *pressure_correction_action2
+                    -pressure_cross*pressure_cross;
+                if(isfinite(pressure_gram_determinant) &&
+                   pressure_gram_determinant>
+                       1.0e-14*pressure_action2
+                       *pressure_correction_action2) {
+                    pressure_base_step=(pressure_product
+                        *pressure_correction_action2
+                        -pressure_correction_product*pressure_cross)
+                        /pressure_gram_determinant;
+                    pressure_correction_step=(pressure_correction_product
+                        *pressure_action2-pressure_product*pressure_cross)
+                        /pressure_gram_determinant;
+                    if(!isfinite(pressure_base_step) ||
+                       !isfinite(pressure_correction_step) ||
+                       pressure_base_step<=0.0 ||
+                       pressure_correction_step<=0.0) {
+                        pressure_base_step=pressure_initial_step;
+                        pressure_residual_product=
+                            pressure_correction_product
+                            -pressure_initial_step*pressure_cross;
+                        pressure_correction_step=pressure_defect_damping;
+                        if(isfinite(pressure_residual_product) &&
+                           pressure_residual_product>0.0 &&
+                           pressure_correction_action2>1.0e-300)
+                            pressure_correction_step=
+                                pressure_residual_product
+                                /pressure_correction_action2;
                     }
-                    apply_ala_pressure_preconditioner(
-                        E,pressure_defect,pressure_correction,
-                        preconditioner_work,lev,-1,cache);
-                    for(m=1;m<=E->sphere.caps_per_proc;m++)
-                        for(e=1;e<=levnpno;e++)
-                            zb[j][m][e] += pressure_defect_damping
-                                *pressure_correction[m][e];
+                }
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=1;e<=levnpno;e++) {
+                        zb[j][m][e]=pressure_base_step*zb[j][m][e]
+                            +pressure_correction_step
+                            *pressure_correction[m][e];
+                        w[m][e]=pressure_base_step*w[m][e]
+                            +pressure_correction_step
+                            *pressure_correction_action[m][e];
+                        pressure_defect[m][e]=vb[j][m][e]-w[m][e];
+                    }
+                pressure_defect_after=sqrt(global_pdot(
+                    E,pressure_defect,pressure_defect,lev));
+                if(E->parallel.me==0 &&
+                   (count==0 ||
+                    (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
+                    count+1==*steps_max)) {
+                    fprintf(E->fp,"ALA FGMRES SCHUR DEFECT iteration=%d "
+                            "correction=1 before=%e after=%e "
+                            "initial_step=%e base_step=%e "
+                            "correction_step=%e fallback_damping=%e\n",
+                            count+1,pressure_defect_norm,
+                            pressure_defect_after,pressure_initial_step,
+                            pressure_base_step,pressure_correction_step,
+                            pressure_defect_damping);
+                    fflush(E->fp);
                 }
             }
-            assemble_grad_rho_p(E,zb[j],tmpF,lev);
-            inner_accuracy=strict_ala_inner_accuracy(
-                E,tmpF,lev,E->control.ala_inner_accuracy_max);
-            valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
-            if(!valid)
-                parallel_process_termination();
-            strip_bcs_from_residual(E,tmpU,lev);
-            assemble_div_rho_u(E,tmpU,w,lev);
+            else {
+                assemble_grad_rho_p(E,zb[j],tmpF,lev);
+                inner_accuracy=strict_ala_inner_accuracy(
+                    E,tmpF,lev,E->control.ala_inner_accuracy_max);
+                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                if(!valid)
+                    parallel_process_termination();
+                strip_bcs_from_residual(E,tmpU,lev);
+                assemble_div_rho_u(E,tmpU,w,lev);
+            }
             if(E->control.ala_depth_diagnostics &&
                (count==0 ||
                 (count+1)%E->control.ala_depth_diagnostic_interval==0 ||
@@ -1993,6 +2088,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         free((void *)tmpU[m]);
         free((void *)pressure_defect[m]);
         free((void *)pressure_correction[m]);
+        free((void *)pressure_correction_action[m]);
         for(j=0;j<max_basis;j++)
             free((void *)vb[j][m]);
         for(j=0;j<restart;j++) {
@@ -2014,6 +2110,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     free((void *)tmpU);
     free((void *)pressure_defect);
     free((void *)pressure_correction);
+    free((void *)pressure_correction_action);
     return((float)residual);
 }
 

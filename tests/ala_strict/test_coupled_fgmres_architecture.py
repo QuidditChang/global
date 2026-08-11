@@ -230,35 +230,54 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("strict_ala_pressure_depth_action_audit(", audited)
         self.assertIn("strict_ala_pressure_mode_audit(", audited)
 
-    def test_pressure_fgmres_uses_damped_true_schur_defect_correction(self) -> None:
+    def test_pressure_fgmres_uses_adaptive_true_schur_defect_correction(self) -> None:
         core = self.stokes[
             self.stokes.index("static float solve_ala_fgmres_core("):
         ]
         first_preconditioner = core.index(
             "apply_ala_pressure_preconditioner(E,vb[j],zb[j]"
         )
-        damping = core.index(
-            "zb[j][m][e] *= pressure_defect_damping", first_preconditioner
+        first_action = core.index(
+            "assemble_grad_rho_p(E,zb[j],tmpF,lev);", first_preconditioner
         )
-        true_schur = core.index("assemble_grad_rho_p(E,zb[j],tmpF,lev);", damping)
+        line_search = core.index(
+            "pressure_initial_step=pressure_product/pressure_action2",
+            first_action,
+        )
         defect = core.index(
-            "pressure_defect[m][e]=vb[j][m][e]-w[m][e]", true_schur
+            "-pressure_initial_step*w[m][e]", line_search
         )
         second_preconditioner = core.index(
-            "E,pressure_defect,pressure_correction", defect
+            "E,pressure_defect,pressure_correction,", defect
+        )
+        correction_action = core.index(
+            "E,tmpU,pressure_correction_action,lev", second_preconditioner
+        )
+        two_direction_fit = core.index(
+            "pressure_gram_determinant=pressure_action2",
+            correction_action,
         )
         correction = core.index(
-            "*pressure_correction[m][e]", second_preconditioner
+            "*pressure_correction[m][e]", two_direction_fit
         )
-        final_true_schur = core.index(
-            "assemble_grad_rho_p(E,zb[j],tmpF,lev);", correction
-        )
-        self.assertLess(first_preconditioner, damping)
-        self.assertLess(damping, true_schur)
-        self.assertLess(true_schur, defect)
+        self.assertLess(first_preconditioner, first_action)
+        self.assertLess(first_action, line_search)
+        self.assertLess(line_search, defect)
         self.assertLess(defect, second_preconditioner)
-        self.assertLess(second_preconditioner, correction)
-        self.assertLess(correction, final_true_schur)
+        self.assertLess(second_preconditioner, correction_action)
+        self.assertLess(correction_action, two_direction_fit)
+        self.assertLess(two_direction_fit, correction)
+        self.assertIn("pressure_correction_action", core)
+        self.assertRegex(
+            core,
+            r"pressure_product\s*\*\s*pressure_correction_action2",
+        )
+        self.assertRegex(
+            core,
+            r"pressure_correction_product\s*\*\s*pressure_action2",
+        )
+        self.assertIn("base_step=%e", core)
+        self.assertIn("before=%e after=%e", core)
         self.assertIn("ALA FGMRES SCHUR DEFECT", core)
 
     def test_pressure_defect_controls_are_registered_and_validated(self) -> None:
