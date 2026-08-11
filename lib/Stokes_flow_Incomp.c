@@ -79,6 +79,47 @@ static void strict_ala_momentum_decomposition_audit(
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
+/* Apply W = (I-Q) + sqrt(scale) Q, where Q is the orthogonal factor-two
+ * 2x2x2 cell-average projector used by strict_ala_pressure_mode_audit().
+ * The groups are disjoint, so this supports both distinct and in-place input
+ * and output while preserving the exact coarse/fine decomposition. */
+static void ala_apply_pressure_factor2_similarity(
+    struct All_variables *E, double **input, double **output, int lev,
+    double scale)
+{
+    int m,ex,ey,ez,fx,fy,fz,e,elx,ely,elz;
+    double mean,coarse_delta;
+
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    if(elx%2!=0 || ely%2!=0 || elz%2!=0)
+        myerror(E,"ALA factor-two pressure similarity requires even mesh dimensions");
+    coarse_delta=sqrt(scale)-1.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        output[m][0]=0.0;
+        for(ey=1;ey<=ely;ey+=2)
+            for(ex=1;ex<=elx;ex+=2)
+                for(ez=1;ez<=elz;ez+=2) {
+                    mean=0.0;
+                    for(fy=ey;fy<=ey+1;fy++)
+                        for(fx=ex;fx<=ex+1;fx++)
+                            for(fz=ez;fz<=ez+1;fz++) {
+                                e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                mean += input[m][e];
+                            }
+                    mean *= 0.125;
+                    for(fy=ey;fy<=ey+1;fy++)
+                        for(fx=ex;fx<=ex+1;fx++)
+                            for(fz=ez;fz<=ez+1;fz++) {
+                                e=fz+(fx-1)*elz+(fy-1)*elz*elx;
+                                output[m][e]=input[m][e]+coarse_delta*mean;
+                            }
+                }
+    }
+}
+
+
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
                                               double **work, int lev,
@@ -2016,7 +2057,7 @@ struct ala_pressure_preconditioner_cache {
     double *pressure_mg_velocity_rhs[NCS];
     double *pressure_mg_galerkin_p[NCS];
     double *pressure_mg_galerkin_Ap[NCS];
-    double *pressure_depth_weighted_r[NCS];
+    double *pressure_factor2_weighted_r[NCS];
     int pressure_mg_min_level;
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
@@ -3727,7 +3768,7 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->pressure_mg_velocity_rhs[m]);
         free((void *)cache->pressure_mg_galerkin_p[m]);
         free((void *)cache->pressure_mg_galerkin_Ap[m]);
-        free((void *)cache->pressure_depth_weighted_r[m]);
+        free((void *)cache->pressure_factor2_weighted_r[m]);
         for(level=0;level<MAX_LEVELS;level++) {
             free((void *)cache->pressure_mg_rhs[level][m]);
             free((void *)cache->pressure_mg_x[level][m]);
@@ -5826,38 +5867,28 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *fine_velocity_direction[NCS];
     double *ghost_r[NCS][ALA_PATCH_MPI_FACES];
     double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
-    double **effective_r,depth_km,depth_weight;
+    double **effective_r,factor2_scale;
 
     npno=E->lmesh.NPNO[lev];
     effective_r=r;
-    if(fabs(E->control.ala_pressure_shallow_action_scale-1.0)>1.0e-12) {
-        elz=E->lmesh.ELZ[lev];
-        depth_weight=sqrt(E->control.ala_pressure_shallow_action_scale);
+    factor2_scale=E->control.ala_pressure_factor2_coarse_action_scale;
+    if(fabs(factor2_scale-1.0)>1.0e-12) {
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
-            if(cache->pressure_depth_weighted_r[m]==NULL) {
-                cache->pressure_depth_weighted_r[m]=(double *)calloc(
+            if(cache->pressure_factor2_weighted_r[m]==NULL) {
+                cache->pressure_factor2_weighted_r[m]=(double *)calloc(
                     npno+1,sizeof(double));
-                if(cache->pressure_depth_weighted_r[m]==NULL)
-                    myerror(E,"Unable to allocate ALA depth-weighted pressure residual");
-            }
-            cache->pressure_depth_weighted_r[m][0]=0.0;
-            for(e=1;e<=npno;e++) {
-                ez=(e-1)%elz+1;
-                depth_km=(1.0-0.5*(E->sx[m][3][ez]
-                                  +E->sx[m][3][ez+1]))*E->data.radius_km;
-                cache->pressure_depth_weighted_r[m][e]=r[m][e]
-                    *(depth_km<E->control.ala_pressure_shallow_depth_km
-                      ? depth_weight : 1.0);
+                if(cache->pressure_factor2_weighted_r[m]==NULL)
+                    myerror(E,"Unable to allocate ALA factor-two pressure residual");
             }
         }
-        effective_r=cache->pressure_depth_weighted_r;
+        ala_apply_pressure_factor2_similarity(
+            E,r,cache->pressure_factor2_weighted_r,lev,factor2_scale);
+        effective_r=cache->pressure_factor2_weighted_r;
         if(iteration==0 && E->parallel.me==0) {
-            fprintf(E->fp,"ALA PRESSURE DEPTH SIMILARITY depth_km=%e "
-                    "shallow_action_scale=%e shallow_weight=%e "
-                    "operator=W*P^-1*W\n",
-                    E->control.ala_pressure_shallow_depth_km,
-                    E->control.ala_pressure_shallow_action_scale,
-                    depth_weight);
+            fprintf(E->fp,"ALA PRESSURE FACTOR2 SIMILARITY "
+                    "coarse_action_scale=%e coarse_weight=%e "
+                    "fine_action_scale=1.0 operator=W*P^-1*W\n",
+                    factor2_scale,sqrt(factor2_scale));
             fflush(E->fp);
         }
     }
@@ -6103,7 +6134,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
             E,effective_r,z,lev,iteration,cache);
 
     if(!E->control.ala_two_level_preconditioner)
-        goto pressure_depth_prolongation;
+        goto pressure_factor2_prolongation;
 
     clev=lev-E->control.ala_two_level_offset;
     factor=1 << E->control.ala_two_level_offset;
@@ -6383,19 +6414,9 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         free((void *)fine_velocity_direction[m]);
     }
 
-pressure_depth_prolongation:
-    if(fabs(E->control.ala_pressure_shallow_action_scale-1.0)>1.0e-12) {
-        elz=E->lmesh.ELZ[lev];
-        depth_weight=sqrt(E->control.ala_pressure_shallow_action_scale);
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(e=1;e<=npno;e++) {
-                ez=(e-1)%elz+1;
-                depth_km=(1.0-0.5*(E->sx[m][3][ez]
-                                  +E->sx[m][3][ez+1]))*E->data.radius_km;
-                if(depth_km<E->control.ala_pressure_shallow_depth_km)
-                    z[m][e] *= depth_weight;
-            }
-    }
+pressure_factor2_prolongation:
+    if(fabs(factor2_scale-1.0)>1.0e-12)
+        ala_apply_pressure_factor2_similarity(E,z,z,lev,factor2_scale);
 }
 
 

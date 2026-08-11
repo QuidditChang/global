@@ -1731,11 +1731,9 @@ void h5output_meta(struct All_variables *E)
                                E->control.ala_pressure_multigrid_galerkin);
     status = set_attribute_double(input, "ala_pressure_bpi_weight",
                                   E->control.ala_pressure_bpi_weight);
-    status = set_attribute_double(input, "ala_pressure_shallow_depth_km",
-                                  E->control.ala_pressure_shallow_depth_km);
-    status = set_attribute_double(input,
-                                  "ala_pressure_shallow_action_scale",
-                                  E->control.ala_pressure_shallow_action_scale);
+    status = set_attribute_double(
+        input, "ala_pressure_factor2_coarse_action_scale",
+        E->control.ala_pressure_factor2_coarse_action_scale);
     status = set_attribute_int(input, "ala_pressure_multigrid_min_level",
                                E->control.ala_pressure_multigrid_min_level);
     status = set_attribute_int(input, "ala_pressure_multigrid_pre_smooth",
