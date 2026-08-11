@@ -217,7 +217,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
 
     def test_active_cfg_is_clean_current_rheology_diagnostic(self) -> None:
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
-        self.assertIn("ala_outer_solver                = coupled_fgmres", cfg)
+        self.assertIn("ala_outer_solver                = fgmres", cfg)
         self.assertIn(
             "ala_coupled_initial_velocity_relative_tolerance = 0.0", cfg
         )
@@ -244,16 +244,6 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn("ala_shallow_patch_regularization   = 1.0e-3", cfg)
         self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)
-        self.assertIn(
-            "ala_pressure_factor2_coarse_action_scale = 1.58", cfg
-        )
-        self.assertIn("operator=W*P^-1*W", self.stokes)
-        self.assertIn(
-            "effective_r=cache->pressure_factor2_weighted_r", self.stokes
-        )
-        self.assertIn(
-            "ala_apply_pressure_factor2_similarity(E,z,z", self.stokes
-        )
         self.assertIn(
             "ala_shallow_patch_horizontal_elements = 6", cfg
         )

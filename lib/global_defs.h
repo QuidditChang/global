@@ -530,7 +530,6 @@ struct CONTROL {
     int ala_pressure_multigrid;
     int ala_pressure_multigrid_galerkin;
     double ala_pressure_bpi_weight;
-    double ala_pressure_factor2_coarse_action_scale;
     int ala_pressure_multigrid_min_level;
     int ala_pressure_multigrid_pre_smooth;
     int ala_pressure_multigrid_post_smooth;

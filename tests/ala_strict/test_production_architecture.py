@@ -119,7 +119,6 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_pressure_multigrid",
             "ala_pressure_multigrid_galerkin",
             "ala_pressure_bpi_weight",
-            "ala_pressure_factor2_coarse_action_scale",
             "ala_pressure_multigrid_min_level",
             "ala_pressure_multigrid_pre_smooth",
             "ala_pressure_multigrid_post_smooth",
@@ -168,7 +167,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*piterations\s*=\s*220\s*$",
+            r"(?m)^\s*piterations\s*=\s*60\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -306,7 +305,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_outer_solver\s*=\s*coupled_fgmres\s*$",
+            r"(?m)^\s*ala_outer_solver\s*=\s*fgmres\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -623,7 +622,6 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             self.assertIn(f'getIntProperty(properties, "{name}"', properties)
         for name in (
             "ala_pressure_bpi_weight",
-            "ala_pressure_factor2_coarse_action_scale",
             "ala_pressure_multigrid_damping",
             "ala_pressure_multigrid_weight",
         ):
