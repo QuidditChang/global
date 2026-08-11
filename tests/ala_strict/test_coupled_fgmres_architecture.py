@@ -234,8 +234,8 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_shallow_vanka_sweeps             = 0", cfg
         )
         self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
-        self.assertIn("ala_shallow_patch_weight           = 0.13", cfg)
-        self.assertIn("ala_pressure_bpi_weight                 = 0.13", cfg)
+        self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
+        self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)
         self.assertIn(
             "ala_shallow_patch_horizontal_elements = 6", cfg
         )
