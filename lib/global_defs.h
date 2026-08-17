@@ -471,6 +471,7 @@ struct CONTROL {
     /* compressible Stokes force form: 0=TALA, 1=ALA pressure buoyancy */
     int ala_pressure_buoyancy;
     char compressible_formulation[20];
+    int ala_leng_zhong_2008;
     double ala_augmented_lagrangian_gamma;
 
     /* strict-ALA Krylov diagnostics and inexact velocity solves */
@@ -915,6 +916,7 @@ struct All_variables {
     int *Node_k_id[MAX_LEVELS][NCS];
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
+    double *LZ_BPI[MAX_LEVELS][NCS];
     double *ALA_velocity_BI[MAX_LEVELS][NCS];
     double *ALA_vanka_overlap_BI[MAX_LEVELS][NCS];
     higher_precision *ALA_vanka_chol[MAX_LEVELS][NCS];

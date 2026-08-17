@@ -515,6 +515,8 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "compressible_formulation must be tala or ala");
   }
 
+  input_boolean("ala_leng_zhong_2008",
+                &(E->control.ala_leng_zhong_2008),"off",m);
   input_boolean("ala_schur_symmetry_check",
                 &(E->control.ala_schur_symmetry_check),"off",m);
   input_double("ala_schur_symmetry_tolerance",
@@ -747,6 +749,32 @@ void read_initial_settings(struct All_variables *E)
      E->control.augmented_Lagr)
       myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
               "mutually exclusive");
+  if(E->control.ala_leng_zhong_2008 &&
+     (E->control.inv_gruneisen != 0 ||
+      E->control.ala_pressure_buoyancy ||
+      !E->control.precondition ||
+      E->control.augmented_Lagr ||
+      E->control.ala_augmented_lagrangian_gamma != 0.0))
+      myerror(E, "ala_leng_zhong_2008 Stage 2 requires gruneisen=0, "
+              "compressible_formulation=tala, precond=on, aug_lagr=off, "
+              "and ala_augmented_lagrangian_gamma=0");
+  if(E->control.ala_leng_zhong_2008 &&
+     (E->control.ala_pressure_defect_corrections != 0 ||
+      E->control.ala_coupled_defect_corrections != 0 ||
+      E->control.ala_coupled_factor2_coarse_correction ||
+      E->control.ala_coupled_element_vanka ||
+      E->control.ala_coupled_multilevel_vcycle ||
+      E->control.ala_radial_line_preconditioner ||
+      E->control.ala_element_vanka_smoother ||
+      E->control.ala_two_level_preconditioner ||
+      E->control.ala_pressure_multigrid ||
+      E->control.ala_pressure_multigrid_galerkin ||
+      E->control.ala_global_coarse_preconditioner ||
+      E->control.ala_shallow_patch_preconditioner ||
+      E->control.ala_geneo_preconditioner))
+      myerror(E, "ala_leng_zhong_2008 Stage 2 excludes full-B, Vanka, "
+              "Schwarz, multilevel, pressure-MG, coarse, and defect "
+              "preconditioners");
   if(strcmp(E->control.ala_beta_element_source,"supplied_average") != 0 &&
      strcmp(E->control.ala_beta_element_source,"density_log_secant") != 0 &&
      strcmp(E->control.ala_beta_element_source,"interval") != 0)
@@ -1089,7 +1117,7 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_element_vanka_smoother requires multigrid, "
               "and compressible_formulation=ala");
 
-  if(E->control.inv_gruneisen != 0) {
+  if(E->control.inv_gruneisen != 0 || E->control.ala_leng_zhong_2008) {
       /* "cg" is the legacy split compressible solver.  Strict ALA may use
        * BiCGStab or its dedicated complete-operator PCG experiment. */
       input_string("uzawa",E->control.uzawa,"cg",m);
@@ -1115,6 +1143,9 @@ void read_initial_settings(struct All_variables *E)
       else
           myerror(E, "Error: unknown Uzawa iteration\n");
   }
+  if(E->control.ala_leng_zhong_2008 &&
+     strcmp(E->control.uzawa,"cg") != 0)
+      myerror(E, "ala_leng_zhong_2008 Stage 2 requires uzawa=cg");
   if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
       strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&
      strcmp(E->control.uzawa,"ala_cg") != 0)
@@ -1465,6 +1496,7 @@ void allocate_common_vars(E)
 
     E->EVI[i][j] = (float *) malloc((nel+1)*vpoints[E->mesh.nsd]*sizeof(float));
     E->BPI[i][j] = (double *) malloc((npno+1)*sizeof(double));
+    E->LZ_BPI[i][j] = (double *) malloc((npno+1)*sizeof(double));
     E->ALA_BPI_line_diag[i][j] =
         (double *) malloc((npno+1)*sizeof(double));
     E->ALA_BPI_line_lower[i][j] =
@@ -1670,6 +1702,7 @@ void global_default_values(E)
     E->control.EMULTIGRID = 0;
     E->control.augmented_Lagr = 0;
     E->control.augmented = 0.0;
+    E->control.ala_leng_zhong_2008 = 0;
     E->control.ala_augmented_lagrangian_gamma = 0.0;
     E->control.ala_schur_symmetry_check = 0;
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;

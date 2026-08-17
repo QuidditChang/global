@@ -637,6 +637,38 @@ void build_diagonal_of_Ahat(E)
 }
 
 
+void build_diagonal_of_leng_zhong_Ahat(E)
+    struct All_variables *E;
+{
+    double assemble_leng_zhong_dAhatp_entry();
+    double diagonal;
+    int e, level, m, npno;
+
+    for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+      for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        npno=E->lmesh.NPNO[level];
+        for(e=1;e<=npno;e++)
+          E->LZ_BPI[level][m][e]=1.0;
+      }
+
+    if(!E->control.ala_leng_zhong_2008 || !E->control.precondition)
+      return;
+
+    for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
+      for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        npno=E->lmesh.NPNO[level];
+        for(e=1;e<=npno;e++) {
+          diagonal=assemble_leng_zhong_dAhatp_entry(E,e,level,m);
+          if(!isfinite(diagonal) || diagonal<=0.0)
+            myerror(E, "Leng-Zhong Stage 2 D-only BPI is not positive finite");
+          E->LZ_BPI[level][m][e]=1.0/diagonal;
+        }
+      }
+
+    return;
+}
+
+
 double assemble_Ahatp_jacobi_entry(E,e1,e2,level,m)
      struct All_variables *E;
      int e1,e2,level,m;
@@ -1096,6 +1128,45 @@ double assemble_dAhatp_entry(E,e,level,m)
       }
 
 return(divU);  }
+
+
+double assemble_leng_zhong_dAhatp_entry(E,e,level,m)
+     struct All_variables *E;
+     int e,level,m;
+{
+    int a,b,j,node,p;
+    double divU,gradP[81];
+    const int ends=enodes[E->mesh.nsd];
+    const int dims=E->mesh.nsd;
+
+    for(p=0;p<81;p++)
+      gradP[p]=0.0;
+
+    for(a=1;a<=ends;a++) {
+      p=(a-1)*dims;
+      node=E->IEN[level][m][e].node[a];
+
+      j=E->ID[level][m][node].doff[1];
+      gradP[p]=E->ALA_velocity_BI[level][m][j]
+          *E->elt_del[level][m][e].g[p][0];
+      j=E->ID[level][m][node].doff[2];
+      gradP[p+1]=E->ALA_velocity_BI[level][m][j]
+          *E->elt_del[level][m][e].g[p+1][0];
+      j=E->ID[level][m][node].doff[3];
+      gradP[p+2]=E->ALA_velocity_BI[level][m][j]
+          *E->elt_del[level][m][e].g[p+2][0];
+    }
+
+    divU=0.0;
+    for(b=1;b<=ends;b++) {
+      p=(b-1)*dims;
+      divU += E->elt_del[level][m][e].g[p][0]*gradP[p];
+      divU += E->elt_del[level][m][e].g[p+1][0]*gradP[p+1];
+      divU += E->elt_del[level][m][e].g[p+2][0]*gradP[p+2];
+    }
+
+    return(divU);
+}
 
 
 /*==============================================================
