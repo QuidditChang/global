@@ -60,7 +60,9 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "kT_exponent",
             "rayleigh",
             "phase_Ra",
+            "phase_delta_s",
             "phase_clapeyron",
+            "phase_transT",
             "buoyancy_ratio",
             "ala_augmented_lagrangian_gamma",
             "ala_element_vanka_damping",
@@ -200,7 +202,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*410\.0\s*$",
+            r"(?m)^\s*ala_shallow_patch_depth_km\s*=\s*660\.0\s*$",
         )
         self.assertRegex(
             strict_text,
@@ -469,7 +471,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         relative = np.abs(beta_check - table[:, 5]) / np.abs(table[:, 5])
         self.assertLessEqual(float(np.max(relative)), 8.0 * np.finfo(float).eps)
 
-    def test_interval_beta_is_serialized_density_log_secant(self) -> None:
+    def test_interval_beta_excludes_phase_density_jumps(self) -> None:
         interval_path = RUNS_ROOT / "interval_ALA_strict.txt"
         comments = [
             line[1:].strip()
@@ -487,19 +489,33 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         radii = np.loadtxt(
             RUNS_ROOT / "GLB.coor.global.dat", skiprows=1, usecols=1
         )
-        expected = -np.diff(np.log(refstate[:, 0])) / np.diff(radii)
-        residual = (
-            intervals[:, 3] * np.diff(radii)
-            + np.diff(np.log(refstate[:, 0]))
-        )
+        density_secant = -np.diff(np.log(refstate[:, 0])) / np.diff(radii)
+        radius_m = _cfg_scalar(RUNS_ROOT / "cmbhf_ALA_strict.cfg", "radius")
+        depth_km = (1.0 - radii) * radius_m / 1000.0
+        phase_crossing = np.zeros(len(intervals), dtype=bool)
+        for boundary_km in (410.0, 520.0, 660.0):
+            phase_crossing |= (
+                (depth_km[:-1] > boundary_km)
+                & (depth_km[1:] < boundary_km)
+            )
         self.assertEqual(intervals.shape, (len(refstate) - 1, 4))
         self.assertTrue(
             np.array_equal(intervals[:, 0], np.arange(1, len(refstate)))
         )
         self.assertTrue(np.array_equal(intervals[:, 1], radii[:-1]))
         self.assertTrue(np.array_equal(intervals[:, 2], radii[1:]))
-        self.assertTrue(np.array_equal(intervals[:, 3], expected))
-        self.assertLessEqual(float(np.max(np.abs(residual))), 1.0e-14)
+        self.assertEqual(int(np.count_nonzero(phase_crossing)), 3)
+        relative_same_branch = np.abs(
+            intervals[~phase_crossing, 3] - density_secant[~phase_crossing]
+        ) / np.abs(density_secant[~phase_crossing])
+        self.assertLessEqual(float(np.max(relative_same_branch)), 1.0e-12)
+        self.assertTrue(
+            np.all(intervals[phase_crossing, 3] < density_secant[phase_crossing])
+        )
+        self.assertLessEqual(
+            float(np.max(intervals[:, 3])),
+            1.01 * float(np.max(refstate[:, 5])),
+        )
 
     def test_reader_retains_legacy_seven_column_compatibility(self) -> None:
         legacy = np.loadtxt(RUNS_ROOT / "refstate_ALA.txt", comments="#")
@@ -1241,9 +1257,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
                 re.S,
             ),
         )
-        self.assertIn(
-            "phase->clapeyron * (E->T[m][i] - phase->transT)", phase
-        )
+        self.assertIn("phase_change_state(phase", phase)
+        self.assertIn("E->T[m][i]", phase)
         self.assertIn("phase->Ra * (B[m][i] - Xref)", phase)
 
 

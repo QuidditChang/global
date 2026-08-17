@@ -29,6 +29,12 @@ void phase_change_input(struct All_variables *E);
 void phase_change_allocate(struct All_variables *E);
 
 void phase_change_apply(struct All_variables *E, double **buoy);
+void phase_change_state(const struct Phase_transition *phase,
+                        double depth, double temperature,
+                        double rho, double gravity,
+                        double d_rho_g_dr,
+                        double *q, double *fraction,
+                        double *dX_dT, double *dX_dr_pressure);
 float phase_change_reference_fraction(struct All_variables *E,
                                       int phase_index, int cap, int node);
 float phase_change_fraction_at_temperature(struct All_variables *E,

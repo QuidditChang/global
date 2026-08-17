@@ -117,6 +117,7 @@ typedef double higher_precision1; /* intermediate calculations for finding above
 struct Phase_transition {
     float depth;
     float density_jump;
+    float entropy_jump;
     float Ra;
     float clapeyron;
     float transT;
@@ -913,7 +914,7 @@ struct All_variables {
     double *rho;
     double *heating_adi[NCS];
     double *heating_adi_base[NCS];
-    double *heating_phase_adi[NCS];
+    double *heating_phase[NCS];
     double *heating_visc[NCS];
     double *heating_latent[NCS];
     double *heating_internal[NCS];

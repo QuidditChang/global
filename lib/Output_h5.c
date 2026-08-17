@@ -1750,6 +1750,17 @@ void h5output_meta(struct All_variables *E)
                                   E->control.ala_shallow_patch_depth_km);
     status = set_attribute_double(input, "ala_shallow_patch_weight",
                                   E->control.ala_shallow_patch_weight);
+    status = set_attribute_double(input, "ala_shallow_patch_mid_depth_km",
+                                  E->control.ala_shallow_patch_mid_depth_km);
+    status = set_attribute_double(
+        input, "ala_shallow_patch_transition_depth_km",
+        E->control.ala_shallow_patch_transition_depth_km);
+    status = set_attribute_double(input,
+                                  "ala_shallow_patch_mid_action_scale",
+                                  E->control.ala_shallow_patch_mid_action_scale);
+    status = set_attribute_double(
+        input, "ala_shallow_patch_transition_action_scale",
+        E->control.ala_shallow_patch_transition_action_scale);
     status = set_attribute_double(input, "ala_shallow_patch_regularization",
                                   E->control.ala_shallow_patch_regularization);
     status = set_attribute_int(input, "ala_shallow_patch_mpi_overlap",

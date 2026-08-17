@@ -111,7 +111,7 @@ enum Profile_flag {
     PROFILE_FLAG_QVISC,
     PROFILE_FLAG_QADI,
     PROFILE_FLAG_QADI_BASE,
-    PROFILE_FLAG_QPHASE_ADI,
+    PROFILE_FLAG_QPHASE,
     PROFILE_FLAG_QINTERNAL,
     PROFILE_FLAG_QASSIM,
     PROFILE_FLAG_QTOTAL,
@@ -237,10 +237,10 @@ static double qadi_base_at_element(struct All_variables *E, int cap,
     return E->heating_adi_base[cap][element];
 }
 
-static double qphase_adi_at_element(struct All_variables *E, int cap,
-                                    int element)
+static double qphase_at_element(struct All_variables *E, int cap,
+                                int element)
 {
-    return E->heating_phase_adi[cap][element];
+    return E->heating_phase[cap][element];
 }
 
 static double qinternal_at_element(struct All_variables *E, int cap,
@@ -268,6 +268,7 @@ static double qtotal_at_element(struct All_variables *E, int cap, int element)
 {
     return qinternal_at_element(E, cap, element)
         + E->heating_visc[cap][element] - E->heating_adi[cap][element]
+        - E->heating_phase[cap][element]
         + E->heating_assim[cap][element];
 }
 
@@ -361,10 +362,10 @@ static const struct Profile_variable profile_variables[] = {
      PROFILE_FLAG_QADI_BASE, PROFILE_DEFAULT_BINS,
      PROFILE_HEATING_MIN, PROFILE_HEATING_MAX,
      NULL, NULL, qadi_base_at_element},
-    {"qphase_adi", "nondimensional", ELEMENT_PROFILE,
-     PROFILE_FLAG_QPHASE_ADI, PROFILE_DEFAULT_BINS,
+    {"qphase", "nondimensional", ELEMENT_PROFILE,
+     PROFILE_FLAG_QPHASE, PROFILE_DEFAULT_BINS,
      PROFILE_HEATING_MIN, PROFILE_HEATING_MAX,
-     NULL, NULL, qphase_adi_at_element},
+     NULL, NULL, qphase_at_element},
     {"qinternal", "nondimensional", ELEMENT_PROFILE,
      PROFILE_FLAG_QINTERNAL, PROFILE_DEFAULT_BINS,
      PROFILE_INTERNAL_MIN, PROFILE_INTERNAL_MAX,
@@ -423,6 +424,9 @@ static void set_profile_flag(struct All_variables *E, int flag_id, int value)
 static const struct Profile_variable *find_profile_variable(const char *name)
 {
     int i;
+    /* Frozen cfg compatibility alias; output remains canonical qphase. */
+    if (strcmp(name, "qphase_adi") == 0)
+        name = "qphase";
     for (i = 0; i < PROFILE_VARIABLE_COUNT; ++i)
         if (strcmp(name, profile_variables[i].name) == 0)
             return &profile_variables[i];

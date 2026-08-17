@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import configparser
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,19 @@ def _cfg_vector(name: str) -> np.ndarray:
         [float(value.strip()) for value in match.group(1).split(",")],
         dtype=float,
     )
+
+
+def _derived_phase_ra() -> np.ndarray:
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(RUNS_ROOT / "cmbhf_ALA_strict.cfg", encoding="utf-8")
+    const = parser["CitcomS.solver.const"]
+    rayleigh = parser.getfloat("CitcomS.solver", "rayleigh")
+    density_scale = (
+        const.getfloat("rho0")
+        * const.getfloat("alpha0")
+        * const.getfloat("deltaT")
+    )
+    return rayleigh * _cfg_vector("phase_delta_rho") / density_scale
 
 
 def _phase_fraction(
@@ -61,7 +75,7 @@ class StrictPhaseBuoyancyTest(unittest.TestCase):
         cls.gravity = refstate[:, 1]
         cls.tref = refstate[:, 2]
         cls.phase_depth = _cfg_vector("phase_depth")
-        cls.phase_ra = _cfg_vector("phase_Ra")
+        cls.phase_ra = _derived_phase_ra()
         cls.width = _cfg_vector("phase_width")
         cls.clapeyron = _cfg_vector("phase_clapeyron")
         cls.trans_temperature = _cfg_vector("phase_transT")
@@ -101,15 +115,20 @@ class StrictPhaseBuoyancyTest(unittest.TestCase):
             maximum = max(maximum, float(np.max(np.abs(x - xref))))
         self.assertLessEqual(maximum, np.finfo(float).eps)
 
-    def test_dynamic_phase_fraction_is_the_legacy_fraction(self) -> None:
+    def test_phase_ra_is_runtime_derived_from_density_contrast(self) -> None:
+        cfg = (RUNS_ROOT / "cmbhf_ALA_strict.cfg").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"(?m)^\s*phase_Ra\s*=", cfg))
         source = PHASE_SOURCE.read_text(encoding="utf-8")
         self.assertIn(
-            "phase->clapeyron * (E->T[m][i] - phase->transT)", source
-        )
-        self.assertIn(
-            "B[m][i] = pt5 * (one + tanh(phase->inv_width * e_pressure))",
+            "expected_Ra = E->control.Atemp * phase->density_jump / density_scale",
             source,
         )
+        self.assertIn("phase->Ra = expected_Ra", source)
+
+    def test_dynamic_phase_fraction_is_the_legacy_fraction(self) -> None:
+        source = PHASE_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("void phase_change_state(", source)
+        self.assertIn("B[m][i] = fraction", source)
         for phase in range(3):
             old_x, _ = self._fractions(phase, self.dynamic_temperature)
             new_x, _ = self._fractions(phase, self.dynamic_temperature)
@@ -136,11 +155,14 @@ class StrictPhaseBuoyancyTest(unittest.TestCase):
         self.assertNotIn("Xref", boundary_code)
         self.assertNotIn("deltaX", boundary_code)
 
-    def test_latent_heating_still_uses_absolute_phase_fraction(self) -> None:
+    def test_phase_energy_uses_current_temperature_and_single_entropy(self) -> None:
         source = ENERGY_SOURCE.read_text(encoding="utf-8")
-        self.assertIn("(1.0 - B[m][j]) * B[m][j]", source)
-        self.assertIn("E->phase_B[phase_index], phase->Ra", source)
-        self.assertNotIn("phase_change_reference_fraction", source)
+        self.assertIn("phase_change_state(phase", source)
+        self.assertIn("tgp[i]", source)
+        self.assertIn("phase->entropy_jump", source)
+        self.assertIn("dX_dT * material_dT + dX_dr_pressure * v3[i]", source)
+        self.assertNotIn("E->phase_B[phase_index]", source)
+        self.assertNotIn("static void latent_heating", source)
 
     def test_all_phase_buoyancy_diagnostics_use_x_minus_xref(self) -> None:
         phase_source = PHASE_SOURCE.read_text(encoding="utf-8")
@@ -149,6 +171,41 @@ class StrictPhaseBuoyancyTest(unittest.TestCase):
         self.assertIn("phase->Ra * (B[m][i] - Xref)", phase_source)
         self.assertIn("phase_change_reference_fraction(", power_source)
         self.assertIn("phase_change_reference_fraction(", profile_source)
+
+    def test_profile_qtotal_includes_phase_energy(self) -> None:
+        source = PROFILE_SOURCE.read_text(encoding="utf-8")
+        qtotal_start = source.index("static double qtotal_at_element(")
+        qtotal_end = source.index("static double qvisc_minus_qadi_base_at_element(", qtotal_start)
+        qtotal = source[qtotal_start:qtotal_end]
+        self.assertIn(
+            "- E->heating_phase[cap][element]",
+            qtotal,
+        )
+
+    def test_phase_diagnostic_uses_canonical_name(self) -> None:
+        source = PROFILE_SOURCE.read_text(encoding="utf-8")
+        registry_start = source.index(
+            "static const struct Profile_variable profile_variables[]"
+        )
+        registry_end = source.index(
+            "#define PROFILE_VARIABLE_COUNT", registry_start
+        )
+        registry = source[registry_start:registry_end]
+        self.assertIn('{"qphase", "nondimensional"', registry)
+        self.assertNotIn('{"qphase_adi", "nondimensional"', registry)
+        self.assertEqual(source.count('"qphase_adi"'), 1)
+
+        active_sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ENERGY_SOURCE,
+                GLOBAL_ROOT / "lib" / "Instructions.c",
+                GLOBAL_ROOT / "lib" / "global_defs.h",
+            )
+        )
+        self.assertNotIn("heating_phase_adi", active_sources)
+        self.assertNotIn('"Qphase_adi"', active_sources)
+        self.assertIn('"Qphase"', active_sources)
 
 
 if __name__ == "__main__":

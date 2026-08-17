@@ -68,14 +68,17 @@ void phase_change_input(struct All_variables *E)
   int phase_index;
   float depth[PHASE_TRANSITIONS];
   float density_jump[PHASE_TRANSITIONS];
-  float Ra[PHASE_TRANSITIONS];
+  float entropy_jump[PHASE_TRANSITIONS];
   float width[PHASE_TRANSITIONS];
   float clapeyron[PHASE_TRANSITIONS];
   float transT[PHASE_TRANSITIONS];
 
   input_float_vector("phase_depth", PHASE_TRANSITIONS, depth, m);
   input_float_vector("phase_delta_rho", PHASE_TRANSITIONS, density_jump, m);
-  input_float_vector("phase_Ra", PHASE_TRANSITIONS, Ra, m);
+  if(!input_float_vector("phase_delta_s", PHASE_TRANSITIONS, entropy_jump, m)) {
+    fprintf(stderr, "phase_delta_s is required for the single-entropy phase model\n");
+    parallel_process_termination();
+  }
   input_float_vector("phase_width", PHASE_TRANSITIONS, width, m);
   input_float_vector("phase_clapeyron", PHASE_TRANSITIONS, clapeyron, m);
   input_float_vector("phase_transT", PHASE_TRANSITIONS, transT, m);
@@ -83,7 +86,8 @@ void phase_change_input(struct All_variables *E)
   for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
     E->control.phase[phase_index].depth = depth[phase_index];
     E->control.phase[phase_index].density_jump = density_jump[phase_index];
-    E->control.phase[phase_index].Ra = Ra[phase_index];
+    E->control.phase[phase_index].entropy_jump = entropy_jump[phase_index];
+    E->control.phase[phase_index].Ra = 0.0;
     E->control.phase[phase_index].clapeyron = clapeyron[phase_index];
     E->control.phase[phase_index].transT = transT[phase_index];
     E->control.phase[phase_index].inv_width =
@@ -106,20 +110,40 @@ void phase_change_apply(struct All_variables *E, double **buoy)
 }
 
 
+void phase_change_state(const struct Phase_transition *phase,
+                        double depth, double temperature,
+                        double rho, double gravity,
+                        double d_rho_g_dr,
+                        double *q, double *fraction,
+                        double *dX_dT, double *dX_dr_pressure)
+{
+  double argument, localization, rho_g;
+
+  rho_g = rho * gravity;
+  *q = (depth - phase->depth) * rho_g
+      - phase->clapeyron * (temperature - phase->transT);
+  argument = phase->inv_width * *q;
+  *fraction = 0.5 * (1.0 + tanh(argument));
+  localization = 2.0 * phase->inv_width * *fraction * (1.0 - *fraction);
+  *dX_dT = -localization * phase->clapeyron;
+  *dX_dr_pressure = localization
+      * (-rho_g + (depth - phase->depth) * d_rho_g_dr);
+}
+
+
 float phase_change_reference_fraction(struct All_variables *E,
                                       int phase_index, int cap, int node)
 {
   int nz;
-  float e_pressure, dz;
+  double q, fraction, dX_dT, dX_dr_pressure;
   struct Phase_transition *phase = &E->control.phase[phase_index];
 
   nz = ((node-1) % E->lmesh.noz) + 1;
-  dz = (E->sphere.ro-E->sx[cap][3][node]) - phase->depth;
-  e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
-      - phase->clapeyron
-      * (E->refstate.Tref[nz] - phase->transT);
-
-  return 0.5 * (1.0 + tanh(phase->inv_width * e_pressure));
+  phase_change_state(phase, E->sphere.ro-E->sx[cap][3][node],
+                     E->refstate.Tref[nz], E->refstate.rho[nz],
+                     E->refstate.gravity[nz], 0.0, &q, &fraction,
+                     &dX_dT, &dX_dr_pressure);
+  return fraction;
 }
 
 
@@ -128,15 +152,14 @@ float phase_change_fraction_at_temperature(struct All_variables *E,
                                            double temperature)
 {
   int nz;
-  float e_pressure, dz;
+  double q, fraction, dX_dT, dX_dr_pressure;
   struct Phase_transition *phase = &E->control.phase[phase_index];
 
   nz = ((node-1) % E->lmesh.noz) + 1;
-  dz = (E->sphere.ro-E->sx[cap][3][node]) - phase->depth;
-  e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
-      - phase->clapeyron * (temperature - phase->transT);
-
-  return 0.5 * (1.0 + tanh(phase->inv_width * e_pressure));
+  phase_change_state(phase, E->sphere.ro-E->sx[cap][3][node], temperature,
+                     E->refstate.rho[nz], E->refstate.gravity[nz], 0.0,
+                     &q, &fraction, &dX_dT, &dX_dr_pressure);
+  return fraction;
 }
 
 
@@ -174,27 +197,23 @@ static void calc_phase_change(struct All_variables *E,
                               int phase_index)
 {
   int i,j,k,n,ns,m,nz;
-  float e_pressure,pt5,one,dz;
+  float pt5;
+  double q, fraction, dX_dT, dX_dr_pressure;
   struct Phase_transition *phase = &E->control.phase[phase_index];
   float **B = E->phase_B[phase_index];
   float **B_b = E->phase_boundary[phase_index];
 
   pt5 = 0.5;
-  one = 1.0;
 
   for(m=1;m<=E->sphere.caps_per_proc;m++)     {
     /* compute phase function B, the concentration of the high pressure
      * phase. B is between 0 and 1. */
     for(i=1;i<=E->lmesh.nno;i++)  {
         nz = ((i-1) % E->lmesh.noz) + 1;
-        dz = (E->sphere.ro-E->sx[m][3][i]) - phase->depth;
-        /*XXX: dz*rho[nz]*g[nz] is only a approximation for the reduced
-         * pressure, a more accurate formula is:
-         *   integral(rho(z)*g(z)*dz) from depth_ph to current depth   */
-        e_pressure = dz * E->refstate.rho[nz] * E->refstate.gravity[nz]
-            - phase->clapeyron * (E->T[m][i] - phase->transT);
-
-        B[m][i] = pt5 * (one + tanh(phase->inv_width * e_pressure));
+        phase_change_state(phase, E->sphere.ro-E->sx[m][3][i], E->T[m][i],
+                           E->refstate.rho[nz], E->refstate.gravity[nz], 0.0,
+                           &q, &fraction, &dX_dT, &dX_dr_pressure);
+        B[m][i] = fraction;
     }
 
     /* compute the phase boundary, defined as the depth where B==0.5 */
@@ -250,13 +269,26 @@ static void validate_phase_parameters(struct All_variables *E)
 {
   int phase_index;
   struct Phase_transition *phase;
-  double density_scale, expected_Ra, relative_error;
+  double density_scale, expected_Ra, legacy_Ra, relative_error;
+  double pressure_scale_gpa, transition_temperature_k, clapeyron_mpa_k;
+  double width_gpa;
 
-  density_scale = E->data.density * E->data.therm_exp
+  density_scale = E->data.rho0 * E->data.alpha0
       * E->data.ref_temperature;
+  pressure_scale_gpa = E->data.rho0 * E->data.g0
+      * E->data.radius_km * 1.0e-6;
+
+  if(!isfinite(density_scale) || density_scale <= 0.0 ||
+     !isfinite(E->control.Atemp)) {
+    fprintf(stderr, "cannot derive phase_Ra from invalid reference scales\n");
+    parallel_process_termination();
+  }
 
   for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
     phase = &E->control.phase[phase_index];
+    legacy_Ra = phase->Ra;
+    expected_Ra = E->control.Atemp * phase->density_jump / density_scale;
+    phase->Ra = expected_Ra;
 
     if(phase->depth < 0.0 || phase->depth > E->sphere.ro-E->sphere.ri) {
       fprintf(stderr, "phase[%d] depth=%g is outside the model shell\n",
@@ -264,20 +296,45 @@ static void validate_phase_parameters(struct All_variables *E)
       parallel_process_termination();
     }
 
-    if(phase->Ra != 0.0 && phase->inv_width == 0.0) {
+    if(expected_Ra != 0.0 && phase->inv_width == 0.0) {
       fprintf(stderr, "phase[%d] has nonzero Ra but zero width\n", phase_index);
       parallel_process_termination();
     }
+    if(!isfinite(phase->entropy_jump)) {
+      fprintf(stderr, "phase[%d] has non-finite entropy jump\n", phase_index);
+      parallel_process_termination();
+    }
+    if(phase->density_jump != 0.0 && phase->entropy_jump == 0.0) {
+      fprintf(stderr, "phase[%d] has density contrast but no entropy jump\n",
+              phase_index);
+      parallel_process_termination();
+    }
 
-    if(phase->density_jump != 0.0 && phase->Ra != 0.0 &&
-       density_scale != 0.0 && E->control.Atemp != 0.0) {
-      expected_Ra = E->control.Atemp * phase->density_jump / density_scale;
-      relative_error = fabs(phase->Ra-expected_Ra) / fabs(expected_Ra);
+    if(legacy_Ra != 0.0) {
+      relative_error = fabs(legacy_Ra-expected_Ra)
+          / fmax(fabs(expected_Ra), 1.0);
       if(relative_error > 0.01 && E->parallel.me == 0)
         fprintf(stderr,
-                "phase[%d] Ra=%g differs from delta_rho-derived Ra=%g "
-                "by %.2f percent\n",
-                phase_index, phase->Ra, expected_Ra, 100.0*relative_error);
+                "phase[%d] legacy phase_Ra=%g ignored; "
+                "delta_rho-derived phase_Ra=%g\n",
+                phase_index, legacy_Ra, expected_Ra);
+    }
+
+    if(E->parallel.me == 0) {
+      transition_temperature_k = E->data.Ttop
+          + phase->transT * E->data.ref_temperature;
+      clapeyron_mpa_k = phase->clapeyron * pressure_scale_gpa * 1.0e3
+          / E->data.ref_temperature;
+      width_gpa = (phase->inv_width == 0.0)
+          ? 0.0 : pressure_scale_gpa / phase->inv_width;
+      fprintf(stderr,
+              "phase[%d] z0_km=%g T0_K=%g Gamma_MPa_K=%g "
+              "width_GPa=%g delta_rho_kg_m3=%g delta_s_J_kgK=%g "
+              "derived_phase_Ra=%g\n",
+              phase_index, phase->depth * E->data.radius_km,
+              transition_temperature_k, clapeyron_mpa_k, width_gpa,
+              phase->density_jump, phase->entropy_jump * E->data.Cp0,
+              phase->Ra);
     }
   }
 

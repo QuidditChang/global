@@ -1318,7 +1318,7 @@ void allocate_common_vars(E)
 
   E->heating_adi[j]    = (double *) malloc((nel+1)*sizeof(double));
   E->heating_adi_base[j] = (double *) malloc((nel+1)*sizeof(double));
-  E->heating_phase_adi[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_phase[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_visc[j]   = (double *) malloc((nel+1)*sizeof(double));
   E->heating_latent[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_internal[j] = (double *) malloc((nel+1)*sizeof(double));
@@ -1473,7 +1473,7 @@ void allocate_common_vars(E)
 
       E->heating_adi[j][i] = 0;
       E->heating_adi_base[j][i] = 0;
-      E->heating_phase_adi[j][i] = 0;
+      E->heating_phase[j][i] = 0;
       E->heating_visc[j][i] = 0;
       E->heating_latent[j][i] = 1.0;
       E->heating_internal[j][i] = 0;

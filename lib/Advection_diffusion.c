@@ -40,6 +40,7 @@
 #include "material_properties.h"
 #include "parsing.h"
 #include "lith_age.h"
+#include "phase_change.h"
 
 extern void parallel_process_termination();
 
@@ -946,6 +947,7 @@ static void element_residual(struct All_variables *E, int el,
                         as the SUPG parameter. */
     double tgp[9];   /* Phase 2: temperature at each Gauss point (for k~_T) */
     double rho_gp[9],cp_gp[9],kappa_eff[9];
+    double phase_energy[9];
     double adv_dT,t2[4];
     double T,DT;
 
@@ -971,6 +973,7 @@ static void element_residual(struct All_variables *E, int el,
       v1[i] = tx1[i]=  0.0;
       v2[i] = tx2[i]=  0.0;
       v3[i] = tx3[i]=  0.0;
+      phase_energy[i] = 0.0;
       }
 
     for(i=1;i<=vpts;i++)
@@ -996,7 +999,6 @@ static void element_residual(struct All_variables *E, int el,
           v3[i] += VV[3][j] * sfn;
       }
     }
-
 /*    Q=0.0;
     for(i=0;i<Q0.number;i++)
 	  Q += Q0.Q[i] * exp(-Q0.lambda[i] * (E->monitor.elapsed_time+Q0.t_offset));
@@ -1020,12 +1022,43 @@ static void element_residual(struct All_variables *E, int el,
     element_thermal_transport(E, m, el, tgp, diff, rho_gp, cp_gp,
                               kgp, kappa_eff);
 
+    for(i=1;i<=vpts;i++) {
+      double material_dT, rho_g, d_rho_g_dr;
+      double q, fraction, dX_dT, dX_dr_pressure;
+      int phase_index;
+
+      material_dT = dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i];
+      rho_g = 0.0;
+      d_rho_g_dr = 0.0;
+      for(j=1;j<=ends;j++) {
+        node = E->ien[m][el].node[j];
+        nz = ((node-1) % E->lmesh.noz) + 1;
+        sfn = E->N.vpt[GNVINDEX(j,i)];
+        rho_g += E->refstate.rho[nz] * E->refstate.gravity[nz] * sfn;
+        d_rho_g_dr += E->refstate.rho[nz] * E->refstate.gravity[nz]
+            * GNx.vpt[GNVXINDEX(2,j,i)];
+      }
+      for(phase_index=0;phase_index<PHASE_TRANSITIONS;phase_index++) {
+        struct Phase_transition *phase = &E->control.phase[phase_index];
+        if(phase->entropy_jump == 0.0)
+          continue;
+        phase_change_state(phase, E->sphere.ro-rtf[3][i], tgp[i],
+                           1.0, rho_g, d_rho_g_dr,
+                           &q, &fraction, &dX_dT, &dX_dr_pressure);
+        phase_energy[i] += rho_gp[i]
+            * (tgp[i] + E->control.surface_temp) * phase->entropy_jump
+            * (dX_dT * material_dT + dX_dr_pressure * v3[i]);
+      }
+    }
+
+    E->heating_phase[m][el] = 0.0;
+    for(i=1;i<=vpts;i++)
+      E->heating_phase[m][el] += phase_energy[i] / vpts;
+
     if(E->control.disptn_number == 0)
         heating = rho * Q;
     else
-        /* E->heating_latent is actually the inverse of latent heating */
-        heating = (rho * Q - E->heating_adi[m][el] + E->heating_visc[m][el])
-            * E->heating_latent[m][el];
+        heating = rho * Q - E->heating_adi[m][el] + E->heating_visc[m][el];
 
     /* construct residual from this information */
 
@@ -1049,9 +1082,9 @@ static void element_residual(struct All_variables *E, int el,
 	  Eres[j] -=
 	    PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
               * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])
-                 * rho_gp[i] * cp_gp[i]
+                 * rho_gp[i] * cp_gp[i] + phase_energy[i]
                  - heating )
-              + kgp[i] * dOmega.vpt[i] * E->heating_latent[m][el]
+              + kgp[i] * dOmega.vpt[i]
               * (GNx.vpt[GNVXINDEX(0,j,i)]*tx1[i]*rtf[3][i] +
                  GNx.vpt[GNVXINDEX(1,j,i)]*tx2[i]*sint[i] +
                  GNx.vpt[GNVXINDEX(2,j,i)]*tx3[i] );
@@ -1064,7 +1097,7 @@ static void element_residual(struct All_variables *E, int el,
 	for(i=1;i<=vpts;i++)
           Eres[j] -= PG.vpt[GNVINDEX(j,i)] * dOmega.vpt[i]
               * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])
-                 * rho_gp[i] * cp_gp[i] - heating);
+                 * rho_gp[i] * cp_gp[i] + phase_energy[i] - heating);
       }
     }
 
@@ -1266,88 +1299,14 @@ static void process_adi_heating(struct All_variables *E, int m,
 }
 
 
-static void latent_heating(struct All_variables *E, int m,
-                           double *heating_latent, double *heating_adi,
-                           double *heating_phase_adi,
-                           float **B, float Ra, float clapeyron,
-                           float depth, float transT, float inv_width)
+static void reset_legacy_phase_heating_fields(struct All_variables *E,
+                                              double *heating_latent)
 {
-    double temp, temp0, temp1, temp2, temp3, matprop;
-    int e, ez, i, j;
-    const int ends = ENODES3D;
-
-    temp0 = 2.0 * inv_width * clapeyron * E->control.disptn_number * Ra / E->control.Atemp / ends;
-    temp1 = temp0 * clapeyron;
-
-    for(e=1; e<=E->lmesh.nel; e++) {
-        ez = (e - 1) % E->lmesh.elz + 1;
-        if(E->control.ala_pressure_buoyancy) {
-            matprop = 0.125
-                * (E->refstate.thermal_expansivity[ez] +
-                   E->refstate.thermal_expansivity[ez + 1])
-                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
-                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
-        }
-        else {
-            matprop = 0.0625
-                * (E->refstate.thermal_expansivity[ez] +
-                   E->refstate.thermal_expansivity[ez + 1])
-                * (E->refstate.dis[ez] + E->refstate.dis[ez + 1])
-                * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
-                * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
-        }
-
-        temp2 = 0;
-        temp3 = 0;
-        for(i=1; i<=ends; i++) {
-            j = E->ien[m][e].node[i];
-            temp = (1.0 - B[m][j]) * B[m][j]
-                * (E->T[m][j] + E->control.surface_temp);
-            temp2 += temp * E->sphere.cap[m].V[3][j];
-            temp3 += temp;
-        }
-
-        /* correction on the adiabatic cooling term */
-        temp = matprop * temp2 * temp0;
-        heating_adi[e] += temp;
-        heating_phase_adi[e] += temp;
-
-        /* correction on the DT/Dt term */
-        heating_latent[e] += temp3 * temp1;
-    }
-    return;
-}
-
-
-static void process_latent_heating(struct All_variables *E, int m,
-                                   double *heating_latent, double *heating_adi,
-                                   double *heating_phase_adi)
-{
-    int e, phase_index, active_phase;
-    struct Phase_transition *phase;
+    int e;
 
     /* reset */
     for(e=1; e<=E->lmesh.nel; e++) {
         heating_latent[e] = 1.0;
-        heating_phase_adi[e] = 0.0;
-    }
-
-    active_phase = 0;
-    for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
-        phase = &E->control.phase[phase_index];
-        if(phase->Ra != 0.0) {
-            latent_heating(E, m, heating_latent, heating_adi,
-                           heating_phase_adi,
-                           E->phase_B[phase_index], phase->Ra,
-                           phase->clapeyron, phase->depth,
-                           phase->transT, phase->inv_width);
-            active_phase = 1;
-        }
-    }
-
-    if(active_phase) {
-        for(e=1; e<=E->lmesh.nel; e++)
-            heating_latent[e] = 1.0 / heating_latent[e];
     }
 
     return;
@@ -1395,9 +1354,7 @@ static void process_heating(struct All_variables *E, int psc_pass)
         process_adi_heating(E, m, E->heating_adi_base[m]);
         memcpy(E->heating_adi[m], E->heating_adi_base[m],
                (E->lmesh.nel+1)*sizeof(double));
-        process_latent_heating(E, m, E->heating_latent[m],
-                               E->heating_adi[m],
-                               E->heating_phase_adi[m]);
+        reset_legacy_phase_heating_fields(E, E->heating_latent[m]);
     }
 
     return;
@@ -1491,6 +1448,7 @@ static void print_thermal_budget(struct All_variables *E)
             E->heating_internal[m][e] = rho * Q;
             qtotal[m][e] = E->heating_internal[m][e]
                 + E->heating_visc[m][e] - E->heating_adi[m][e]
+                - E->heating_phase[m][e]
                 + E->heating_assim[m][e];
             balance[m][e] = E->heating_visc[m][e]
                 - E->heating_adi_base[m][e];
@@ -1517,7 +1475,7 @@ static void print_thermal_budget(struct All_variables *E)
     PRINT_HEATING_ROW("Qvisc", E->heating_visc);
     PRINT_HEATING_ROW("Qadi", E->heating_adi);
     PRINT_HEATING_ROW("Qadi_base", E->heating_adi_base);
-    PRINT_HEATING_ROW("Qphase_adi", E->heating_phase_adi);
+    PRINT_HEATING_ROW("Qphase", E->heating_phase);
     PRINT_HEATING_ROW("Qinternal", E->heating_internal);
     PRINT_HEATING_ROW("Qassim", E->heating_assim);
     PRINT_HEATING_ROW("Qvisc-Qadi_base", balance);
