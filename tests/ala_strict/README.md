@@ -98,3 +98,33 @@ not relabel the existing velocity-only smoother as coupled.
 
 Future test groups remain reserved for energy-budget and coupled-V-cycle
 Galerkin validation.
+
+The frozen-state Schur diagnostic architecture test verifies that the audit is
+default-off, runs before the production Stokes solve, rebuilds OLD then NEW
+while restoring NEW, constructs every pressure-probe family internally, uses
+exact split `D/C` transposes, reports the four Schur terms and distributed
+adjoint identities, and exposes BPI/Schwarz/unscaled/configured pressure maps.
+It is a static test only; production assembled and MPI actions remain HPC-only.
+
+The Stage 0 thermodynamic closure oracle is intentionally test-only. It reads
+the frozen strict configuration, mesh, reference state, interval beta, and
+Katsura source without rewriting them. It runs a state-changing reduced smooth
+trajectory, a phase-free thermal projection identity, and exact beta-ownership
+checks. The required static production energy map runs first and performs no
+phase parameter or phase-law evaluation. Smooth failure blocks phase
+diagnostics, complete zero-reference buoyancy, phase crossings, count-once
+experiments, and forward/reverse trajectories. Production FE/SUPG and
+production MPI are also hard `NOT-IMPLEMENTED` gates, never zero-filled
+placeholders:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -B tests/ala_strict/thermodynamic_closure_oracle.py --allow-unresolved
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest tests/ala_strict/test_thermodynamic_closure_oracle.py -v
+# Standalone synthetic MPI thermal-projection smoke test (not production MPI):
+mpicc -std=c11 -O2 -Wall -Wextra -pedantic tests/ala_strict/mpi_thermodynamic_closure.c -lm -o /tmp/mpi_thermodynamic_closure
+mpiexec -n 2 /tmp/mpi_thermodynamic_closure ../../runs/refstate_ALA_strict.txt 766610539.2932514
+mpiexec -n 4 /tmp/mpi_thermodynamic_closure ../../runs/refstate_ALA_strict.txt 766610539.2932514
+```
+
+See `STAGE0_THERMODYNAMIC_CLOSURE_REPORT.md` for the exact production energy
+map, numerical tables, frozen input hashes, and evidence boundaries.

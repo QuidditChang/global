@@ -566,6 +566,20 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_viscosity_spectrum_diagnostics),"off",m);
   input_int("ala_viscosity_spectrum_interval",
             &(E->control.ala_viscosity_spectrum_interval),"1",m);
+  input_boolean("ala_schur_diagnostic",
+                &(E->control.ala_schur_diagnostic),"off",m);
+  input_boolean("ala_schur_diagnostic_only",
+                &(E->control.ala_schur_diagnostic_only),"off",m);
+  input_boolean("ala_schur_diagnostic_inner_sensitivity",
+                &(E->control.ala_schur_diagnostic_inner_sensitivity),"on",m);
+  input_double("ala_schur_diagnostic_tight_tolerance",
+               &(E->control.ala_schur_diagnostic_tight_tolerance),"1.0e-10",m);
+  input_int("ala_schur_diagnostic_max_cycles",
+            &(E->control.ala_schur_diagnostic_max_cycles),"2000",m);
+  input_int("ala_schur_diagnostic_progress_interval",
+            &(E->control.ala_schur_diagnostic_progress_interval),"100",m);
+  input_int("ala_schur_diagnostic_random_seed",
+            &(E->control.ala_schur_diagnostic_random_seed),"20080516",m);
   input_int("ala_coupled_shallow_vanka_layers",
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",
@@ -660,6 +674,15 @@ void read_initial_settings(struct All_variables *E)
                &(E->control.ala_shallow_patch_depth_km),"410.0",m);
   input_double("ala_shallow_patch_weight",
                &(E->control.ala_shallow_patch_weight),"0.25",m);
+  input_double("ala_shallow_patch_mid_depth_km",
+               &(E->control.ala_shallow_patch_mid_depth_km),"200.0",m);
+  input_double("ala_shallow_patch_transition_depth_km",
+               &(E->control.ala_shallow_patch_transition_depth_km),"410.0",m);
+  input_double("ala_shallow_patch_mid_action_scale",
+               &(E->control.ala_shallow_patch_mid_action_scale),"1.0",m);
+  input_double("ala_shallow_patch_transition_action_scale",
+               &(E->control.ala_shallow_patch_transition_action_scale),
+               "1.0",m);
   input_double("ala_shallow_patch_regularization",
                &(E->control.ala_shallow_patch_regularization),"1.0e-3",m);
   input_int("ala_shallow_patch_horizontal_elements",
@@ -878,6 +901,19 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_consecutive_steps must be at least one");
   if(E->control.ala_depth_diagnostic_interval < 1)
       myerror(E, "ala_depth_diagnostic_interval must be at least one");
+  if(E->control.ala_schur_diagnostic_only &&
+     !E->control.ala_schur_diagnostic)
+      myerror(E, "ala_schur_diagnostic_only requires ala_schur_diagnostic=on");
+  if(E->control.ala_schur_diagnostic &&
+     (!E->control.ala_pressure_buoyancy ||
+      E->control.ala_augmented_lagrangian_gamma <= 0.0))
+      myerror(E, "ala_schur_diagnostic requires strict ALA with gamma_AL > 0");
+  if(E->control.ala_schur_diagnostic_tight_tolerance <= 0.0 ||
+     E->control.ala_schur_diagnostic_tight_tolerance >= 1.0)
+      myerror(E, "ala_schur_diagnostic_tight_tolerance must be in (0,1)");
+  if(E->control.ala_schur_diagnostic_max_cycles < 1 ||
+     E->control.ala_schur_diagnostic_progress_interval < 1)
+      myerror(E, "ALA Schur diagnostic velocity solve limits must be positive");
   if(E->control.ala_depth_diagnostic_bins < 1 ||
      E->control.ala_depth_diagnostic_bins > 128)
       myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
@@ -951,6 +987,16 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_shallow_patch_weight <= 0.0 ||
      E->control.ala_shallow_patch_weight > 1.0)
       myerror(E, "ala_shallow_patch_weight must be in (0,1]");
+  if(E->control.ala_shallow_patch_mid_depth_km <= 0.0 ||
+     E->control.ala_shallow_patch_mid_depth_km >
+         E->control.ala_shallow_patch_transition_depth_km ||
+     E->control.ala_shallow_patch_transition_depth_km >
+         E->control.ala_shallow_patch_depth_km)
+      myerror(E, "ALA shallow-patch depth bands must satisfy "
+              "0 < mid <= transition <= patch depth");
+  if(E->control.ala_shallow_patch_mid_action_scale <= 0.0 ||
+     E->control.ala_shallow_patch_transition_action_scale <= 0.0)
+      myerror(E, "ALA shallow-patch band action scales must be positive");
   if(E->control.ala_shallow_patch_regularization < 0.0 ||
      E->control.ala_shallow_patch_regularization > 0.1)
       myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
@@ -1649,6 +1695,14 @@ void global_default_values(E)
     E->control.ala_coupled_multilevel_coarse_weight = 1.0;
     E->control.ala_viscosity_spectrum_diagnostics = 0;
     E->control.ala_viscosity_spectrum_interval = 1;
+    E->control.ala_schur_diagnostic = 0;
+    E->control.ala_schur_diagnostic_only = 0;
+    E->control.ala_schur_diagnostic_inner_sensitivity = 1;
+    E->control.ala_schur_diagnostic_tight_tolerance = 1.0e-10;
+    E->control.ala_schur_diagnostic_max_cycles = 2000;
+    E->control.ala_schur_diagnostic_progress_interval = 100;
+    E->control.ala_schur_diagnostic_random_seed = 20080516;
+    E->control.ala_schur_diagnostic_viscosity_mode = 0;
     E->control.ala_coupled_shallow_vanka_layers = 0;
     E->control.ala_coupled_shallow_vanka_core_layers = -1;
     E->control.ala_coupled_shallow_vanka_band_sweeps = 0;
@@ -1696,6 +1750,10 @@ void global_default_values(E)
     E->control.ala_shallow_patch_preconditioner = 0;
     E->control.ala_shallow_patch_depth_km = 410.0;
     E->control.ala_shallow_patch_weight = 0.25;
+    E->control.ala_shallow_patch_mid_depth_km = 200.0;
+    E->control.ala_shallow_patch_transition_depth_km = 410.0;
+    E->control.ala_shallow_patch_mid_action_scale = 1.0;
+    E->control.ala_shallow_patch_transition_action_scale = 1.0;
     E->control.ala_shallow_patch_regularization = 1.0e-3;
     E->control.ala_shallow_patch_horizontal_elements = 4;
     E->control.ala_shallow_patch_horizontal_stride = 2;

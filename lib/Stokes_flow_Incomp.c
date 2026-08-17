@@ -39,6 +39,7 @@
 #include <string.h>
 
 void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
+void assemble_grad_c_p(struct All_variables *,double **,double **,int);
 int solve_del2_u_bounded(struct All_variables *,double **,double **,double,
                          int,int,int);
 
@@ -57,7 +58,78 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
 static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
                                        double **V, double **P, double **F,
                                        double imp, int *steps_max);
-struct ala_pressure_preconditioner_cache;
+static double initial_vel_residual(struct All_variables *,double **,double **,
+                                   double **,double);
+#define ALA_PATCH_MPI_FACES 4
+struct ala_pressure_preconditioner_cache {
+    int patch_capacity;
+    int interface_capacity;
+    int blocks[NCS];
+    unsigned char *size[NCS];
+    unsigned short *multiplicity[NCS];
+    int *elements[NCS];
+    double *chol[NCS];
+    int interface_blocks[NCS];
+    unsigned char *interface_size[NCS];
+    unsigned char *interface_face[NCS];
+    int *interface_elements[NCS];
+    double *interface_chol[NCS];
+    int halo_send_count[NCS][ALA_PATCH_MPI_FACES];
+    int halo_recv_count[NCS][ALA_PATCH_MPI_FACES];
+    int *halo_send_elements[NCS][ALA_PATCH_MPI_FACES];
+    double *halo_send_records[NCS][ALA_PATCH_MPI_FACES];
+    double *halo_recv_records[NCS][ALA_PATCH_MPI_FACES];
+    unsigned short *halo_multiplicity[NCS][ALA_PATCH_MPI_FACES];
+    double *velocity_block_chol[NCS];
+    int velocity_block_fallbacks;
+    double *coarse_bpi[NCS];
+    double *global_basis[NCS];
+    double *global_matrix;
+    double *global_chol;
+    int global_basis_count;
+    double *geneo_basis[NCS];
+    double *geneo_matrix;
+    double *geneo_chol;
+    double *geneo_eigenvalues;
+    int geneo_basis_count;
+    int geneo_local_modes;
+    int geneo_local_offset;
+    int geneo_schur_applications;
+    double coarse_eigenvalue_min;
+    double coarse_eigenvalue_max;
+    double velocity_eigenvalue_min;
+    double velocity_eigenvalue_max;
+    double *pressure_mg_rhs[MAX_LEVELS][NCS];
+    double *pressure_mg_x[MAX_LEVELS][NCS];
+    double *pressure_mg_residual[MAX_LEVELS][NCS];
+    double *pressure_mg_Ax[MAX_LEVELS][NCS];
+    double *pressure_mg_velocity[NCS];
+    double *pressure_mg_velocity_rhs[NCS];
+    double *pressure_mg_galerkin_p[NCS];
+    double *pressure_mg_galerkin_Ap[NCS];
+    double *pressure_transition_weighted_r[NCS];
+    int pressure_mg_min_level;
+    int pressure_mg_max_level;
+    int pressure_mg_operator_applications;
+};
+static void build_ala_shallow_patch_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void build_ala_two_level_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void calibrate_ala_two_level_spectrum(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void calibrate_ala_velocity_spectrum(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void build_ala_pressure_multigrid_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void build_ala_global_coarse_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void build_ala_geneo_coarse_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void build_ala_cross_rank_geneo_coarse_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *,int);
+static void free_ala_pressure_preconditioner_cache(struct All_variables *,
+    struct ala_pressure_preconditioner_cache *);
 static void strict_ala_continuity_metrics(struct All_variables *E,
                                           double **V, double **r,
                                           double **div_u, int lev,
@@ -115,6 +187,604 @@ static void assemble_ala_coupled_residual(
         residual->pressure[m][0]=0.0;
         for(e=1;e<=npno;e++)
             residual->pressure[m][e]=-action->pressure[m][e];
+    }
+}
+
+
+#define ALA_SCHUR_PROBE_COUNT 19
+#define ALA_SCHUR_DEPTH_BANDS 5
+
+static const char *ala_schur_probe_names[ALA_SCHUR_PROBE_COUNT]={
+    "P0_initial_continuity","P1_fixed_random","P2_radial_smooth",
+    "P3_radial_higher","P4_radial_alternating","P5_horizontal_checkerboard",
+    "P6_degree_1","P6_degree_2","P6_degree_4","P6_degree_8",
+    "P7_depth_0_200","P8_depth_200_410","P9_depth_410_660",
+    "P10_depth_660_1000","P11_depth_1000_cmb","P12_patch_scale",
+    "P13_longer_than_patch","P14_constant","P15_density_gauge"
+};
+
+static double **ala_schur_alloc_pressure(struct All_variables *E,int lev)
+{
+    int m;
+    double **v=(double **)calloc(NCS,sizeof(double *));
+    if(v==NULL) myerror(E,"Unable to allocate Schur diagnostic pressure table");
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        v[m]=(double *)calloc(E->lmesh.NPNO[lev]+1,sizeof(double));
+        if(v[m]==NULL) myerror(E,"Unable to allocate Schur diagnostic pressure");
+    }
+    return v;
+}
+
+static double **ala_schur_alloc_velocity(struct All_variables *E,int lev)
+{
+    int m;
+    double **v=(double **)calloc(NCS,sizeof(double *));
+    if(v==NULL) myerror(E,"Unable to allocate Schur diagnostic velocity table");
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        v[m]=(double *)calloc(E->lmesh.NEQ[lev]+1,sizeof(double));
+        if(v[m]==NULL) myerror(E,"Unable to allocate Schur diagnostic velocity");
+    }
+    return v;
+}
+
+static void ala_schur_free_field(struct All_variables *E,double **v)
+{
+    int m;
+    if(v==NULL) return;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) free((void *)v[m]);
+    free((void *)v);
+}
+
+static void ala_schur_zero_pressure(struct All_variables *E,double **v,int lev)
+{
+    int m,e;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=0;e<=E->lmesh.NPNO[lev];e++) v[m][e]=0.0;
+}
+
+static void ala_schur_zero_velocity(struct All_variables *E,double **v,int lev)
+{
+    int m,i;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<=E->lmesh.NEQ[lev];i++) v[m][i]=0.0;
+}
+
+static double ala_schur_legendre(int degree,double x)
+{
+    int l;
+    double pm2=1.0,pm1=x,p;
+    if(degree==0) return pm2;
+    if(degree==1) return pm1;
+    for(l=2;l<=degree;l++) {
+        p=((2.0*l-1.0)*x*pm1-(l-1.0)*pm2)/(double)l;
+        pm2=pm1;
+        pm1=p;
+    }
+    return pm1;
+}
+
+static double ala_schur_hash_value(unsigned long key)
+{
+    key=(key^61UL)^(key>>16);
+    key += key<<3;
+    key ^= key>>4;
+    key *= 0x27d4eb2dUL;
+    key ^= key>>15;
+    return 2.0*((double)(key&0x00ffffffUL)/16777215.0)-1.0;
+}
+
+static void ala_schur_build_probe(struct All_variables *E,int probe,
+                                  double **q,double **frozen_q0,int lev)
+{
+    int m,e,ex,ey,ez,gex,gey,gez,degree=0;
+    double theta,phi,r,depth,x,value,norm,lower=0.0,upper=0.0;
+    double global_pdot();
+    const double pi=3.14159265358979323846;
+    const int elx=E->lmesh.ELX[lev],elz=E->lmesh.ELZ[lev];
+
+    ala_schur_zero_pressure(E,q,lev);
+    if(probe==0) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) q[m][e]=frozen_q0[m][e];
+    }
+    else {
+        if(probe>=6 && probe<=9) {
+            static const int degrees[4]={1,2,4,8};
+            degree=degrees[probe-6];
+        }
+        if(probe>=10 && probe<=14) {
+            static const double lo[5]={0.0,200.0,410.0,660.0,1000.0};
+            static const double hi[5]={200.0,410.0,660.0,1000.0,1.0e30};
+            lower=lo[probe-10]; upper=hi[probe-10];
+        }
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+                for(ex=1;ex<=elx;ex++)
+                    for(ez=1;ez<=elz;ez++) {
+                        e=ez+(ex-1)*elz+(ey-1)*elz*elx;
+                        gex=E->lmesh.EXS[lev]+ex;
+                        gey=E->lmesh.EYS[lev]+ey;
+                        gez=E->lmesh.EZS[lev]+ez;
+                        theta=E->ECO[lev][m][e].centre[1];
+                        phi=E->ECO[lev][m][e].centre[2];
+                        r=E->ECO[lev][m][e].centre[3];
+                        depth=(1.0-r)*E->data.radius_km;
+                        x=(r-E->sphere.ri)/(1.0-E->sphere.ri);
+                        switch(probe) {
+                        case 1:
+                            value=ala_schur_hash_value(
+                                (unsigned long)E->control.ala_schur_diagnostic_random_seed
+                                +1000003UL*(unsigned long)E->sphere.capid[m]
+                                +9176UL*(unsigned long)gex
+                                +131UL*(unsigned long)gey+(unsigned long)gez);
+                            break;
+                        case 2: value=sin(pi*x); break;
+                        case 3: value=sin(4.0*pi*x); break;
+                        case 4: value=(gez&1)?-1.0:1.0; break;
+                        case 5: value=((gex+gey)&1)?-1.0:1.0; break;
+                        case 6: case 7: case 8: case 9:
+                            value=ala_schur_legendre(degree,cos(theta)); break;
+                        case 10: case 11: case 12: case 13: case 14:
+                            if(depth<lower || depth>=upper) value=0.0;
+                            else if(upper>1.0e20) value=sin(0.5*pi*(depth-lower)
+                                                        /max(E->data.radius_km-lower,1.0));
+                            else value=sin(pi*(depth-lower)/(upper-lower));
+                            break;
+                        case 15:
+                            value=sin(2.0*pi*(double)gex/6.0)
+                                 *sin(2.0*pi*(double)gey/6.0)
+                                 *sin(pi*(double)gez/2.0); break;
+                        case 16:
+                            value=sin(2.0*pi*(double)gex/24.0)
+                                 *sin(2.0*pi*(double)gey/24.0)
+                                 *sin(pi*(double)gez/8.0); break;
+                        case 17: value=1.0; break;
+                        case 18:
+                            value=0.5*(E->refstate.rho[ez]
+                                      +E->refstate.rho[ez+1]); break;
+                        default: value=0.0;
+                        }
+                        q[m][e]=value;
+                    }
+    }
+    norm=sqrt(global_pdot(E,q,q,lev));
+    if(!isfinite(norm) || norm<=1.0e-30)
+        myerror(E,"Degenerate strict-ALA Schur diagnostic probe");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) q[m][e]/=norm;
+}
+
+static double ala_schur_velocity_residual(struct All_variables *E,double **u,
+                                          double **rhs,double **work,int lev)
+{
+    int m,i;
+    double numerator,denominator;
+    double global_vdot();
+    void assemble_del2_u();
+    assemble_del2_u(E,u,work,lev,1);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) work[m][i]=rhs[m][i]-work[m][i];
+    numerator=global_vdot(E,work,work,lev);
+    denominator=global_vdot(E,rhs,rhs,lev);
+    return sqrt(numerator/max(denominator,1.0e-300));
+}
+
+static double ala_schur_tight_solve(struct All_variables *E,double **u,
+                                    double **rhs,double **work,int lev,
+                                    double relative_tolerance)
+{
+    int valid;
+    double target,rhs2;
+    double global_vdot();
+    rhs2=global_vdot(E,rhs,rhs,lev);
+    target=relative_tolerance*sqrt(rhs2/max((double)E->mesh.neq,1.0));
+    valid=solve_del2_u_bounded(E,u,rhs,target,lev,
+        E->control.ala_schur_diagnostic_max_cycles,
+        E->control.ala_schur_diagnostic_progress_interval);
+    if(!valid) myerror(E,"Strict-ALA Schur diagnostic tight solve failed");
+    return ala_schur_velocity_residual(E,u,rhs,work,lev);
+}
+
+static void ala_schur_build_cache(struct All_variables *E,
+    struct ala_pressure_preconditioner_cache *cache,int lev)
+{
+    memset(cache,0,sizeof(*cache));
+    if(E->control.ala_shallow_patch_preconditioner)
+        build_ala_shallow_patch_cache(E,cache,lev);
+    if(E->control.ala_pressure_multigrid)
+        build_ala_pressure_multigrid_cache(E,cache,lev);
+    if(E->control.ala_two_level_preconditioner ||
+       E->control.ala_geneo_preconditioner) {
+        build_ala_two_level_cache(E,cache,lev);
+        if(strcmp(E->control.ala_two_level_velocity_solver,"chebyshev")==0)
+            calibrate_ala_velocity_spectrum(E,cache,lev);
+        if(E->control.ala_geneo_preconditioner) {
+            if(E->control.ala_geneo_rank_group_x>1 ||
+               E->control.ala_geneo_rank_group_y>1)
+                build_ala_cross_rank_geneo_coarse_cache(E,cache,lev);
+            else build_ala_geneo_coarse_cache(E,cache,lev);
+        }
+        if(E->control.ala_two_level_preconditioner &&
+           E->control.ala_global_coarse_preconditioner)
+            build_ala_global_coarse_cache(E,cache,lev);
+        if(E->control.ala_two_level_preconditioner &&
+           strcmp(E->control.ala_two_level_coarse_solver,"chebyshev")==0)
+            calibrate_ala_two_level_spectrum(E,cache,lev);
+    }
+}
+
+static void ala_schur_preconditioner_action(struct All_variables *E,
+    double **q,double **z,double **work,double **aux,int lev,int variant,
+    struct ala_pressure_preconditioner_cache *cache)
+{
+    int m,e;
+    int shallow=E->control.ala_shallow_patch_preconditioner;
+    int two=E->control.ala_two_level_preconditioner;
+    int pmg=E->control.ala_pressure_multigrid;
+    int geneo=E->control.ala_geneo_preconditioner;
+    int global=E->control.ala_global_coarse_preconditioner;
+    double mid=E->control.ala_shallow_patch_mid_action_scale;
+    double transition=E->control.ala_shallow_patch_transition_action_scale;
+
+    if(variant==0) {
+        E->control.ala_shallow_patch_preconditioner=0;
+        E->control.ala_two_level_preconditioner=0;
+        E->control.ala_pressure_multigrid=0;
+        E->control.ala_geneo_preconditioner=0;
+        E->control.ala_global_coarse_preconditioner=0;
+    }
+    else if(variant==1 || variant==2) {
+        E->control.ala_shallow_patch_preconditioner=shallow;
+        E->control.ala_two_level_preconditioner=0;
+        E->control.ala_pressure_multigrid=0;
+        E->control.ala_geneo_preconditioner=0;
+        E->control.ala_global_coarse_preconditioner=0;
+        E->control.ala_shallow_patch_mid_action_scale=1.0;
+        E->control.ala_shallow_patch_transition_action_scale=1.0;
+    }
+    apply_ala_pressure_preconditioner(E,q,z,work,lev,-2,cache);
+    if(variant==1) {
+        E->control.ala_shallow_patch_preconditioner=0;
+        apply_ala_pressure_preconditioner(E,q,aux,work,lev,-2,cache);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) z[m][e]-=aux[m][e];
+    }
+    E->control.ala_shallow_patch_preconditioner=shallow;
+    E->control.ala_two_level_preconditioner=two;
+    E->control.ala_pressure_multigrid=pmg;
+    E->control.ala_geneo_preconditioner=geneo;
+    E->control.ala_global_coarse_preconditioner=global;
+    E->control.ala_shallow_patch_mid_action_scale=mid;
+    E->control.ala_shallow_patch_transition_action_scale=transition;
+}
+
+static void ala_schur_apply_true_action(struct All_variables *E,double **q,
+    double **action,double **rhs,double **u,double **velocity_work,int lev,
+    double *achieved)
+{
+    void assemble_div_rho_u();
+    assemble_grad_rho_p(E,q,rhs,lev);
+    *achieved=ala_schur_tight_solve(E,u,rhs,velocity_work,lev,
+        E->control.ala_schur_diagnostic_tight_tolerance);
+    assemble_div_rho_u(E,u,action,lev);
+}
+
+static int ala_schur_depth_band(double depth)
+{
+    if(depth<200.0) return 0;
+    if(depth<410.0) return 1;
+    if(depth<660.0) return 2;
+    if(depth<1000.0) return 3;
+    return 4;
+}
+
+static void ala_schur_write_viscosity(struct All_variables *E,FILE *csv,
+                                      const char *state)
+{
+    int m,e,gp,b,local_count=0,global_count;
+    double eta,depth,local_min=1.0e300,local_max=0.0,global_min,global_max;
+    double local[ALA_SCHUR_DEPTH_BANDS][4],global[ALA_SCHUR_DEPTH_BANDS][4];
+    double local_log=0.0,global_log,local_low=0.0,local_high=0.0;
+    double global_low,global_high,geomean,median;
+    int local_hist[4096],global_hist[4096],target,cumulative,index;
+    const int vpts=vpoints[E->mesh.nsd];
+    for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++) {
+        local[b][0]=1.0e300; local[b][1]=0.0;
+        local[b][2]=0.0; local[b][3]=0.0;
+    }
+    for(b=0;b<4096;b++) local_hist[b]=0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.nel;e++) {
+            depth=(1.0-E->eco[m][e].centre[3])*E->data.radius_km;
+            b=ala_schur_depth_band(depth);
+            for(gp=1;gp<=vpts;gp++) {
+                eta=E->EVI[E->mesh.levmax][m][(e-1)*vpts+gp];
+                local_min=min(local_min,eta); local_max=max(local_max,eta);
+                local_log += log(max(eta,1.0e-300)); local_count++;
+                local[b][0]=min(local[b][0],eta); local[b][1]=max(local[b][1],eta);
+                local[b][2] += log(max(eta,1.0e-300)); local[b][3] += 1.0;
+                if(E->viscosity.MIN && eta<=E->viscosity.min_value*(1.0+1.0e-6)) local_low++;
+                if(E->viscosity.MAX &&
+                   eta>=((E->eco[m][e].centre[3]>0.89641)
+                         ? E->viscosity.max_value
+                         : 5.0*E->viscosity.max_value)*(1.0-1.0e-6))
+                    local_high++;
+            }
+        }
+    MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,E->parallel.world);
+    MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+    MPI_Allreduce(&local_log,&global_log,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_count,&global_count,1,MPI_INT,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_low,&global_low,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&local_high,&global_high,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.nel;e++)
+            for(gp=1;gp<=vpts;gp++) {
+                eta=E->EVI[E->mesh.levmax][m][(e-1)*vpts+gp];
+                index=(global_max>global_min)
+                    ? (int)(4095.0*(log(eta)-log(global_min))
+                            /(log(global_max)-log(global_min))) : 0;
+                index=max(0,min(4095,index)); local_hist[index]++;
+            }
+    MPI_Allreduce(local_hist,global_hist,4096,MPI_INT,MPI_SUM,E->parallel.world);
+    target=(global_count+1)/2; cumulative=0; index=0;
+    while(index<4095 && cumulative+global_hist[index]<target)
+        cumulative += global_hist[index++];
+    median=(global_max>global_min)
+        ? exp(log(global_min)+(index+0.5)/4096.0
+              *(log(global_max)-log(global_min))) : global_min;
+    geomean=exp(global_log/max((double)global_count,1.0));
+    for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++) {
+        MPI_Allreduce(local[b],global[b],2,MPI_DOUBLE,MPI_MIN,E->parallel.world);
+        MPI_Allreduce(local[b]+1,global[b]+1,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+        MPI_Allreduce(local[b]+2,global[b]+2,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    }
+    if(E->parallel.me==0) {
+        fprintf(csv,"viscosity,%s,ALL,realized,0,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0\n",
+            state,global_min,global_max,geomean,median,
+            global_low/max((double)global_count,1.0),
+            global_high/max((double)global_count,1.0),(double)global_count);
+        for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+            fprintf(csv,"viscosity_depth,%s,B%d,realized,0,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+                state,b,global[b][0],global[b][1],
+                exp(global[b][2]/max(global[b][3],1.0)),global[b][3]);
+    }
+}
+
+static void ala_schur_write_depth_rows(struct All_variables *E,FILE *csv,
+    const char *state,const char *probe,const char *variant,double **q,
+    double **z,double **y,int lev)
+{
+    int m,e,b;
+    double depth,d,local[ALA_SCHUR_DEPTH_BANDS][5],global[ALA_SCHUR_DEPTH_BANDS][5];
+    for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+        for(e=0;e<5;e++) local[b][e]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+            depth=(1.0-E->ECO[lev][m][e].centre[3])*E->data.radius_km;
+            b=ala_schur_depth_band(depth); d=q[m][e]-y[m][e];
+            local[b][0]+=q[m][e]*q[m][e]; local[b][1]+=z[m][e]*z[m][e];
+            local[b][2]+=y[m][e]*y[m][e]; local[b][3]+=d*d;
+            local[b][4]+=q[m][e]*y[m][e];
+        }
+    MPI_Allreduce(local,global,ALA_SCHUR_DEPTH_BANDS*5,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    if(E->parallel.me==0)
+        for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+            fprintf(csv,"depth,%s,%s,%s,%d,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+                state,probe,variant,b,sqrt(global[b][0]),sqrt(global[b][1]),
+                sqrt(global[b][2]),sqrt(global[b][3]),
+                global[b][4]/max(global[b][2],1.0e-300));
+}
+
+static void ala_schur_run_state(struct All_variables *E,FILE *csv,
+                                const char *state,double **frozen_q0,int lev)
+{
+    int probe,variant,m,e,i;
+    double tight=E->control.ala_schur_diagnostic_tight_tolerance;
+    double rd,rc,qnorm2,full_energy,dd,dc,cd,cc,sum_defect,bt_defect;
+    double adj_d,adj_c,adj_b,achieved,ep,cosine,alpha,qp,qsy,seconds;
+    double saved_seconds[2],saved_achieved[2];
+    double *tol;
+    static double sensitivity[4]={1.0e-2,1.0e-3,1.0e-4,0.0};
+    static const char *variants[4]={"BPI_only","Schwarz_only",
+                                    "combined_unscaled","configured"};
+    double global_pdot(),global_vdot();
+    void assemble_div_u(),assemble_c_u(),assemble_div_rho_u(),assemble_grad_p();
+    struct ala_pressure_preconditioner_cache cache;
+    double **q=ala_schur_alloc_pressure(E,lev);
+    double **duD=ala_schur_alloc_pressure(E,lev),**cuD=ala_schur_alloc_pressure(E,lev);
+    double **duC=ala_schur_alloc_pressure(E,lev),**cuC=ala_schur_alloc_pressure(E,lev);
+    double **full=ala_schur_alloc_pressure(E,lev),**sum=ala_schur_alloc_pressure(E,lev);
+    double **z=ala_schur_alloc_pressure(E,lev),**y=ala_schur_alloc_pressure(E,lev);
+    double **pwork=ala_schur_alloc_pressure(E,lev);
+    double **paux=ala_schur_alloc_pressure(E,lev);
+    double **z0=ala_schur_alloc_pressure(E,lev),**z1=ala_schur_alloc_pressure(E,lev);
+    double **y0=ala_schur_alloc_pressure(E,lev),**y1=ala_schur_alloc_pressure(E,lev);
+    double **dT=ala_schur_alloc_velocity(E,lev),**cT=ala_schur_alloc_velocity(E,lev);
+    double **bT=ala_schur_alloc_velocity(E,lev),**uD=ala_schur_alloc_velocity(E,lev);
+    double **uC=ala_schur_alloc_velocity(E,lev),**uB=ala_schur_alloc_velocity(E,lev);
+    double **vwork=ala_schur_alloc_velocity(E,lev);
+
+    ala_schur_build_cache(E,&cache,lev);
+    ala_schur_write_viscosity(E,csv,state);
+    for(probe=0;probe<ALA_SCHUR_PROBE_COUNT;probe++) {
+        ala_schur_build_probe(E,probe,q,frozen_q0,lev);
+        assemble_grad_p(E,q,dT,lev);
+        assemble_grad_c_p(E,q,cT,lev);
+        assemble_grad_rho_p(E,q,bT,lev);
+        rd=ala_schur_tight_solve(E,uD,dT,vwork,lev,tight);
+        rc=ala_schur_tight_solve(E,uC,cT,vwork,lev,tight);
+        assemble_div_u(E,uD,duD,lev); assemble_c_u(E,uD,cuD,lev);
+        assemble_div_u(E,uC,duC,lev); assemble_c_u(E,uC,cuC,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(i=0;i<E->lmesh.NEQ[lev];i++) {
+                uB[m][i]=uD[m][i]+uC[m][i];
+                vwork[m][i]=bT[m][i]-dT[m][i]-cT[m][i];
+            }
+            for(e=1;e<=E->lmesh.NPNO[lev];e++)
+                sum[m][e]=duD[m][e]+cuD[m][e]+duC[m][e]+cuC[m][e];
+        }
+        assemble_div_rho_u(E,uB,full,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) pwork[m][e]=full[m][e]-sum[m][e];
+        qnorm2=global_pdot(E,q,q,lev); full_energy=global_pdot(E,q,full,lev);
+        dd=global_pdot(E,q,duD,lev); dc=global_pdot(E,q,duC,lev);
+        cd=global_pdot(E,q,cuD,lev); cc=global_pdot(E,q,cuC,lev);
+        sum_defect=sqrt(global_pdot(E,pwork,pwork,lev)
+                        /max(global_pdot(E,full,full,lev),1.0e-300));
+        bt_defect=sqrt(global_vdot(E,vwork,vwork,lev)
+                       /max(global_vdot(E,bT,bT,lev),1.0e-300));
+        adj_d=fabs(global_vdot(E,uD,dT,lev)-global_pdot(E,q,duD,lev))
+              /max(fabs(global_pdot(E,q,duD,lev)),1.0e-300);
+        adj_c=fabs(global_vdot(E,uC,cT,lev)-global_pdot(E,q,cuC,lev))
+              /max(fabs(global_pdot(E,q,cuC,lev)),1.0e-300);
+        adj_b=fabs(global_vdot(E,uB,bT,lev)-global_pdot(E,q,full,lev))
+              /max(fabs(global_pdot(E,q,full,lev)),1.0e-300);
+        if(E->parallel.me==0)
+            fprintf(csv,"schur,%s,%s,decomposition,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0\n",
+                state,ala_schur_probe_names[probe],tight,rd,rc,dd,dc,cd,cc,
+                full_energy,dd/max(full_energy,1.0e-300),
+                dc/max(full_energy,1.0e-300),cd/max(full_energy,1.0e-300),
+                cc/max(full_energy,1.0e-300),sum_defect,bt_defect,adj_d,adj_c,adj_b);
+
+        for(variant=0;variant<4;variant++) {
+            if(variant==2) {
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+                        z[m][e]=z0[m][e]+z1[m][e];
+                        y[m][e]=y0[m][e]+y1[m][e];
+                    }
+                achieved=max(saved_achieved[0],saved_achieved[1]);
+                seconds=saved_seconds[0]+saved_seconds[1];
+            }
+            else {
+                seconds=MPI_Wtime();
+                ala_schur_preconditioner_action(
+                    E,q,z,pwork,paux,lev,variant,&cache);
+                ala_schur_apply_true_action(E,z,y,bT,uB,vwork,lev,&achieved);
+                seconds=MPI_Wtime()-seconds;
+                if(variant<2) {
+                    for(m=1;m<=E->sphere.caps_per_proc;m++)
+                        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+                            (variant==0 ? z0 : z1)[m][e]=z[m][e];
+                            (variant==0 ? y0 : y1)[m][e]=y[m][e];
+                        }
+                    saved_seconds[variant]=seconds;
+                    saved_achieved[variant]=achieved;
+                }
+            }
+            qp=global_pdot(E,q,z,lev);
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=1;e<=E->lmesh.NPNO[lev];e++) pwork[m][e]=q[m][e]-y[m][e];
+            qsy=global_pdot(E,q,y,lev);
+            ep=sqrt(global_pdot(E,pwork,pwork,lev)/max(qnorm2,1.0e-300));
+            cosine=qsy/sqrt(max(qnorm2*global_pdot(E,y,y,lev),1.0e-300));
+            alpha=qsy/max(global_pdot(E,y,y,lev),1.0e-300);
+            if(E->parallel.me==0)
+                fprintf(csv,"preconditioner,%s,%s,%s,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0\n",
+                    state,ala_schur_probe_names[probe],variants[variant],tight,
+                    achieved,ep,cosine,alpha,full_energy,qp,qsy,seconds,
+                    global_pdot(E,y,y,lev),(qp>0.0 && qsy>0.0)?1.0:0.0);
+            ala_schur_write_depth_rows(E,csv,state,ala_schur_probe_names[probe],
+                                       variants[variant],q,z,y,lev);
+        }
+        if(E->control.ala_schur_diagnostic_inner_sensitivity &&
+           (probe==0 || probe==2 || probe==5 || probe==10))
+            for(i=0;i<4;i++) {
+                sensitivity[3]=tight; tol=&sensitivity[i];
+                assemble_grad_rho_p(E,q,bT,lev);
+                achieved=ala_schur_tight_solve(E,uB,bT,vwork,lev,*tol);
+                assemble_div_rho_u(E,uB,y,lev);
+                if(E->parallel.me==0)
+                    fprintf(csv,"inner_sensitivity,%s,%s,Kgamma_inverse,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+                        state,ala_schur_probe_names[probe],*tol,achieved,
+                        global_pdot(E,q,y,lev));
+            }
+        if(E->parallel.me==0) { fflush(csv); fflush(E->fp); }
+    }
+    free_ala_pressure_preconditioner_cache(E,&cache);
+    ala_schur_free_field(E,q); ala_schur_free_field(E,duD);
+    ala_schur_free_field(E,cuD); ala_schur_free_field(E,duC);
+    ala_schur_free_field(E,cuC); ala_schur_free_field(E,full);
+    ala_schur_free_field(E,sum); ala_schur_free_field(E,z);
+    ala_schur_free_field(E,y); ala_schur_free_field(E,pwork);
+    ala_schur_free_field(E,paux);
+    ala_schur_free_field(E,z0); ala_schur_free_field(E,z1);
+    ala_schur_free_field(E,y0); ala_schur_free_field(E,y1);
+    ala_schur_free_field(E,dT); ala_schur_free_field(E,cT);
+    ala_schur_free_field(E,bT); ala_schur_free_field(E,uD);
+    ala_schur_free_field(E,uC); ala_schur_free_field(E,uB);
+    ala_schur_free_field(E,vwork);
+}
+
+void strict_ala_schur_diagnostic(struct All_variables *E)
+{
+    int state,m,i;
+    char filename[512];
+    FILE *csv=NULL;
+    const int lev=E->mesh.levmax;
+    const int neq=E->lmesh.NEQ[lev];
+    double **frozen_q0=ala_schur_alloc_pressure(E,lev);
+    double **initial_velocity=ala_schur_alloc_velocity(E,lev);
+    double **initial_force=ala_schur_alloc_velocity(E,lev);
+    void get_system_viscosity(),construct_stiffness_B_matrix();
+    void velocities_conform_bcs(),assemble_forces();
+
+    if(!E->control.ala_schur_diagnostic) return;
+    if(E->parallel.me==0) {
+        snprintf(filename,sizeof(filename),"%s.strict_ala_schur_diagnostic.csv",
+                 E->control.data_file);
+        csv=fopen(filename,"w");
+        if(csv==NULL) myerror(E,"Unable to open strict-ALA Schur diagnostic CSV");
+        fprintf(csv,"row_type,state,probe,variant,tolerance,metric01,metric02,metric03,metric04,metric05,metric06,metric07,metric08,metric09,metric10,metric11,metric12,metric13,metric14,metric15,metric16,metric17,metric18,metric19\n");
+        fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_BEGIN cycle=%d probes=%d "
+                "seed=%d tight_tolerance=%e states=OLD,NEW assembly_per_state=1\n",
+                E->monitor.solution_cycles,ALA_SCHUR_PROBE_COUNT,
+                E->control.ala_schur_diagnostic_random_seed,
+                E->control.ala_schur_diagnostic_tight_tolerance);
+        fflush(E->fp);
+    }
+    for(state=0;state<=1;state++) {
+        E->control.ala_schur_diagnostic_viscosity_mode=state;
+        get_system_viscosity(E,1,E->EVI[lev],E->VI[lev]);
+        velocities_conform_bcs(E,E->U);
+        construct_stiffness_B_matrix(E);
+        assemble_forces(E,0);
+        if(state==0) {
+            void assemble_div_rho_u();
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=0;i<neq;i++) {
+                    initial_velocity[m][i]=E->U[m][i];
+                    initial_force[m][i]=E->F[m][i];
+                }
+            initial_vel_residual(E,initial_velocity,E->P,initial_force,
+                                 E->control.accuracy);
+            assemble_div_rho_u(E,initial_velocity,frozen_q0,lev);
+        }
+        ala_schur_run_state(E,csv,state ? "OLD" : "NEW",frozen_q0,lev);
+    }
+    E->control.ala_schur_diagnostic_viscosity_mode=0;
+    if(!E->control.ala_schur_diagnostic_only) {
+        get_system_viscosity(E,1,E->EVI[lev],E->VI[lev]);
+        velocities_conform_bcs(E,E->U);
+        construct_stiffness_B_matrix(E);
+        assemble_forces(E,0);
+    }
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_COMPLETE states=2 probes=%d "
+                "production_state_restored=%s\n",ALA_SCHUR_PROBE_COUNT,
+                E->control.ala_schur_diagnostic_only ? "not_required_audit_only"
+                                                     : "NEW");
+        fflush(E->fp); fclose(csv);
+    }
+    ala_schur_free_field(E,frozen_q0);
+    ala_schur_free_field(E,initial_velocity);
+    ala_schur_free_field(E,initial_force);
+    if(E->control.ala_schur_diagnostic_only) {
+        MPI_Barrier(E->parallel.world);
+        MPI_Finalize();
+        exit(EXIT_SUCCESS);
     }
 }
 
@@ -2202,56 +2872,6 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
     (ALA_PATCH_MAX_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_MAX_HORIZONTAL_ELEMENTS \
      *ALA_PATCH_RADIAL_ELEMENTS)
-struct ala_pressure_preconditioner_cache {
-    int patch_capacity;
-    int interface_capacity;
-    int blocks[NCS];
-    unsigned char *size[NCS];
-    unsigned short *multiplicity[NCS];
-    int *elements[NCS];
-    double *chol[NCS];
-    int interface_blocks[NCS];
-    unsigned char *interface_size[NCS];
-    unsigned char *interface_face[NCS];
-    int *interface_elements[NCS];
-    double *interface_chol[NCS];
-    int halo_send_count[NCS][ALA_PATCH_MPI_FACES];
-    int halo_recv_count[NCS][ALA_PATCH_MPI_FACES];
-    int *halo_send_elements[NCS][ALA_PATCH_MPI_FACES];
-    double *halo_send_records[NCS][ALA_PATCH_MPI_FACES];
-    double *halo_recv_records[NCS][ALA_PATCH_MPI_FACES];
-    unsigned short *halo_multiplicity[NCS][ALA_PATCH_MPI_FACES];
-    double *velocity_block_chol[NCS];
-    int velocity_block_fallbacks;
-    double *coarse_bpi[NCS];
-    double *global_basis[NCS];
-    double *global_matrix;
-    double *global_chol;
-    int global_basis_count;
-    double *geneo_basis[NCS];
-    double *geneo_matrix;
-    double *geneo_chol;
-    double *geneo_eigenvalues;
-    int geneo_basis_count;
-    int geneo_local_modes;
-    int geneo_local_offset;
-    int geneo_schur_applications;
-    double coarse_eigenvalue_min;
-    double coarse_eigenvalue_max;
-    double velocity_eigenvalue_min;
-    double velocity_eigenvalue_max;
-    double *pressure_mg_rhs[MAX_LEVELS][NCS];
-    double *pressure_mg_x[MAX_LEVELS][NCS];
-    double *pressure_mg_residual[MAX_LEVELS][NCS];
-    double *pressure_mg_Ax[MAX_LEVELS][NCS];
-    double *pressure_mg_velocity[NCS];
-    double *pressure_mg_velocity_rhs[NCS];
-    double *pressure_mg_galerkin_p[NCS];
-    double *pressure_mg_galerkin_Ap[NCS];
-    int pressure_mg_min_level;
-    int pressure_mg_max_level;
-    int pressure_mg_operator_applications;
-};
 static void build_ala_shallow_patch_cache(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache, int lev);
 static void exchange_ala_shallow_halo_values(struct All_variables *E,
@@ -3958,6 +4578,7 @@ static void free_ala_pressure_preconditioner_cache(struct All_variables *E,
         free((void *)cache->pressure_mg_velocity_rhs[m]);
         free((void *)cache->pressure_mg_galerkin_p[m]);
         free((void *)cache->pressure_mg_galerkin_Ap[m]);
+        free((void *)cache->pressure_transition_weighted_r[m]);
         for(level=0;level<MAX_LEVELS;level++) {
             free((void *)cache->pressure_mg_rhs[level][m]);
             free((void *)cache->pressure_mg_x[level][m]);
@@ -6056,8 +6677,10 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *fine_velocity_direction[NCS];
     double *ghost_r[NCS][ALA_PATCH_MPI_FACES];
     double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
+    double **patch_r,depth_km,band_scale,band_sqrt;
 
     npno=E->lmesh.NPNO[lev];
+    patch_r=r;
     if(E->control.ala_radial_line_preconditioner) {
         elz=E->lmesh.ELZ[lev];
         ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
@@ -6103,6 +6726,52 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
 
     if(E->control.ala_shallow_patch_preconditioner) {
         weight=E->control.ala_shallow_patch_weight;
+        if(fabs(E->control.ala_shallow_patch_mid_action_scale-1.0)>
+               1.0e-12 ||
+           fabs(E->control.ala_shallow_patch_transition_action_scale-1.0)>
+               1.0e-12) {
+            for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                if(cache->pressure_transition_weighted_r[m]==NULL) {
+                    cache->pressure_transition_weighted_r[m]=
+                        (double *)calloc(npno+1,sizeof(double));
+                    if(cache->pressure_transition_weighted_r[m]==NULL)
+                        myerror(E,"Unable to allocate ALA transition-band "
+                                "pressure residual");
+                }
+                for(e=1;e<=npno;e++) {
+                    depth_km=(1.0-E->ECO[lev][m][e].centre[3])
+                        *E->data.radius_km;
+                    if(depth_km<
+                       E->control.ala_shallow_patch_mid_depth_km)
+                        band_scale=1.0;
+                    else if(depth_km<
+                            E->control.ala_shallow_patch_transition_depth_km)
+                        band_scale=
+                            E->control.ala_shallow_patch_mid_action_scale;
+                    else
+                        band_scale=E->control.
+                            ala_shallow_patch_transition_action_scale;
+                    cache->pressure_transition_weighted_r[m][e]=
+                        sqrt(band_scale)*r[m][e];
+                }
+            }
+            patch_r=cache->pressure_transition_weighted_r;
+            if(iteration==0 && E->parallel.me==0) {
+                fprintf(E->fp,"ALA SHALLOW PATCH DEPTH BANDS "
+                        "top=[0,%e) scale=1.0 mid=[%e,%e) scale=%e "
+                        "transition=[%e,%e] scale=%e "
+                        "operator=BPI+W*Schwarz*W\n",
+                        E->control.ala_shallow_patch_mid_depth_km,
+                        E->control.ala_shallow_patch_mid_depth_km,
+                        E->control.ala_shallow_patch_transition_depth_km,
+                        E->control.ala_shallow_patch_mid_action_scale,
+                        E->control.ala_shallow_patch_transition_depth_km,
+                        E->control.ala_shallow_patch_depth_km,
+                        E->control.
+                            ala_shallow_patch_transition_action_scale);
+                fflush(E->fp);
+            }
+        }
         local_patch_energy[0]=0.0;
         local_patch_energy[1]=0.0;
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -6114,7 +6783,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 if(ghost_r[m][face]==NULL || ghost_work[m][face]==NULL)
                     myerror(E,"Unable to allocate ALA MPI-overlap work");
             }
-            exchange_ala_shallow_halo_values(E,cache,lev,m,r,
+            exchange_ala_shallow_halo_values(E,cache,lev,m,patch_r,
                                               ghost_r[m],0);
             for(e=1;e<=npno;e++) {
                 work[m][e]=0.0;
@@ -6134,7 +6803,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     e=cache->elements[m][b*cache->patch_capacity+i];
                     constant_mode[i]=1.0
                         /sqrt((double)cache->multiplicity[m][e]);
-                    rhs[i]=r[m][e]*constant_mode[i];
+                    rhs[i]=patch_r[m][e]*constant_mode[i];
                 }
                 if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                           "element_vanka")==0) {
@@ -6193,7 +6862,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                             myerror(E,"ALA local partition weight is zero");
                         constant_mode[i]=1.0
                             /sqrt((double)cache->multiplicity[m][ref]);
-                        rhs[i]=r[m][ref]*constant_mode[i];
+                        rhs[i]=patch_r[m][ref]*constant_mode[i];
                     }
                     else {
                         ghost_index=-ref-1;
@@ -6260,6 +6929,20 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=npno;e++)
                 if(cache->multiplicity[m][e]>0) {
+                    depth_km=(1.0-E->ECO[lev][m][e].centre[3])
+                        *E->data.radius_km;
+                    if(depth_km<
+                       E->control.ala_shallow_patch_mid_depth_km)
+                        band_scale=1.0;
+                    else if(depth_km<
+                            E->control.ala_shallow_patch_transition_depth_km)
+                        band_scale=
+                            E->control.ala_shallow_patch_mid_action_scale;
+                    else
+                        band_scale=E->control.
+                            ala_shallow_patch_transition_action_scale;
+                    band_sqrt=sqrt(band_scale);
+                    work[m][e] *= band_sqrt;
                     local_patch_energy[1] += r[m][e]*work[m][e];
                     if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                               "element_vanka")==0)

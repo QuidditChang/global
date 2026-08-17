@@ -993,6 +993,40 @@ void assemble_grad_rho_p(struct All_variables *E,
 }
 
 
+/* Exact diagnostic transpose of assemble_c_u(). */
+void assemble_grad_c_p(struct All_variables *E,
+                       double **P, double **gradP, int lev)
+{
+  int m,e,i,j1,j2,j3,p,a,b,nel,neq;
+  const int ends=enodes[E->mesh.nsd];
+  const int dims=E->mesh.nsd;
+  void strip_bcs_from_residual();
+
+  for(m=1;m<=E->sphere.caps_per_proc;m++) {
+    nel=E->lmesh.NEL[lev];
+    neq=E->lmesh.NEQ[lev];
+    for(i=0;i<neq;i++)
+      gradP[m][i]=0.0;
+    for(e=1;e<=nel;e++) {
+      if(P[m][e]==0.0)
+        continue;
+      for(a=1;a<=ends;a++) {
+        p=(a-1)*dims;
+        b=E->IEN[lev][m][e].node[a];
+        j1=E->ID[lev][m][b].doff[1];
+        j2=E->ID[lev][m][b].doff[2];
+        j3=E->ID[lev][m][b].doff[3];
+        gradP[m][j1] += E->elt_c[lev][m][e].c[p][0]*P[m][e];
+        gradP[m][j2] += E->elt_c[lev][m][e].c[p+1][0]*P[m][e];
+        gradP[m][j3] += E->elt_c[lev][m][e].c[p+2][0]*P[m][e];
+      }
+    }
+  }
+  (E->solver.exchange_id_d)(E,gradP,lev);
+  strip_bcs_from_residual(E,gradP,lev);
+}
+
+
 double assemble_dAhatp_entry(E,e,level,m)
      struct All_variables *E;
      int e,level,m;

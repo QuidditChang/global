@@ -98,6 +98,7 @@ void general_stokes_solver(struct All_variables *E)
   void assemble_forces();
   void sphere_harmonics_layer();
   void get_system_viscosity();
+  void strict_ala_schur_diagnostic();
   void remove_rigid_rot();
 
   float vmag;
@@ -120,9 +121,14 @@ void general_stokes_solver(struct All_variables *E)
   assemble_forces(E,0);
 
   if(E->monitor.solution_cycles==0 || E->viscosity.update_allowed) {
-    get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
-    velocities_conform_bcs(E,E->U);
-    construct_stiffness_B_matrix(E);
+    if(E->control.ala_schur_diagnostic &&
+       E->monitor.solution_cycles==0)
+      strict_ala_schur_diagnostic(E);
+    else {
+      get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
+      velocities_conform_bcs(E,E->U);
+      construct_stiffness_B_matrix(E);
+    }
 
     /* assemble_forces() includes nonzero velocity-boundary terms formed
        with the element stiffness.  A viscosity update changes that

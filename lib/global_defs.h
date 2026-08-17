@@ -498,6 +498,15 @@ struct CONTROL {
     double ala_coupled_multilevel_coarse_weight;
     int ala_viscosity_spectrum_diagnostics;
     int ala_viscosity_spectrum_interval;
+    int ala_schur_diagnostic;
+    int ala_schur_diagnostic_only;
+    int ala_schur_diagnostic_inner_sensitivity;
+    double ala_schur_diagnostic_tight_tolerance;
+    int ala_schur_diagnostic_max_cycles;
+    int ala_schur_diagnostic_progress_interval;
+    int ala_schur_diagnostic_random_seed;
+    /* Internal OLD/NEW selector; never populated from user input. */
+    int ala_schur_diagnostic_viscosity_mode;
     int ala_coupled_shallow_vanka_layers;
     int ala_coupled_shallow_vanka_core_layers;
     int ala_coupled_shallow_vanka_band_sweeps;
@@ -545,6 +554,10 @@ struct CONTROL {
     int ala_shallow_patch_preconditioner;
     double ala_shallow_patch_depth_km;
     double ala_shallow_patch_weight;
+    double ala_shallow_patch_mid_depth_km;
+    double ala_shallow_patch_transition_depth_km;
+    double ala_shallow_patch_mid_action_scale;
+    double ala_shallow_patch_transition_action_scale;
     double ala_shallow_patch_regularization;
     int ala_shallow_patch_horizontal_elements;
     int ala_shallow_patch_horizontal_stride;

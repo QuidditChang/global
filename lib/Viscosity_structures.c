@@ -340,7 +340,7 @@ static double strict_rheology_reference_temperature(struct All_variables *E,
                                                      int gp)
 {
     int a, node, radial_node;
-    double temperature;
+    double temperature,depth,slope;
     const int ends = enodes[E->mesh.nsd];
 
     if(!E->refstate.has_temperature) {
@@ -349,11 +349,22 @@ static double strict_rheology_reference_temperature(struct All_variables *E,
     }
 
     temperature = 0.0;
+    depth = 0.0;
     for(a=1; a<=ends; a++) {
         node = E->ien[cap][element].node[a];
         radial_node = (node - 1) % E->lmesh.noz + 1;
         temperature += E->refstate.Tref[radial_node]
                      * E->N.vpt[GNVINDEX(a,gp)];
+        depth += (1.0-E->sx[cap][3][node])
+               * E->N.vpt[GNVINDEX(a,gp)];
+    }
+    if(E->control.ala_schur_diagnostic_viscosity_mode==1) {
+        slope=((1.0-E->control.lith_age_mantle_temp)
+               -E->control.lith_age_mantle_temp)
+              /(1.0-E->control.lith_age_depth
+                -(E->sphere.ri+2.0*E->control.lith_age_depth));
+        temperature=E->control.lith_age_mantle_temp
+                    +slope*(depth-E->control.lith_age_depth);
     }
     return temperature;
 }

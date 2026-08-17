@@ -79,6 +79,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_shallow_patch_preconditioner",
             "ala_shallow_patch_depth_km",
             "ala_shallow_patch_weight",
+            "ala_shallow_patch_mid_depth_km",
+            "ala_shallow_patch_transition_depth_km",
+            "ala_shallow_patch_mid_action_scale",
+            "ala_shallow_patch_transition_action_scale",
             "ala_shallow_patch_horizontal_elements",
             "ala_shallow_patch_horizontal_stride",
             "ala_shallow_patch_mpi_overlap",
@@ -101,6 +105,13 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_coupled_multilevel_coarse_weight",
             "ala_viscosity_spectrum_diagnostics",
             "ala_viscosity_spectrum_interval",
+            "ala_schur_diagnostic",
+            "ala_schur_diagnostic_only",
+            "ala_schur_diagnostic_inner_sensitivity",
+            "ala_schur_diagnostic_tight_tolerance",
+            "ala_schur_diagnostic_max_cycles",
+            "ala_schur_diagnostic_progress_interval",
+            "ala_schur_diagnostic_random_seed",
             "ala_coupled_shallow_vanka_layers",
             "ala_coupled_shallow_vanka_core_layers",
             "ala_coupled_shallow_vanka_band_sweeps",
@@ -210,7 +221,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         )
         self.assertRegex(
             strict_text,
-            r"(?m)^\s*ala_pressure_defect_corrections\s*=\s*1\s*$",
+            r"(?m)^\s*ala_pressure_defect_corrections\s*=\s*0\s*$",
         )
         self.assertRegex(
             strict_text,

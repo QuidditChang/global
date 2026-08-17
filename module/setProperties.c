@@ -1104,6 +1104,20 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_viscosity_spectrum_diagnostics, fp);
     getIntProperty(properties, "ala_viscosity_spectrum_interval",
                    E->control.ala_viscosity_spectrum_interval, fp);
+    getIntProperty(properties, "ala_schur_diagnostic",
+                   E->control.ala_schur_diagnostic, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_only",
+                   E->control.ala_schur_diagnostic_only, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_inner_sensitivity",
+                   E->control.ala_schur_diagnostic_inner_sensitivity, fp);
+    getDoubleProperty(properties, "ala_schur_diagnostic_tight_tolerance",
+                      E->control.ala_schur_diagnostic_tight_tolerance, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_max_cycles",
+                   E->control.ala_schur_diagnostic_max_cycles, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_progress_interval",
+                   E->control.ala_schur_diagnostic_progress_interval, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_random_seed",
+                   E->control.ala_schur_diagnostic_random_seed, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_layers",
                    E->control.ala_coupled_shallow_vanka_layers, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_core_layers",
@@ -1198,6 +1212,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       E->control.ala_shallow_patch_depth_km, fp);
     getDoubleProperty(properties, "ala_shallow_patch_weight",
                       E->control.ala_shallow_patch_weight, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_mid_depth_km",
+                      E->control.ala_shallow_patch_mid_depth_km, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_transition_depth_km",
+                      E->control.ala_shallow_patch_transition_depth_km, fp);
+    getDoubleProperty(properties, "ala_shallow_patch_mid_action_scale",
+                      E->control.ala_shallow_patch_mid_action_scale, fp);
+    getDoubleProperty(properties,
+                      "ala_shallow_patch_transition_action_scale",
+                      E->control.ala_shallow_patch_transition_action_scale,
+                      fp);
     getDoubleProperty(properties, "ala_shallow_patch_regularization",
                       E->control.ala_shallow_patch_regularization, fp);
     getIntProperty(properties, "ala_shallow_patch_horizontal_elements",
@@ -1360,6 +1384,19 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_coupled_multilevel_coarse_weight must be in (0,1]");
     if(E->control.ala_viscosity_spectrum_interval < 1)
         myerror(E, "ala_viscosity_spectrum_interval must be at least one");
+    if(E->control.ala_schur_diagnostic_only &&
+       !E->control.ala_schur_diagnostic)
+        myerror(E, "ala_schur_diagnostic_only requires ala_schur_diagnostic=on");
+    if(E->control.ala_schur_diagnostic &&
+       (!E->control.ala_pressure_buoyancy ||
+        E->control.ala_augmented_lagrangian_gamma <= 0.0))
+        myerror(E, "ala_schur_diagnostic requires strict ALA with gamma_AL > 0");
+    if(E->control.ala_schur_diagnostic_tight_tolerance <= 0.0 ||
+       E->control.ala_schur_diagnostic_tight_tolerance >= 1.0)
+        myerror(E, "ala_schur_diagnostic_tight_tolerance must be in (0,1)");
+    if(E->control.ala_schur_diagnostic_max_cycles < 1 ||
+       E->control.ala_schur_diagnostic_progress_interval < 1)
+        myerror(E, "ALA Schur diagnostic velocity solve limits must be positive");
     if(E->control.ala_coupled_shallow_vanka_layers < 0 ||
        E->control.ala_coupled_shallow_vanka_layers > 64)
         myerror(E, "ala_coupled_shallow_vanka_layers must be in [0,64]");
@@ -1492,6 +1529,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_shallow_patch_weight <= 0.0 ||
        E->control.ala_shallow_patch_weight > 1.0)
         myerror(E, "ala_shallow_patch_weight must be in (0,1]");
+    if(E->control.ala_shallow_patch_mid_depth_km <= 0.0 ||
+       E->control.ala_shallow_patch_mid_depth_km >
+           E->control.ala_shallow_patch_transition_depth_km ||
+       E->control.ala_shallow_patch_transition_depth_km >
+           E->control.ala_shallow_patch_depth_km)
+        myerror(E, "ALA shallow-patch depth bands must satisfy "
+                "0 < mid <= transition <= patch depth");
+    if(E->control.ala_shallow_patch_mid_action_scale <= 0.0 ||
+       E->control.ala_shallow_patch_transition_action_scale <= 0.0)
+        myerror(E, "ALA shallow-patch band action scales must be positive");
     if(E->control.ala_shallow_patch_regularization < 0.0 ||
        E->control.ala_shallow_patch_regularization > 0.1)
         myerror(E, "ala_shallow_patch_regularization must be in [0,0.1]");
