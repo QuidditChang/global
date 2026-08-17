@@ -106,6 +106,12 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_BEGIN", self.stokes)
         self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_COMPLETE", self.stokes)
 
+    def test_csv_writes_do_not_hide_mpi_collectives_on_rank_zero(self) -> None:
+        self.assertIn("action_norm2=global_pdot(E,y,y,lev)", self.stokes)
+        self.assertIn("sensitivity_energy=global_pdot(E,q,y,lev)", self.stokes)
+        self.assertNotIn("global_pdot(E,y,y,lev),(qp>0.0", self.stokes)
+        self.assertNotIn("global_pdot(E,q,y,lev));", self.stokes)
+
     def test_old_rheology_switch_is_internal_only(self) -> None:
         self.assertIn("ala_schur_diagnostic_viscosity_mode==1", self.viscosity)
         self.assertNotIn(

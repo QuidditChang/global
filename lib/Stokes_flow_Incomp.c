@@ -584,6 +584,7 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
     double tight=E->control.ala_schur_diagnostic_tight_tolerance;
     double rd,rc,qnorm2,full_energy,dd,dc,cd,cc,sum_defect,bt_defect;
     double adj_d,adj_c,adj_b,achieved,ep,cosine,alpha,qp,qsy,seconds;
+    double action_norm2,sensitivity_energy;
     double saved_seconds[2],saved_achieved[2];
     double *tol;
     static double sensitivity[4]={1.0e-2,1.0e-3,1.0e-4,0.0};
@@ -686,14 +687,15 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(e=1;e<=E->lmesh.NPNO[lev];e++) pwork[m][e]=q[m][e]-y[m][e];
             qsy=global_pdot(E,q,y,lev);
+            action_norm2=global_pdot(E,y,y,lev);
             ep=sqrt(global_pdot(E,pwork,pwork,lev)/max(qnorm2,1.0e-300));
-            cosine=qsy/sqrt(max(qnorm2*global_pdot(E,y,y,lev),1.0e-300));
-            alpha=qsy/max(global_pdot(E,y,y,lev),1.0e-300);
+            cosine=qsy/sqrt(max(qnorm2*action_norm2,1.0e-300));
+            alpha=qsy/max(action_norm2,1.0e-300);
             if(E->parallel.me==0)
                 fprintf(csv,"preconditioner,%s,%s,%s,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0\n",
                     state,ala_schur_probe_names[probe],variants[variant],tight,
                     achieved,ep,cosine,alpha,full_energy,qp,qsy,seconds,
-                    global_pdot(E,y,y,lev),(qp>0.0 && qsy>0.0)?1.0:0.0);
+                    action_norm2,(qp>0.0 && qsy>0.0)?1.0:0.0);
             ala_schur_write_depth_rows(E,csv,state,ala_schur_probe_names[probe],
                                        variants[variant],q,z,y,lev);
         }
@@ -704,10 +706,11 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                 assemble_grad_rho_p(E,q,bT,lev);
                 achieved=ala_schur_tight_solve(E,uB,bT,vwork,lev,*tol);
                 assemble_div_rho_u(E,uB,y,lev);
+                sensitivity_energy=global_pdot(E,q,y,lev);
                 if(E->parallel.me==0)
                     fprintf(csv,"inner_sensitivity,%s,%s,Kgamma_inverse,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
                         state,ala_schur_probe_names[probe],*tol,achieved,
-                        global_pdot(E,q,y,lev));
+                        sensitivity_energy);
             }
         if(E->parallel.me==0) {
             fflush(csv);
