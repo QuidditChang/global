@@ -660,7 +660,7 @@ void build_diagonal_of_leng_zhong_Ahat(E)
         for(e=1;e<=npno;e++) {
           diagonal=assemble_leng_zhong_dAhatp_entry(E,e,level,m);
           if(!isfinite(diagonal) || diagonal<=0.0)
-            myerror(E, "Leng-Zhong Stage 2 D-only BPI is not positive finite");
+            myerror(E, "Leng_Zhong Stage 2 D-only BPI is not positive finite");
           E->LZ_BPI[level][m][e]=1.0/diagonal;
         }
       }

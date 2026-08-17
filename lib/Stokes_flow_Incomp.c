@@ -8176,7 +8176,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                         "iteration=%d value=%e\n",count,r1dotz1);
                 fflush(E->fp);
             }
-            myerror(E, "Leng-Zhong Stage 2 CG preconditioned residual "
+            myerror(E, "Leng_Zhong Stage 2 CG preconditioned residual "
                     "is not positive finite");
         }
         assert(r1dotz1 != 0.0  /* Division by zero in head of incompressibility iteration */);
@@ -8206,7 +8206,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                         "reason=velocity_solve iteration=%d\n",count);
                 fflush(E->fp);
             }
-            myerror(E, "Leng-Zhong Stage 2 velocity solve did not converge");
+            myerror(E, "Leng_Zhong Stage 2 velocity solve did not converge");
         }
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
@@ -8234,7 +8234,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                         count,curvature);
                 fflush(E->fp);
             }
-            myerror(E, "Leng-Zhong Stage 2 CG curvature is not positive "
+            myerror(E, "Leng_Zhong Stage 2 CG curvature is not positive "
                     "finite");
         }
         if(valid)
@@ -9976,7 +9976,7 @@ static double initial_vel_residual(struct All_variables *E,
                     "reason=initial_velocity_solve iteration=0\n");
             fflush(E->fp);
         }
-        myerror(E, "Leng-Zhong Stage 2 initial velocity solve did not "
+        myerror(E, "Leng_Zhong Stage 2 initial velocity solve did not "
                 "converge");
     }
     if(!valid && (E->parallel.me==0)) {

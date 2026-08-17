@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_ROOT = Path(os.environ.get(
     "CITCOMS_LZ_RUNS_ROOT",
-    ROOT.parent / "runs-cmbhf-ALA-Leng-Zhong-2008"))
+    ROOT.parent / "runs-cmbhf-ALA-Leng_Zhong_2008"))
 
 
 def read(relative):
