@@ -99,6 +99,13 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("MPI_Barrier(E->parallel.world)", self.stokes)
         self.assertIn("MPI_Finalize()", self.stokes)
 
+    def test_csv_is_incremental_and_probe_progress_is_logged(self) -> None:
+        self.assertIn("setvbuf(csv,NULL,_IOLBF,0)", self.stokes)
+        header = self.stokes.index('fprintf(csv,"row_type,state,probe')
+        self.assertLess(header, self.stokes.index("fflush(csv)", header))
+        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_BEGIN", self.stokes)
+        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_COMPLETE", self.stokes)
+
     def test_old_rheology_switch_is_internal_only(self) -> None:
         self.assertIn("ala_schur_diagnostic_viscosity_mode==1", self.viscosity)
         self.assertNotIn(

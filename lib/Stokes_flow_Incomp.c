@@ -608,7 +608,15 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
 
     ala_schur_build_cache(E,&cache,lev);
     ala_schur_write_viscosity(E,csv,state);
+    if(E->parallel.me==0) fflush(csv);
     for(probe=0;probe<ALA_SCHUR_PROBE_COUNT;probe++) {
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_BEGIN "
+                    "state=%s probe=%s index=%d/%d\n",state,
+                    ala_schur_probe_names[probe],probe+1,
+                    ALA_SCHUR_PROBE_COUNT);
+            fflush(E->fp);
+        }
         ala_schur_build_probe(E,probe,q,frozen_q0,lev);
         assemble_grad_p(E,q,dT,lev);
         assemble_grad_c_p(E,q,cT,lev);
@@ -701,7 +709,14 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                         state,ala_schur_probe_names[probe],*tol,achieved,
                         global_pdot(E,q,y,lev));
             }
-        if(E->parallel.me==0) { fflush(csv); fflush(E->fp); }
+        if(E->parallel.me==0) {
+            fflush(csv);
+            fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_COMPLETE "
+                    "state=%s probe=%s index=%d/%d\n",state,
+                    ala_schur_probe_names[probe],probe+1,
+                    ALA_SCHUR_PROBE_COUNT);
+            fflush(E->fp);
+        }
     }
     free_ala_pressure_preconditioner_cache(E,&cache);
     ala_schur_free_field(E,q); ala_schur_free_field(E,duD);
@@ -737,7 +752,9 @@ void strict_ala_schur_diagnostic(struct All_variables *E)
                  E->control.data_file);
         csv=fopen(filename,"w");
         if(csv==NULL) myerror(E,"Unable to open strict-ALA Schur diagnostic CSV");
+        setvbuf(csv,NULL,_IOLBF,0);
         fprintf(csv,"row_type,state,probe,variant,tolerance,metric01,metric02,metric03,metric04,metric05,metric06,metric07,metric08,metric09,metric10,metric11,metric12,metric13,metric14,metric15,metric16,metric17,metric18,metric19\n");
+        fflush(csv);
         fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_BEGIN cycle=%d probes=%d "
                 "seed=%d tight_tolerance=%e states=OLD,NEW assembly_per_state=1\n",
                 E->monitor.solution_cycles,ALA_SCHUR_PROBE_COUNT,
