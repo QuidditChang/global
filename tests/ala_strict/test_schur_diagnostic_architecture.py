@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,15 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         cls.viscosity = (LIB_ROOT / "Viscosity_structures.c").read_text()
         cls.drive = (LIB_ROOT / "Drive_solvers.c").read_text()
         cls.instructions = (LIB_ROOT / "Instructions.c").read_text()
+        cls.matrix = (LIB_ROOT / "General_matrix_functions.c").read_text()
+        cls.global_defs = (LIB_ROOT / "global_defs.h").read_text()
+        cls.component = (
+            GLOBAL_ROOT / "CitcomS/Components/Stokes_solver/Incompressible.py"
+        ).read_text()
+        cls.launcher = (
+            PROJECT_ROOT / "runs/cmbhf_ALA_schur_diagnostic.lsf"
+        ).read_text()
+        cls.config = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
 
     def test_diagnostic_is_default_off_and_audit_only_is_guarded(self) -> None:
         self.assertIn("E->control.ala_schur_diagnostic = 0", self.instructions)
@@ -71,7 +81,8 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         ):
             self.assertIn(name, self.stokes)
         self.assertIn(
-            "for(probe=0;probe<ALA_SCHUR_PROBE_COUNT;probe++)", self.stokes
+            "for(probe=first_probe;probe<ALA_SCHUR_PROBE_COUNT;probe++)",
+            self.stokes,
         )
 
     def test_two_split_solves_reconstruct_four_schur_terms(self) -> None:
@@ -111,6 +122,91 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("sensitivity_energy=global_pdot(E,q,y,lev)", self.stokes)
         self.assertNotIn("global_pdot(E,y,y,lev),(qp>0.0", self.stokes)
         self.assertNotIn("global_pdot(E,q,y,lev));", self.stokes)
+
+    def test_nonfinite_fields_are_caught_before_vanka(self) -> None:
+        self.assertIn("ala_schur_check_field_finite", self.stokes)
+        self.assertIn('"tight_solve_rhs"', self.stokes)
+        self.assertIn('variants[variant]', self.stokes)
+
+    def test_zero_rhs_is_a_valid_zero_velocity_action(self) -> None:
+        self.assertIn("if(rhs2==0.0)", self.stokes)
+        self.assertIn("ala_schur_zero_velocity(E,u,lev)", self.stokes)
+
+    def test_destructive_multigrid_rhs_is_restored_before_audit(self) -> None:
+        solve = self.stokes.index("valid=solve_del2_u_bounded")
+        restore = self.stokes.index("rhs[m][i]=work[m][i]", solve)
+        residual = self.stokes.index("ala_schur_velocity_residual", restore)
+        self.assertLess(solve, restore)
+        self.assertLess(restore, residual)
+
+    def test_zero_upward_action_cannot_create_nan_alpha(self) -> None:
+        self.assertIn("if(AudotAu<=1.0e-300)", self.matrix)
+        self.assertIn("alpha=0.0", self.matrix)
+        self.assertIn("Invalid multigrid upward action product", self.matrix)
+
+    def test_exact_operator_invariants_fail_before_later_probes(self) -> None:
+        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE", self.stokes)
+        self.assertIn("rd>1.0e-8 || rc>1.0e-8", self.stokes)
+        self.assertIn("adj_b>1.0e-8", self.stokes)
+
+    def test_csv_rows_match_the_24_column_header(self) -> None:
+        formats = re.findall(r'fprintf\(csv,"([^"]+)', self.stokes)
+        rows = {
+            row.split(",", 1)[0]: row
+            for row in formats
+            if row.split(",", 1)[0] in {
+                "viscosity", "viscosity_depth", "depth", "schur",
+                "preconditioner", "inner_sensitivity",
+            }
+        }
+        self.assertEqual(len(rows), 6)
+        for row_type, row in rows.items():
+            with self.subTest(row_type=row_type):
+                self.assertEqual(row.count(",") + 1, 24)
+
+    def test_default_off_returns_before_large_field_allocations(self) -> None:
+        start = self.stokes.index("void strict_ala_schur_diagnostic(")
+        block = self.stokes[start:self.stokes.index("static void", start)]
+        guard = block.index("if(!E->control.ala_schur_diagnostic) return")
+        allocation = block.index("frozen_q0=ala_schur_alloc_pressure")
+        self.assertLess(guard, allocation)
+
+    def test_resume_control_is_plumbed_and_default_off(self) -> None:
+        self.assertIn("int ala_schur_diagnostic_resume", self.global_defs)
+        self.assertIn('input_boolean("ala_schur_diagnostic_resume"', self.instructions)
+        self.assertIn('"ala_schur_diagnostic_resume", default=False', self.component)
+        self.assertRegex(
+            self.config,
+            r"(?m)^ala_schur_diagnostic_resume\s*=\s*off\s*$",
+        )
+
+    def test_checkpoint_advances_only_after_complete_probe(self) -> None:
+        complete = self.stokes.index("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_COMPLETE")
+        checkpoint = self.stokes.index("ala_schur_write_checkpoint", complete)
+        self.assertLess(complete, checkpoint)
+        self.assertIn("version=1\\nstate=%d\\nprobe=%d\\ncsv_bytes=%lld", self.stokes)
+        self.assertIn('ftruncate(fileno(csv),(off_t)checkpoint.csv_bytes)', self.stokes)
+        self.assertIn("first_probe=resume_probe+1", self.stokes)
+
+    def test_stage_reports_are_atomic_and_named(self) -> None:
+        self.assertIn("strict_ala_schur.stage_%02d.json", self.stokes)
+        self.assertIn('{"setup","new","old","overall"}', self.stokes)
+        self.assertIn("rename(tmp,path)", self.stokes)
+        self.assertIn("global.strict_ala_schur.stage_*.json", self.launcher)
+        for call in (
+            "ala_schur_write_stage_report(E,csv,0",
+            "ala_schur_write_stage_report(E,csv,state ? 2 : 1",
+            "ala_schur_write_stage_report(E,csv,3",
+        ):
+            self.assertIn(call, self.stokes)
+
+    def test_launcher_collects_partial_artifacts_and_preserves_exit_status(self) -> None:
+        self.assertIn("ALA_SCHUR_RUN_ROOT", self.launcher)
+        self.assertIn("ALA_SCHUR_RESUME", self.launcher)
+        self.assertIn("global.strict_ala_schur_diagnostic.checkpoint", self.launcher)
+        self.assertIn("global.strict_ala_schur.stage_*.json", self.launcher)
+        self.assertIn("APP_STATUS=$?", self.launcher)
+        self.assertIn('exit "${APP_STATUS}"', self.launcher)
 
     def test_old_rheology_switch_is_internal_only(self) -> None:
         self.assertIn("ala_schur_diagnostic_viscosity_mode==1", self.viscosity)

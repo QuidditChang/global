@@ -350,7 +350,7 @@ double multi_grid(E,d1,F,acc,hl)
      double acc;
      int hl;  /* higher level of two */
 {
-    double residual,AudotAu;
+    double residual,AudotAu,Audotres;
     void interp_vector();
     void project_vector();
     int m,i,j,Vn,Vnmax,cycles;
@@ -451,7 +451,18 @@ double multi_grid(E,d1,F,acc,hl)
             gauss_seidel(E,del_vel[ulev],res[ulev],AU[ulev],0.01,&cycles,ulev,1);
 
             AudotAu = global_vdot(E,AU[ulev],AU[ulev],ulev);
-            alpha = global_vdot(E,AU[ulev],res[ulev],ulev)/AudotAu;
+            if(!isfinite(AudotAu) || AudotAu<0.0)
+              myerror(E,"Invalid multigrid upward action norm");
+            if(AudotAu<=1.0e-300)
+              alpha=0.0;
+            else {
+              Audotres=global_vdot(E,AU[ulev],res[ulev],ulev);
+              if(!isfinite(Audotres))
+                myerror(E,"Invalid multigrid upward action product");
+              alpha=Audotres/AudotAu;
+              if(!isfinite(alpha))
+                myerror(E,"Invalid multigrid upward correction scale");
+            }
 
             for(m=1;m<=E->sphere.caps_per_proc;m++)
               for(i=0;i<E->lmesh.NEQ[ulev];i++)   {

@@ -500,6 +500,7 @@ struct CONTROL {
     int ala_viscosity_spectrum_interval;
     int ala_schur_diagnostic;
     int ala_schur_diagnostic_only;
+    int ala_schur_diagnostic_resume;
     int ala_schur_diagnostic_inner_sensitivity;
     double ala_schur_diagnostic_tight_tolerance;
     int ala_schur_diagnostic_max_cycles;

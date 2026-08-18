@@ -1108,6 +1108,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_schur_diagnostic, fp);
     getIntProperty(properties, "ala_schur_diagnostic_only",
                    E->control.ala_schur_diagnostic_only, fp);
+    getIntProperty(properties, "ala_schur_diagnostic_resume",
+                   E->control.ala_schur_diagnostic_resume, fp);
     getIntProperty(properties, "ala_schur_diagnostic_inner_sensitivity",
                    E->control.ala_schur_diagnostic_inner_sensitivity, fp);
     getDoubleProperty(properties, "ala_schur_diagnostic_tight_tolerance",

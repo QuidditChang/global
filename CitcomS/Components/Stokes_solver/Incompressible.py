@@ -164,6 +164,8 @@ class Incompressible(CitcomComponent):
             "ala_schur_diagnostic", default=False)
         ala_schur_diagnostic_only = prop.bool(
             "ala_schur_diagnostic_only", default=False)
+        ala_schur_diagnostic_resume = prop.bool(
+            "ala_schur_diagnostic_resume", default=False)
         ala_schur_diagnostic_inner_sensitivity = prop.bool(
             "ala_schur_diagnostic_inner_sensitivity", default=True)
         ala_schur_diagnostic_tight_tolerance = prop.float(

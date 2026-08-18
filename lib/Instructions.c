@@ -570,6 +570,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_schur_diagnostic),"off",m);
   input_boolean("ala_schur_diagnostic_only",
                 &(E->control.ala_schur_diagnostic_only),"off",m);
+  input_boolean("ala_schur_diagnostic_resume",
+                &(E->control.ala_schur_diagnostic_resume),"off",m);
   input_boolean("ala_schur_diagnostic_inner_sensitivity",
                 &(E->control.ala_schur_diagnostic_inner_sensitivity),"on",m);
   input_double("ala_schur_diagnostic_tight_tolerance",
@@ -1697,6 +1699,7 @@ void global_default_values(E)
     E->control.ala_viscosity_spectrum_interval = 1;
     E->control.ala_schur_diagnostic = 0;
     E->control.ala_schur_diagnostic_only = 0;
+    E->control.ala_schur_diagnostic_resume = 0;
     E->control.ala_schur_diagnostic_inner_sensitivity = 1;
     E->control.ala_schur_diagnostic_tight_tolerance = 1.0e-10;
     E->control.ala_schur_diagnostic_max_cycles = 2000;

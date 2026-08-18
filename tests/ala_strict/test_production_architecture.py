@@ -107,6 +107,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_viscosity_spectrum_interval",
             "ala_schur_diagnostic",
             "ala_schur_diagnostic_only",
+            "ala_schur_diagnostic_resume",
             "ala_schur_diagnostic_inner_sensitivity",
             "ala_schur_diagnostic_tight_tolerance",
             "ala_schur_diagnostic_max_cycles",

@@ -37,6 +37,7 @@
 #include "ala_coupled_operator.h"
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
 void assemble_grad_c_p(struct All_variables *,double **,double **,int);
@@ -203,6 +204,109 @@ static const char *ala_schur_probe_names[ALA_SCHUR_PROBE_COUNT]={
     "P13_longer_than_patch","P14_constant","P15_density_gauge"
 };
 
+struct ala_schur_checkpoint {
+    int valid;
+    int state;
+    int probe;
+    long long csv_bytes;
+};
+
+static void ala_schur_checkpoint_path(struct All_variables *E,char *path,
+                                      size_t size)
+{
+    snprintf(path,size,"%s.strict_ala_schur_diagnostic.checkpoint",
+             E->control.data_file);
+}
+
+static void ala_schur_load_checkpoint(struct All_variables *E,
+                                      struct ala_schur_checkpoint *checkpoint)
+{
+    char path[512];
+    FILE *fp;
+    int version;
+    checkpoint->valid=0;
+    checkpoint->state=-1;
+    checkpoint->probe=-1;
+    checkpoint->csv_bytes=0;
+    ala_schur_checkpoint_path(E,path,sizeof(path));
+    fp=fopen(path,"r");
+    if(fp==NULL) return;
+    if(fscanf(fp,"version=%d\nstate=%d\nprobe=%d\ncsv_bytes=%lld\n",
+              &version,&checkpoint->state,&checkpoint->probe,
+              &checkpoint->csv_bytes)==4 && version==1 &&
+       checkpoint->state>=0 && checkpoint->state<=1 &&
+       checkpoint->probe>=0 && checkpoint->probe<ALA_SCHUR_PROBE_COUNT &&
+       checkpoint->csv_bytes>0)
+        checkpoint->valid=1;
+    fclose(fp);
+    if(!checkpoint->valid)
+        myerror(E,"Invalid strict-ALA Schur diagnostic checkpoint");
+}
+
+static void ala_schur_write_checkpoint(struct All_variables *E,FILE *csv,
+                                       int state,int probe)
+{
+    char path[512],tmp[544];
+    FILE *fp;
+    off_t offset;
+    int io_failed=0;
+    if(E->parallel.me!=0) return;
+    if(fflush(csv)!=0)
+        myerror(E,"Unable to flush strict-ALA Schur CSV checkpoint");
+    offset=ftello(csv);
+    if(offset<0) myerror(E,"Unable to measure strict-ALA Schur CSV offset");
+    ala_schur_checkpoint_path(E,path,sizeof(path));
+    snprintf(tmp,sizeof(tmp),"%s.tmp",path);
+    fp=fopen(tmp,"w");
+    if(fp==NULL) myerror(E,"Unable to write strict-ALA Schur checkpoint");
+    if(fprintf(fp,"version=1\nstate=%d\nprobe=%d\ncsv_bytes=%lld\n",
+               state,probe,(long long)offset)<0)
+        io_failed=1;
+    if(fflush(fp)!=0) io_failed=1;
+    if(fsync(fileno(fp))!=0) io_failed=1;
+    if(fclose(fp)!=0) io_failed=1;
+    if(io_failed)
+        myerror(E,"Unable to persist strict-ALA Schur checkpoint");
+    if(rename(tmp,path)!=0)
+        myerror(E,"Unable to commit strict-ALA Schur checkpoint");
+}
+
+static void ala_schur_write_stage_report(struct All_variables *E,FILE *csv,
+                                         int stage,const char *status,
+                                         int state,int probe)
+{
+    char path[512],tmp[544];
+    FILE *fp;
+    off_t offset;
+    int io_failed=0;
+    static const char *names[4]={"setup","new","old","overall"};
+    if(E->parallel.me!=0) return;
+    if(stage<0 || stage>3)
+        myerror(E,"Invalid strict-ALA stage report index");
+    if(fflush(csv)!=0)
+        myerror(E,"Unable to flush strict-ALA stage CSV offset");
+    offset=ftello(csv);
+    if(offset<0) myerror(E,"Unable to measure strict-ALA stage CSV offset");
+    snprintf(path,sizeof(path),"%s.strict_ala_schur.stage_%02d.json",
+             E->control.data_file,stage);
+    snprintf(tmp,sizeof(tmp),"%s.tmp",path);
+    fp=fopen(tmp,"w");
+    if(fp==NULL) myerror(E,"Unable to write strict-ALA stage report");
+    if(fprintf(fp,"{\n  \"stage\": %d,\n  \"name\": \"%s\",\n"
+               "  \"status\": \"%s\",\n"
+               "  \"state\": %d,\n  \"probe\": %d,\n"
+               "  \"csv_bytes\": %lld\n}\n",
+               stage,names[stage],status,state,probe,(long long)offset)<0)
+        io_failed=1;
+    if(fflush(fp)!=0) io_failed=1;
+    if(fsync(fileno(fp))!=0) io_failed=1;
+    if(fclose(fp)!=0) io_failed=1;
+    if(io_failed)
+        myerror(E,"Unable to persist strict-ALA stage report");
+    if(rename(tmp,path)!=0)
+        myerror(E,"Unable to commit strict-ALA stage report");
+}
+
 static double **ala_schur_alloc_pressure(struct All_variables *E,int lev)
 {
     int m;
@@ -247,6 +351,27 @@ static void ala_schur_zero_velocity(struct All_variables *E,double **v,int lev)
     int m,i;
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(i=0;i<=E->lmesh.NEQ[lev];i++) v[m][i]=0.0;
+}
+
+static void ala_schur_check_field_finite(struct All_variables *E,double **field,
+                                         int first,int last,int lev,
+                                         const char *stage)
+{
+    int m,i,bad_local=0,bad_global;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=first;i<=last;i++)
+            if(!isfinite(field[m][i])) {
+                if(!bad_local) {
+                    fprintf(stderr,"ALA SCHUR NONFINITE stage=%s rank=%d cap=%d "
+                            "index=%d value=%e level=%d\n",stage,E->parallel.me,
+                            m,i,field[m][i],lev);
+                    fflush(stderr);
+                }
+                bad_local=1;
+            }
+    MPI_Allreduce(&bad_local,&bad_global,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(bad_global)
+        myerror(E,"Non-finite strict-ALA Schur diagnostic field");
 }
 
 static double ala_schur_legendre(int degree,double x)
@@ -373,16 +498,33 @@ static double ala_schur_tight_solve(struct All_variables *E,double **u,
                                     double **rhs,double **work,int lev,
                                     double relative_tolerance)
 {
-    int valid;
-    double target,rhs2;
+    int valid,m,i;
+    double target,rhs2,achieved;
     double global_vdot();
+    ala_schur_check_field_finite(E,rhs,0,E->lmesh.NEQ[lev]-1,lev,
+                                 "tight_solve_rhs");
     rhs2=global_vdot(E,rhs,rhs,lev);
+    if(!isfinite(rhs2) || rhs2<0.0)
+        myerror(E,"Invalid strict-ALA Schur diagnostic RHS norm");
+    if(rhs2==0.0) {
+        ala_schur_zero_velocity(E,u,lev);
+        return 0.0;
+    }
     target=relative_tolerance*sqrt(rhs2/max((double)E->mesh.neq,1.0));
+    if(!isfinite(target) || target<=0.0)
+        myerror(E,"Invalid strict-ALA Schur diagnostic solve target");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) work[m][i]=rhs[m][i];
     valid=solve_del2_u_bounded(E,u,rhs,target,lev,
         E->control.ala_schur_diagnostic_max_cycles,
         E->control.ala_schur_diagnostic_progress_interval);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) rhs[m][i]=work[m][i];
     if(!valid) myerror(E,"Strict-ALA Schur diagnostic tight solve failed");
-    return ala_schur_velocity_residual(E,u,rhs,work,lev);
+    achieved=ala_schur_velocity_residual(E,u,rhs,work,lev);
+    if(!isfinite(achieved))
+        myerror(E,"Non-finite strict-ALA Schur diagnostic achieved residual");
+    return achieved;
 }
 
 static void ala_schur_build_cache(struct All_variables *E,
@@ -481,7 +623,7 @@ static int ala_schur_depth_band(double depth)
 static void ala_schur_write_viscosity(struct All_variables *E,FILE *csv,
                                       const char *state)
 {
-    int m,e,gp,b,local_count=0,global_count;
+    int m,e,gp,b,local_count=0,global_count,bad_local=0,bad_global;
     double eta,depth,local_min=1.0e300,local_max=0.0,global_min,global_max;
     double local[ALA_SCHUR_DEPTH_BANDS][4],global[ALA_SCHUR_DEPTH_BANDS][4];
     double local_log=0.0,global_log,local_low=0.0,local_high=0.0;
@@ -499,6 +641,16 @@ static void ala_schur_write_viscosity(struct All_variables *E,FILE *csv,
             b=ala_schur_depth_band(depth);
             for(gp=1;gp<=vpts;gp++) {
                 eta=E->EVI[E->mesh.levmax][m][(e-1)*vpts+gp];
+                if(!isfinite(eta) || eta<=0.0) {
+                    if(!bad_local) {
+                        fprintf(stderr,"ALA SCHUR NONFINITE state=%s rank=%d "
+                                "cap=%d element=%d gp=%d viscosity=%e\n",
+                                state,E->parallel.me,m,e,gp,eta);
+                        fflush(stderr);
+                    }
+                    bad_local=1;
+                    continue;
+                }
                 local_min=min(local_min,eta); local_max=max(local_max,eta);
                 local_log += log(max(eta,1.0e-300)); local_count++;
                 local[b][0]=min(local[b][0],eta); local[b][1]=max(local[b][1],eta);
@@ -511,6 +663,9 @@ static void ala_schur_write_viscosity(struct All_variables *E,FILE *csv,
                     local_high++;
             }
         }
+    MPI_Allreduce(&bad_local,&bad_global,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(bad_global)
+        myerror(E,"Invalid strict-ALA Schur diagnostic viscosity");
     MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,E->parallel.world);
     MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
     MPI_Allreduce(&local_log,&global_log,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
@@ -571,18 +726,20 @@ static void ala_schur_write_depth_rows(struct All_variables *E,FILE *csv,
                   E->parallel.world);
     if(E->parallel.me==0)
         for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
-            fprintf(csv,"depth,%s,%s,%s,%d,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+            fprintf(csv,"depth,%s,%s,%s,%d,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
                 state,probe,variant,b,sqrt(global[b][0]),sqrt(global[b][1]),
                 sqrt(global[b][2]),sqrt(global[b][3]),
                 global[b][4]/max(global[b][2],1.0e-300));
 }
 
 static void ala_schur_run_state(struct All_variables *E,FILE *csv,
-                                const char *state,double **frozen_q0,int lev)
+                                const char *state,double **frozen_q0,int lev,
+                                int resume_state,int resume_probe)
 {
-    int probe,variant,m,e,i;
+    int probe,variant,m,e,i,first_probe=0,state_index;
     double tight=E->control.ala_schur_diagnostic_tight_tolerance;
-    double rd,rc,qnorm2,full_energy,dd,dc,cd,cc,sum_defect,bt_defect;
+    double rd,rc,qnorm2,full_energy,energy_denominator;
+    double dd,dc,cd,cc,sum_defect,bt_defect;
     double adj_d,adj_c,adj_b,achieved,ep,cosine,alpha,qp,qsy,seconds;
     double action_norm2,sensitivity_energy;
     double saved_seconds[2],saved_achieved[2];
@@ -607,10 +764,19 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
     double **uC=ala_schur_alloc_velocity(E,lev),**uB=ala_schur_alloc_velocity(E,lev);
     double **vwork=ala_schur_alloc_velocity(E,lev);
 
+    state_index=(strcmp(state,"NEW")==0) ? 0 : 1;
+    if(E->control.ala_schur_diagnostic_resume) {
+        if(resume_state>state_index)
+            first_probe=ALA_SCHUR_PROBE_COUNT;
+        else if(resume_state==state_index)
+            first_probe=resume_probe+1;
+    }
     ala_schur_build_cache(E,&cache,lev);
-    ala_schur_write_viscosity(E,csv,state);
-    if(E->parallel.me==0) fflush(csv);
-    for(probe=0;probe<ALA_SCHUR_PROBE_COUNT;probe++) {
+    if(first_probe==0) {
+        ala_schur_write_viscosity(E,csv,state);
+        if(E->parallel.me==0) fflush(csv);
+    }
+    for(probe=first_probe;probe<ALA_SCHUR_PROBE_COUNT;probe++) {
         if(E->parallel.me==0) {
             fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_BEGIN "
                     "state=%s probe=%s index=%d/%d\n",state,
@@ -619,6 +785,7 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
             fflush(E->fp);
         }
         ala_schur_build_probe(E,probe,q,frozen_q0,lev);
+        ala_schur_check_field_finite(E,q,1,E->lmesh.NPNO[lev],lev,"probe");
         assemble_grad_p(E,q,dT,lev);
         assemble_grad_c_p(E,q,cT,lev);
         assemble_grad_rho_p(E,q,bT,lev);
@@ -626,6 +793,10 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
         rc=ala_schur_tight_solve(E,uC,cT,vwork,lev,tight);
         assemble_div_u(E,uD,duD,lev); assemble_c_u(E,uD,cuD,lev);
         assemble_div_u(E,uC,duC,lev); assemble_c_u(E,uC,cuC,lev);
+        ala_schur_check_field_finite(E,duD,1,E->lmesh.NPNO[lev],lev,"D_Kinv_Dt");
+        ala_schur_check_field_finite(E,cuD,1,E->lmesh.NPNO[lev],lev,"C_Kinv_Dt");
+        ala_schur_check_field_finite(E,duC,1,E->lmesh.NPNO[lev],lev,"D_Kinv_Ct");
+        ala_schur_check_field_finite(E,cuC,1,E->lmesh.NPNO[lev],lev,"C_Kinv_Ct");
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             for(i=0;i<E->lmesh.NEQ[lev];i++) {
                 uB[m][i]=uD[m][i]+uC[m][i];
@@ -635,6 +806,8 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                 sum[m][e]=duD[m][e]+cuD[m][e]+duC[m][e]+cuC[m][e];
         }
         assemble_div_rho_u(E,uB,full,lev);
+        ala_schur_check_field_finite(E,full,1,E->lmesh.NPNO[lev],lev,
+                                      "full_schur_action");
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[lev];e++) pwork[m][e]=full[m][e]-sum[m][e];
         qnorm2=global_pdot(E,q,q,lev); full_energy=global_pdot(E,q,full,lev);
@@ -650,14 +823,40 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
               /max(fabs(global_pdot(E,q,cuC,lev)),1.0e-300);
         adj_b=fabs(global_vdot(E,uB,bT,lev)-global_pdot(E,q,full,lev))
               /max(fabs(global_pdot(E,q,full,lev)),1.0e-300);
+        if(!isfinite(qnorm2) || !isfinite(full_energy) || !isfinite(dd) ||
+           !isfinite(dc) || !isfinite(cd) || !isfinite(cc) ||
+           !isfinite(sum_defect) || !isfinite(bt_defect) ||
+           !isfinite(adj_d) || !isfinite(adj_c) || !isfinite(adj_b))
+            myerror(E,"Non-finite strict-ALA Schur decomposition metric");
+        if(rd>1.0e-8 || rc>1.0e-8 || sum_defect>1.0e-8 ||
+           bt_defect>1.0e-8 || adj_d>1.0e-8 || adj_c>1.0e-8 ||
+           adj_b>1.0e-8) {
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE "
+                        "state=%s probe=%s rd=%e rc=%e sum_defect=%e "
+                        "bt_defect=%e adj_d=%e adj_c=%e adj_b=%e limit=1e-8\n",
+                        state,ala_schur_probe_names[probe],rd,rc,sum_defect,
+                        bt_defect,adj_d,adj_c,adj_b);
+                fflush(E->fp);
+            }
+            myerror(E,"Strict-ALA Schur diagnostic invariant failed");
+        }
+        energy_denominator=(fabs(full_energy)>1.0e-300)
+            ? full_energy : ((full_energy<0.0) ? -1.0e-300 : 1.0e-300);
         if(E->parallel.me==0)
-            fprintf(csv,"schur,%s,%s,decomposition,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0\n",
+            fprintf(csv,"schur,%s,%s,decomposition,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0\n",
                 state,ala_schur_probe_names[probe],tight,rd,rc,dd,dc,cd,cc,
-                full_energy,dd/max(full_energy,1.0e-300),
-                dc/max(full_energy,1.0e-300),cd/max(full_energy,1.0e-300),
-                cc/max(full_energy,1.0e-300),sum_defect,bt_defect,adj_d,adj_c,adj_b);
+                full_energy,dd/energy_denominator,
+                dc/energy_denominator,cd/energy_denominator,
+                cc/energy_denominator,sum_defect,bt_defect,adj_d,adj_c,adj_b);
 
         for(variant=0;variant<4;variant++) {
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_VARIANT_BEGIN "
+                        "state=%s probe=%s variant=%s\n",state,
+                        ala_schur_probe_names[probe],variants[variant]);
+                fflush(E->fp);
+            }
             if(variant==2) {
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(e=1;e<=E->lmesh.NPNO[lev];e++) {
@@ -671,6 +870,8 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                 seconds=MPI_Wtime();
                 ala_schur_preconditioner_action(
                     E,q,z,pwork,paux,lev,variant,&cache);
+                ala_schur_check_field_finite(E,z,1,E->lmesh.NPNO[lev],lev,
+                                              variants[variant]);
                 ala_schur_apply_true_action(E,z,y,bT,uB,vwork,lev,&achieved);
                 seconds=MPI_Wtime()-seconds;
                 if(variant<2) {
@@ -683,6 +884,10 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                     saved_achieved[variant]=achieved;
                 }
             }
+            ala_schur_check_field_finite(E,z,1,E->lmesh.NPNO[lev],lev,
+                                          variants[variant]);
+            ala_schur_check_field_finite(E,y,1,E->lmesh.NPNO[lev],lev,
+                                          "true_action");
             qp=global_pdot(E,q,z,lev);
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(e=1;e<=E->lmesh.NPNO[lev];e++) pwork[m][e]=q[m][e]-y[m][e];
@@ -691,6 +896,10 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
             ep=sqrt(global_pdot(E,pwork,pwork,lev)/max(qnorm2,1.0e-300));
             cosine=qsy/sqrt(max(qnorm2*action_norm2,1.0e-300));
             alpha=qsy/max(action_norm2,1.0e-300);
+            if(!isfinite(qp) || !isfinite(qsy) || !isfinite(action_norm2) ||
+               !isfinite(ep) || !isfinite(cosine) || !isfinite(alpha) ||
+               !isfinite(achieved) || !isfinite(seconds))
+                myerror(E,"Non-finite strict-ALA preconditioner metric");
             if(E->parallel.me==0)
                 fprintf(csv,"preconditioner,%s,%s,%s,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0\n",
                     state,ala_schur_probe_names[probe],variants[variant],tight,
@@ -698,19 +907,41 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                     action_norm2,(qp>0.0 && qsy>0.0)?1.0:0.0);
             ala_schur_write_depth_rows(E,csv,state,ala_schur_probe_names[probe],
                                        variants[variant],q,z,y,lev);
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_VARIANT_COMPLETE "
+                        "state=%s probe=%s variant=%s\n",state,
+                        ala_schur_probe_names[probe],variants[variant]);
+                fflush(E->fp);
+            }
         }
         if(E->control.ala_schur_diagnostic_inner_sensitivity &&
            (probe==0 || probe==2 || probe==5 || probe==10))
             for(i=0;i<4;i++) {
                 sensitivity[3]=tight; tol=&sensitivity[i];
+                if(E->parallel.me==0) {
+                    fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_SENSITIVITY_BEGIN "
+                            "state=%s probe=%s tolerance=%e\n",state,
+                            ala_schur_probe_names[probe],*tol);
+                    fflush(E->fp);
+                }
                 assemble_grad_rho_p(E,q,bT,lev);
                 achieved=ala_schur_tight_solve(E,uB,bT,vwork,lev,*tol);
                 assemble_div_rho_u(E,uB,y,lev);
+                ala_schur_check_field_finite(E,y,1,E->lmesh.NPNO[lev],lev,
+                                              "inner_sensitivity_action");
                 sensitivity_energy=global_pdot(E,q,y,lev);
+                if(!isfinite(sensitivity_energy))
+                    myerror(E,"Non-finite strict-ALA sensitivity metric");
                 if(E->parallel.me==0)
                     fprintf(csv,"inner_sensitivity,%s,%s,Kgamma_inverse,%+.16e,%+.16e,%+.16e,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
                         state,ala_schur_probe_names[probe],*tol,achieved,
                         sensitivity_energy);
+                if(E->parallel.me==0) {
+                    fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_SENSITIVITY_COMPLETE "
+                            "state=%s probe=%s tolerance=%e\n",state,
+                            ala_schur_probe_names[probe],*tol);
+                    fflush(E->fp);
+                }
             }
         if(E->parallel.me==0) {
             fflush(csv);
@@ -720,6 +951,7 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                     ALA_SCHUR_PROBE_COUNT);
             fflush(E->fp);
         }
+        ala_schur_write_checkpoint(E,csv,state_index,probe);
     }
     free_ala_pressure_preconditioner_cache(E,&cache);
     ala_schur_free_field(E,q); ala_schur_free_field(E,duD);
@@ -738,31 +970,71 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
 
 void strict_ala_schur_diagnostic(struct All_variables *E)
 {
-    int state,m,i;
+    int state,m,i,csv_ok=1;
+    int checkpoint_values[3]={0,-1,-1};
+    long long checkpoint_bytes=0;
+    struct ala_schur_checkpoint checkpoint;
     char filename[512];
     FILE *csv=NULL;
     const int lev=E->mesh.levmax;
     const int neq=E->lmesh.NEQ[lev];
-    double **frozen_q0=ala_schur_alloc_pressure(E,lev);
-    double **initial_velocity=ala_schur_alloc_velocity(E,lev);
-    double **initial_force=ala_schur_alloc_velocity(E,lev);
+    double **frozen_q0,**initial_velocity,**initial_force;
     void get_system_viscosity(),construct_stiffness_B_matrix();
     void velocities_conform_bcs(),assemble_forces();
 
     if(!E->control.ala_schur_diagnostic) return;
+    frozen_q0=ala_schur_alloc_pressure(E,lev);
+    initial_velocity=ala_schur_alloc_velocity(E,lev);
+    initial_force=ala_schur_alloc_velocity(E,lev);
+    checkpoint.valid=0;
+    checkpoint.state=-1;
+    checkpoint.probe=-1;
+    checkpoint.csv_bytes=0;
+    if(E->control.ala_schur_diagnostic_resume && E->parallel.me==0)
+        ala_schur_load_checkpoint(E,&checkpoint);
+    if(E->parallel.me==0) {
+        checkpoint_values[0]=checkpoint.valid;
+        checkpoint_values[1]=checkpoint.state;
+        checkpoint_values[2]=checkpoint.probe;
+        checkpoint_bytes=checkpoint.csv_bytes;
+    }
+    MPI_Bcast(checkpoint_values,3,MPI_INT,0,E->parallel.world);
+    MPI_Bcast(&checkpoint_bytes,1,MPI_LONG_LONG_INT,0,E->parallel.world);
+    checkpoint.valid=checkpoint_values[0];
+    checkpoint.state=checkpoint_values[1];
+    checkpoint.probe=checkpoint_values[2];
+    checkpoint.csv_bytes=checkpoint_bytes;
+    if(E->control.ala_schur_diagnostic_resume && !checkpoint.valid)
+        myerror(E,"Resume requested but no valid strict-ALA checkpoint exists");
     if(E->parallel.me==0) {
         snprintf(filename,sizeof(filename),"%s.strict_ala_schur_diagnostic.csv",
                  E->control.data_file);
-        csv=fopen(filename,"w");
-        if(csv==NULL) myerror(E,"Unable to open strict-ALA Schur diagnostic CSV");
+        csv=fopen(filename,checkpoint.valid ? "r+" : "w");
+        csv_ok=(csv!=NULL);
+    }
+    MPI_Bcast(&csv_ok,1,MPI_INT,0,E->parallel.world);
+    if(!csv_ok) myerror(E,"Unable to open strict-ALA Schur diagnostic CSV");
+    if(E->parallel.me==0) {
+        if(checkpoint.valid) {
+            if(fseeko(csv,0,SEEK_END)!=0 ||
+               ftello(csv)<(off_t)checkpoint.csv_bytes ||
+               ftruncate(fileno(csv),(off_t)checkpoint.csv_bytes)!=0 ||
+               fseeko(csv,0,SEEK_END)!=0)
+                myerror(E,"Unable to truncate CSV to strict-ALA checkpoint");
+        }
         setvbuf(csv,NULL,_IOLBF,0);
-        fprintf(csv,"row_type,state,probe,variant,tolerance,metric01,metric02,metric03,metric04,metric05,metric06,metric07,metric08,metric09,metric10,metric11,metric12,metric13,metric14,metric15,metric16,metric17,metric18,metric19\n");
-        fflush(csv);
+        if(!checkpoint.valid) {
+            fprintf(csv,"row_type,state,probe,variant,tolerance,metric01,metric02,metric03,metric04,metric05,metric06,metric07,metric08,metric09,metric10,metric11,metric12,metric13,metric14,metric15,metric16,metric17,metric18,metric19\n");
+            fflush(csv);
+        }
         fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_BEGIN cycle=%d probes=%d "
-                "seed=%d tight_tolerance=%e states=OLD,NEW assembly_per_state=1\n",
+                "seed=%d tight_tolerance=%e states=NEW,OLD assembly_per_state=1 "
+                "mode=%s resume_state=%d resume_probe=%d\n",
                 E->monitor.solution_cycles,ALA_SCHUR_PROBE_COUNT,
                 E->control.ala_schur_diagnostic_random_seed,
-                E->control.ala_schur_diagnostic_tight_tolerance);
+                E->control.ala_schur_diagnostic_tight_tolerance,
+                checkpoint.valid ? "resume" : "fresh",checkpoint.state,
+                checkpoint.probe);
         fflush(E->fp);
     }
     for(state=0;state<=1;state++) {
@@ -781,8 +1053,14 @@ void strict_ala_schur_diagnostic(struct All_variables *E)
             initial_vel_residual(E,initial_velocity,E->P,initial_force,
                                  E->control.accuracy);
             assemble_div_rho_u(E,initial_velocity,frozen_q0,lev);
+            if(!checkpoint.valid && E->parallel.me==0)
+                ala_schur_write_stage_report(E,csv,0,"complete",0,-1);
         }
-        ala_schur_run_state(E,csv,state ? "OLD" : "NEW",frozen_q0,lev);
+        ala_schur_run_state(E,csv,state ? "OLD" : "NEW",frozen_q0,lev,
+                            checkpoint.state,checkpoint.probe);
+        if(E->parallel.me==0)
+            ala_schur_write_stage_report(E,csv,state ? 2 : 1,"complete",
+                                         state,ALA_SCHUR_PROBE_COUNT-1);
     }
     E->control.ala_schur_diagnostic_viscosity_mode=0;
     if(!E->control.ala_schur_diagnostic_only) {
@@ -792,6 +1070,8 @@ void strict_ala_schur_diagnostic(struct All_variables *E)
         assemble_forces(E,0);
     }
     if(E->parallel.me==0) {
+        ala_schur_write_stage_report(E,csv,3,"complete",1,
+                                     ALA_SCHUR_PROBE_COUNT-1);
         fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_COMPLETE states=2 probes=%d "
                 "production_state_restored=%s\n",ALA_SCHUR_PROBE_COUNT,
                 E->control.ala_schur_diagnostic_only ? "not_required_audit_only"
