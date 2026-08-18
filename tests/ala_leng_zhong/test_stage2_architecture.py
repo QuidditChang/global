@@ -130,6 +130,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
 
         required = {
             "steps": "50",
+            "tole_compressibility": "1e-06",
             "gruneisen": "1",
             "compressible_formulation": "tala",
             "ala_leng_zhong_2008": "on",
