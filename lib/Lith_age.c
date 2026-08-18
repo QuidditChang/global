@@ -100,21 +100,6 @@ void lith_age_init(struct All_variables *E)
     output = 1;
     (E->solver.lith_age_read_files)(E,output);
   }
-  else if(E->control.lith_age == 1 && E->control.lith_age_time == 0) {
-    const float max_age_nd = E->control.max_plate_age_Ma /
-                             E->data.scalet;
-    for(i=1;i<=gnoy;i++)
-      for(j=1;j<=gnox;j++) {
-        node=j+(i-1)*gnox;
-        E->age_t[node] = max_age_nd;
-      }
-    if(E->parallel.me == 0)
-      fprintf(E->fp,
-              "Static lith-age protection: age=%g Ma across "
-              "lith_age_depth=%g\n",
-              E->control.max_plate_age_Ma,
-              E->control.lith_age_depth);
-  }
   else {
     /* otherwise, just open for the first timestep */
     /* NOTE: This is only used if we are adjusting the boundaries */
@@ -132,7 +117,6 @@ void lith_age_init(struct All_variables *E)
 	E->age_t[node]=E->age_t[node]/E->data.scalet;
       }
     fclose(fp1);
-
   } /* end E->control.lith_age_time == false */
 }
 
@@ -633,12 +617,6 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
   float find_age_in_MY();
   const int dims=E->mesh.nsd;
   unsigned int type;
-
-  /* Static lith-age mode has no trench/flag-depth fields.  Its 70 Ma
-   * temperature profile is imposed during initialization; dynamic age
-   * assimilation must not dereference those unavailable fields. */
-  if (!E->control.lith_age_time)
-    return;
 
   nno=E->lmesh.nno;
   gnox=E->mesh.nox;
