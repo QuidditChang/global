@@ -517,6 +517,8 @@ void read_initial_settings(struct All_variables *E)
 
   input_boolean("ala_leng_zhong_2008",
                 &(E->control.ala_leng_zhong_2008),"off",m);
+  input_boolean("ala_leng_zhong_stage3",
+                &(E->control.ala_leng_zhong_stage3),"off",m);
   input_boolean("ala_schur_symmetry_check",
                 &(E->control.ala_schur_symmetry_check),"off",m);
   input_double("ala_schur_symmetry_tolerance",
@@ -749,7 +751,7 @@ void read_initial_settings(struct All_variables *E)
      E->control.augmented_Lagr)
       myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
               "mutually exclusive");
-  if(E->control.ala_leng_zhong_2008 &&
+  if(E->control.ala_leng_zhong_2008 && !E->control.ala_leng_zhong_stage3 &&
      (E->control.inv_gruneisen != 0 ||
       E->control.ala_pressure_buoyancy ||
       !E->control.precondition ||
@@ -758,6 +760,16 @@ void read_initial_settings(struct All_variables *E)
       myerror(E, "ala_leng_zhong_2008 Stage 2 requires gruneisen=0, "
               "compressible_formulation=tala, precond=on, aug_lagr=off, "
               "and ala_augmented_lagrangian_gamma=0");
+  if(E->control.ala_leng_zhong_stage3 &&
+     (!E->control.ala_leng_zhong_2008 ||
+      E->control.inv_gruneisen == 0 ||
+      E->control.ala_pressure_buoyancy ||
+      !E->control.precondition ||
+      E->control.augmented_Lagr ||
+      E->control.ala_augmented_lagrangian_gamma != 0.0))
+      myerror(E, "ala_leng_zhong_stage3 requires the Leng selector, "
+              "gruneisen != 0, TALA, precond=on, aug_lagr=off, and "
+              "ala_augmented_lagrangian_gamma=0");
   if(E->control.ala_leng_zhong_2008 &&
      (E->control.ala_pressure_defect_corrections != 0 ||
       E->control.ala_coupled_defect_corrections != 0 ||
@@ -1703,6 +1715,7 @@ void global_default_values(E)
     E->control.augmented_Lagr = 0;
     E->control.augmented = 0.0;
     E->control.ala_leng_zhong_2008 = 0;
+    E->control.ala_leng_zhong_stage3 = 0;
     E->control.ala_augmented_lagrangian_gamma = 0.0;
     E->control.ala_schur_symmetry_check = 0;
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;

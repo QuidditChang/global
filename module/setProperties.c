@@ -1055,6 +1055,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
 
     getIntProperty(properties, "ala_leng_zhong_2008",
                    E->control.ala_leng_zhong_2008, fp);
+    getIntProperty(properties, "ala_leng_zhong_stage3",
+                   E->control.ala_leng_zhong_stage3, fp);
     getIntProperty(properties, "ala_schur_symmetry_check",
                    E->control.ala_schur_symmetry_check, fp);
     getDoubleProperty(properties, "ala_schur_symmetry_tolerance",
@@ -1287,7 +1289,7 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        E->control.augmented_Lagr)
         myerror(E, "ala_augmented_lagrangian_gamma and aug_lagr are "
                 "mutually exclusive");
-    if(E->control.ala_leng_zhong_2008 &&
+    if(E->control.ala_leng_zhong_2008 && !E->control.ala_leng_zhong_stage3 &&
        (E->control.inv_gruneisen != 0 ||
         E->control.ala_pressure_buoyancy ||
         !E->control.precondition ||
@@ -1296,6 +1298,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         myerror(E, "ala_leng_zhong_2008 Stage 2 requires gruneisen=0, "
                 "compressible_formulation=tala, precond=on, aug_lagr=off, "
                 "and ala_augmented_lagrangian_gamma=0");
+    if(E->control.ala_leng_zhong_stage3 &&
+       (!E->control.ala_leng_zhong_2008 ||
+        E->control.inv_gruneisen == 0 ||
+        E->control.ala_pressure_buoyancy ||
+        !E->control.precondition ||
+        E->control.augmented_Lagr ||
+        E->control.ala_augmented_lagrangian_gamma != 0.0))
+        myerror(E, "ala_leng_zhong_stage3 requires the Leng selector, "
+                "gruneisen != 0, TALA, precond=on, aug_lagr=off, and "
+                "ala_augmented_lagrangian_gamma=0");
     if(E->control.ala_leng_zhong_2008 &&
        (E->control.ala_pressure_defect_corrections != 0 ||
         E->control.ala_coupled_defect_corrections != 0 ||

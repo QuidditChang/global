@@ -107,6 +107,20 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertLess(guard, dereference)
         self.assertIn("result[m][e] = 0.0", assembler[:dereference])
 
+    def test_stage3_selector_keeps_c_out_of_inner_action(self):
+        definitions = read("lib/global_defs.h")
+        instructions = read("lib/Instructions.c")
+        properties = read("module/setProperties.c")
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        self.assertIn("ala_leng_zhong_stage3", definitions)
+        self.assertIn('input_boolean("ala_leng_zhong_stage3"', instructions)
+        self.assertIn('"ala_leng_zhong_stage3"', properties)
+        self.assertIn("LENG_ZHONG_STAGE3 operator=G^T_K^-1_G", stokes)
+        inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
+        self.assertIn("c_rhs", inner)
+        self.assertIn("F[m][j] += c_rhs[m][j]", inner)
+        self.assertNotIn("assemble_grad_c_p", inner)
+
     def test_stage2_run_files_exclude_later_stage_operators(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()

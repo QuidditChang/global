@@ -8024,16 +8024,30 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
     float residual;
 
     if(E->control.ala_leng_zhong_2008) {
-        if(E->parallel.me==0) {
-            fprintf(E->fp,
-                    "LENG_ZHONG_STAGE2 operator=G^T_K^-1_G "
-                    "velocity_operator=K_unaugmented bpi=D_only "
-                    "C=off W=off aug_lagr=%d gamma=%e\n",
-                    E->control.augmented_Lagr,
-                    E->control.ala_augmented_lagrangian_gamma);
-            fflush(E->fp);
+        if(E->control.ala_leng_zhong_stage3) {
+            if(E->parallel.me==0) {
+                fprintf(E->fp,
+                        "LENG_ZHONG_STAGE3 operator=G^T_K^-1_G "
+                        "velocity_operator=K_unaugmented bpi=D_only "
+                        "C=on(W=off) aug_lagr=%d gamma=%e\n",
+                        E->control.augmented_Lagr,
+                        E->control.ala_augmented_lagrangian_gamma);
+                fflush(E->fp);
+            }
+            residual = solve_Ahat_p_fhat_iterCG(E, V, P, F, imp, steps_max);
         }
-        residual = solve_Ahat_p_fhat_CG(E, V, P, F, imp, steps_max);
+        else {
+            if(E->parallel.me==0) {
+                fprintf(E->fp,
+                        "LENG_ZHONG_STAGE2 operator=G^T_K^-1_G "
+                        "velocity_operator=K_unaugmented bpi=D_only "
+                        "C=off W=off aug_lagr=%d gamma=%e\n",
+                        E->control.augmented_Lagr,
+                        E->control.ala_augmented_lagrangian_gamma);
+                fflush(E->fp);
+            }
+            residual = solve_Ahat_p_fhat_CG(E, V, P, F, imp, steps_max);
+        }
     }
     else if(E->control.inv_gruneisen == 0)
         residual = solve_Ahat_p_fhat_CG(E, V, P, F, imp, steps_max);
@@ -8065,6 +8079,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     int gnpno, gneq;
 
     double *r1[NCS], *r2[NCS], *z1[NCS], *s1[NCS], *s2[NCS], *F[NCS];
+    double *c_rhs[NCS];
     double *shuffle[NCS];
     double alpha, curvature, delta, r0dotz0, r1dotz1,sq_vdotv;
     double residual, v_res;
@@ -8096,6 +8111,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         z1[m] = (double *)malloc((npno+1)*sizeof(double));
         s1[m] = (double *)malloc((npno+1)*sizeof(double));
         s2[m] = (double *)malloc((npno+1)*sizeof(double));
+        c_rhs[m] = (double *)malloc((npno+1)*sizeof(double));
     }
 
     time0 = CPU_time0();
@@ -8113,10 +8129,14 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     if(E->control.inv_gruneisen != 0) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=1;j<=npno;j++)
-                r2[m][j] = 0.0;
+                c_rhs[m][j] = 0.0;
 
-        assemble_c_u(E, V, r2, lev);
+        assemble_c_u(E, V, c_rhs, lev);
     }
+    else
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++)
+                c_rhs[m][j] = 0.0;
 
 
     /* calculate the initial velocity residual */
@@ -8131,7 +8151,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     if(E->control.inv_gruneisen != 0)
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=1;j<=npno;j++) {
-                r1[m][j] += r2[m][j];
+                r1[m][j] += c_rhs[m][j];
             }
 
     residual = incompressibility_residual(E, V, r1);
@@ -8264,6 +8284,10 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
         /* compute velocity and incompressibility residual */
         assemble_div_u(E, V, F, lev);
+        if(E->control.inv_gruneisen != 0)
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(j=1;j<=npno;j++)
+                    F[m][j] += c_rhs[m][j];
         if(E->control.ala_leng_zhong_2008)
             residual = incompressibility_residual(E, V, F);
         else
@@ -8308,6 +8332,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         free((void *) z1[m]);
         free((void *) s1[m]);
         free((void *) s2[m]);
+        free((void *) c_rhs[m]);
     }
 
     *steps_max=count;
@@ -9893,6 +9918,8 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         if(E->control.ala_pressure_buoyancy)
             assemble_forces(E,0);
 
+        /* The inner solver writes its used count back through steps_max. */
+        cycles = E->control.p_iterations;
         residual = solve_Ahat_p_fhat_CG(E,V,P,F,E->control.accuracy,&cycles);
 
         for (m=1;m<=E->sphere.caps_per_proc;m++)
@@ -9910,8 +9937,12 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         num_of_loop++;
 
         if(E->parallel.me == 0) {
-            fprintf(stderr, "Relative error err_v / v = %e and err_p / p = %e after %d loops\n\n", relative_err_v, relative_err_p, num_of_loop);
-            fprintf(E->fp, "Relative error err_v / v = %e and err_p / p = %e after %d loops\n\n", relative_err_v, relative_err_p, num_of_loop);
+            fprintf(stderr, "LENG_ZHONG_STAGE3_OUTER loop=%d "
+                    "epsilon_V=%e epsilon_P=%e inner_residual=%e\n",
+                    num_of_loop, relative_err_v, relative_err_p, residual);
+            fprintf(E->fp, "LENG_ZHONG_STAGE3_OUTER loop=%d "
+                    "epsilon_V=%e epsilon_P=%e inner_residual=%e\n",
+                    num_of_loop, relative_err_v, relative_err_p, residual);
         }
 
     } /* end of while */
