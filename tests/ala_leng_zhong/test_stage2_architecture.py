@@ -129,6 +129,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
         required = {
+            "steps": "50",
             "gruneisen": "1",
             "compressible_formulation": "tala",
             "ala_leng_zhong_2008": "on",
