@@ -110,6 +110,7 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             "ala_schur_diagnostic_resume",
             "ala_schur_diagnostic_inner_sensitivity",
             "ala_schur_diagnostic_tight_tolerance",
+            "ala_schur_diagnostic_invariant_hard_tolerance",
             "ala_schur_diagnostic_max_cycles",
             "ala_schur_diagnostic_progress_interval",
             "ala_schur_diagnostic_random_seed",

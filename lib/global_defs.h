@@ -503,6 +503,7 @@ struct CONTROL {
     int ala_schur_diagnostic_resume;
     int ala_schur_diagnostic_inner_sensitivity;
     double ala_schur_diagnostic_tight_tolerance;
+    double ala_schur_diagnostic_invariant_hard_tolerance;
     int ala_schur_diagnostic_max_cycles;
     int ala_schur_diagnostic_progress_interval;
     int ala_schur_diagnostic_random_seed;

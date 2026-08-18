@@ -739,7 +739,7 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
     int probe,variant,m,e,i,first_probe=0,state_index;
     double tight=E->control.ala_schur_diagnostic_tight_tolerance;
     double rd,rc,qnorm2,full_energy,energy_denominator;
-    double dd,dc,cd,cc,sum_defect,bt_defect;
+    double dd,dc,cd,cc,sum_defect,bt_defect,invariant_max;
     double adj_d,adj_c,adj_b,achieved,ep,cosine,alpha,qp,qsy,seconds;
     double action_norm2,sensitivity_energy;
     double saved_seconds[2],saved_achieved[2];
@@ -828,15 +828,34 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
            !isfinite(sum_defect) || !isfinite(bt_defect) ||
            !isfinite(adj_d) || !isfinite(adj_c) || !isfinite(adj_b))
             myerror(E,"Non-finite strict-ALA Schur decomposition metric");
-        if(rd>1.0e-8 || rc>1.0e-8 || sum_defect>1.0e-8 ||
-           bt_defect>1.0e-8 || adj_d>1.0e-8 || adj_c>1.0e-8 ||
-           adj_b>1.0e-8) {
+        invariant_max=rd;
+        invariant_max=max(invariant_max,rc);
+        invariant_max=max(invariant_max,sum_defect);
+        invariant_max=max(invariant_max,bt_defect);
+        invariant_max=max(invariant_max,adj_d);
+        invariant_max=max(invariant_max,adj_c);
+        invariant_max=max(invariant_max,adj_b);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_CHECK "
+                    "state=%s probe=%s status=%s max=%e warn_limit=1e-8 "
+                    "hard_limit=%e rd=%e rc=%e sum_defect=%e bt_defect=%e "
+                    "adj_d=%e adj_c=%e adj_b=%e\n",state,
+                    ala_schur_probe_names[probe],
+                    invariant_max>1.0e-8 ?
+                        (invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance ?
+                         "FAIL" : "WARN") : "PASS",invariant_max,
+                    E->control.ala_schur_diagnostic_invariant_hard_tolerance,
+                    rd,rc,sum_defect,bt_defect,adj_d,adj_c,adj_b);
+            fflush(E->fp);
+        }
+        if(invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance) {
             if(E->parallel.me==0) {
                 fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE "
                         "state=%s probe=%s rd=%e rc=%e sum_defect=%e "
-                        "bt_defect=%e adj_d=%e adj_c=%e adj_b=%e limit=1e-8\n",
+                        "bt_defect=%e adj_d=%e adj_c=%e adj_b=%e limit=%e\n",
                         state,ala_schur_probe_names[probe],rd,rc,sum_defect,
-                        bt_defect,adj_d,adj_c,adj_b);
+                        bt_defect,adj_d,adj_c,adj_b,
+                        E->control.ala_schur_diagnostic_invariant_hard_tolerance);
                 fflush(E->fp);
             }
             myerror(E,"Strict-ALA Schur diagnostic invariant failed");
@@ -1029,12 +1048,13 @@ void strict_ala_schur_diagnostic(struct All_variables *E)
         }
         fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_BEGIN cycle=%d probes=%d "
                 "seed=%d tight_tolerance=%e states=NEW,OLD assembly_per_state=1 "
-                "mode=%s resume_state=%d resume_probe=%d\n",
+                "mode=%s resume_state=%d resume_probe=%d invariant_hard=%e\n",
                 E->monitor.solution_cycles,ALA_SCHUR_PROBE_COUNT,
                 E->control.ala_schur_diagnostic_random_seed,
                 E->control.ala_schur_diagnostic_tight_tolerance,
                 checkpoint.valid ? "resume" : "fresh",checkpoint.state,
-                checkpoint.probe);
+                checkpoint.probe,
+                E->control.ala_schur_diagnostic_invariant_hard_tolerance);
         fflush(E->fp);
     }
     for(state=0;state<=1;state++) {

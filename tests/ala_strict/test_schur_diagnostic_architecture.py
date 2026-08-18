@@ -146,8 +146,11 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
 
     def test_exact_operator_invariants_fail_before_later_probes(self) -> None:
         self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE", self.stokes)
-        self.assertIn("rd>1.0e-8 || rc>1.0e-8", self.stokes)
-        self.assertIn("adj_b>1.0e-8", self.stokes)
+        self.assertIn(
+            "invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance",
+            self.stokes,
+        )
+        self.assertIn("adj_b=%e", self.stokes)
 
     def test_csv_rows_match_the_24_column_header(self) -> None:
         formats = re.findall(r'fprintf\(csv,"([^"]+)', self.stokes)
@@ -179,6 +182,10 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
             self.config,
             r"(?m)^ala_schur_diagnostic_resume\s*=\s*off\s*$",
         )
+        self.assertRegex(
+            self.config,
+            r"(?m)^ala_schur_diagnostic_invariant_hard_tolerance\s*=\s*1e-6\s*$",
+        )
 
     def test_checkpoint_advances_only_after_complete_probe(self) -> None:
         complete = self.stokes.index("STRICT_ALA_SCHUR_DIAGNOSTIC_PROBE_COMPLETE")
@@ -187,6 +194,12 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("version=1\\nstate=%d\\nprobe=%d\\ncsv_bytes=%lld", self.stokes)
         self.assertIn('ftruncate(fileno(csv),(off_t)checkpoint.csv_bytes)', self.stokes)
         self.assertIn("first_probe=resume_probe+1", self.stokes)
+
+    def test_invariant_warning_continues_but_hard_limit_fails(self) -> None:
+        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_CHECK", self.stokes)
+        self.assertIn('"WARN"', self.stokes)
+        self.assertIn("invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance", self.stokes)
+        self.assertIn("invariant_hard=", self.stokes)
 
     def test_stage_reports_are_atomic_and_named(self) -> None:
         self.assertIn("strict_ala_schur.stage_%02d.json", self.stokes)

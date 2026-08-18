@@ -170,6 +170,8 @@ class Incompressible(CitcomComponent):
             "ala_schur_diagnostic_inner_sensitivity", default=True)
         ala_schur_diagnostic_tight_tolerance = prop.float(
             "ala_schur_diagnostic_tight_tolerance", default=1.0e-10)
+        ala_schur_diagnostic_invariant_hard_tolerance = prop.float(
+            "ala_schur_diagnostic_invariant_hard_tolerance", default=1.0e-6)
         ala_schur_diagnostic_max_cycles = prop.int(
             "ala_schur_diagnostic_max_cycles", default=2000)
         ala_schur_diagnostic_progress_interval = prop.int(

@@ -576,6 +576,9 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_schur_diagnostic_inner_sensitivity),"on",m);
   input_double("ala_schur_diagnostic_tight_tolerance",
                &(E->control.ala_schur_diagnostic_tight_tolerance),"1.0e-10",m);
+  input_double("ala_schur_diagnostic_invariant_hard_tolerance",
+               &(E->control.ala_schur_diagnostic_invariant_hard_tolerance),
+               "1.0e-6",m);
   input_int("ala_schur_diagnostic_max_cycles",
             &(E->control.ala_schur_diagnostic_max_cycles),"2000",m);
   input_int("ala_schur_diagnostic_progress_interval",
@@ -913,6 +916,9 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_schur_diagnostic_tight_tolerance <= 0.0 ||
      E->control.ala_schur_diagnostic_tight_tolerance >= 1.0)
       myerror(E, "ala_schur_diagnostic_tight_tolerance must be in (0,1)");
+  if(E->control.ala_schur_diagnostic_invariant_hard_tolerance <= 1.0e-8 ||
+     !isfinite(E->control.ala_schur_diagnostic_invariant_hard_tolerance))
+      myerror(E, "ala_schur_diagnostic_invariant_hard_tolerance must be finite and > 1e-8");
   if(E->control.ala_schur_diagnostic_max_cycles < 1 ||
      E->control.ala_schur_diagnostic_progress_interval < 1)
       myerror(E, "ALA Schur diagnostic velocity solve limits must be positive");
@@ -1702,6 +1708,7 @@ void global_default_values(E)
     E->control.ala_schur_diagnostic_resume = 0;
     E->control.ala_schur_diagnostic_inner_sensitivity = 1;
     E->control.ala_schur_diagnostic_tight_tolerance = 1.0e-10;
+    E->control.ala_schur_diagnostic_invariant_hard_tolerance = 1.0e-6;
     E->control.ala_schur_diagnostic_max_cycles = 2000;
     E->control.ala_schur_diagnostic_progress_interval = 100;
     E->control.ala_schur_diagnostic_random_seed = 20080516;

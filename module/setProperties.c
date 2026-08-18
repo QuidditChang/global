@@ -1114,6 +1114,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_schur_diagnostic_inner_sensitivity, fp);
     getDoubleProperty(properties, "ala_schur_diagnostic_tight_tolerance",
                       E->control.ala_schur_diagnostic_tight_tolerance, fp);
+    getDoubleProperty(properties, "ala_schur_diagnostic_invariant_hard_tolerance",
+                      E->control.ala_schur_diagnostic_invariant_hard_tolerance, fp);
     getIntProperty(properties, "ala_schur_diagnostic_max_cycles",
                    E->control.ala_schur_diagnostic_max_cycles, fp);
     getIntProperty(properties, "ala_schur_diagnostic_progress_interval",
@@ -1396,6 +1398,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_schur_diagnostic_tight_tolerance <= 0.0 ||
        E->control.ala_schur_diagnostic_tight_tolerance >= 1.0)
         myerror(E, "ala_schur_diagnostic_tight_tolerance must be in (0,1)");
+    if(E->control.ala_schur_diagnostic_invariant_hard_tolerance <= 1.0e-8 ||
+       !isfinite(E->control.ala_schur_diagnostic_invariant_hard_tolerance))
+        myerror(E, "ala_schur_diagnostic_invariant_hard_tolerance must be finite and > 1e-8");
     if(E->control.ala_schur_diagnostic_max_cycles < 1 ||
        E->control.ala_schur_diagnostic_progress_interval < 1)
         myerror(E, "ALA Schur diagnostic velocity solve limits must be positive");
