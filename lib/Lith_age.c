@@ -634,6 +634,12 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
   const int dims=E->mesh.nsd;
   unsigned int type;
 
+  /* Static lith-age mode has no trench/flag-depth fields.  Its 70 Ma
+   * temperature profile is imposed during initialization; dynamic age
+   * assimilation must not dereference those unavailable fields. */
+  if (!E->control.lith_age_time)
+    return;
+
   nno=E->lmesh.nno;
   gnox=E->mesh.nox;
   gnoy=E->mesh.noy;
