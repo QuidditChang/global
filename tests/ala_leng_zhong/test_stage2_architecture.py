@@ -124,14 +124,15 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("F[m][j] += c_rhs[m][j]", inner)
         self.assertNotIn("assemble_grad_c_p", inner)
 
-    def test_stage2_run_files_exclude_later_stage_operators(self):
+    def test_stage3_run_files_exclude_later_stage_operators(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
         required = {
-            "gruneisen": "0",
+            "gruneisen": "1",
             "compressible_formulation": "tala",
             "ala_leng_zhong_2008": "on",
+            "ala_leng_zhong_stage3": "on",
             "uzawa": "cg",
             "precond": "on",
             "aug_lagr": "off",
@@ -154,10 +155,10 @@ class Stage2ArchitectureTest(unittest.TestCase):
             self.assertRegex(cfg, r"(?m)^%s\s*=\s*%s\s*$" %
                              (re.escape(key), re.escape(value)))
 
-        self.assertIn("#BSUB -J CMBHF_LZ08_S2", lsf)
+        self.assertIn("#BSUB -J CMBHF_LZ08_S3", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("cmbhf_ALA_Leng_Zhong_2008_stage2", lsf)
+        self.assertIn("cmbhf_ALA_Leng_Zhong_2008_stage3", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.
