@@ -110,6 +110,13 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertLess(guard, dereference)
         self.assertIn("result[m][e] = 0.0", assembler[:dereference])
 
+    def test_static_lith_age_protection_uses_configured_maximum_age(self):
+        source = read("lib/Lith_age.c")
+        self.assertIn("E->control.lith_age == 1", source)
+        self.assertIn("E->control.lith_age_time == 0", source)
+        self.assertIn("E->control.max_plate_age_Ma", source)
+        self.assertIn("Static lith-age protection", source)
+
     def test_stage3_selector_keeps_c_out_of_inner_action(self):
         definitions = read("lib/global_defs.h")
         instructions = read("lib/Instructions.c")

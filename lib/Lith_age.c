@@ -117,6 +117,25 @@ void lith_age_init(struct All_variables *E)
 	E->age_t[node]=E->age_t[node]/E->data.scalet;
       }
     fclose(fp1);
+
+    /* A static lith-age run is a controlled benchmark, not a snapshot of
+       spatially varying plate ages. Use the configured maximum age everywhere
+       in the lith_age_depth layer. Dynamic age assimilation keeps the file. */
+    if(E->control.lith_age == 1 && E->control.lith_age_time == 0) {
+      const float max_age_nd = E->control.max_plate_age_Ma /
+                               E->data.scalet;
+      for(i=1;i<=gnoy;i++)
+        for(j=1;j<=gnox;j++) {
+          node=j+(i-1)*gnox;
+          E->age_t[node] = max_age_nd;
+        }
+      if(E->parallel.me == 0)
+        fprintf(E->fp,
+                "Static lith-age protection: age=%g Ma across "
+                "lith_age_depth=%g\n",
+                E->control.max_plate_age_Ma,
+                E->control.lith_age_depth);
+    }
   } /* end E->control.lith_age_time == false */
 }
 
