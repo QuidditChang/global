@@ -108,6 +108,8 @@ class Incompressible(CitcomComponent):
                                                                    "ala"]))
         ala_leng_zhong_2008 = prop.bool("ala_leng_zhong_2008",
                                         default=False)
+        ala_leng_zhong_stage3 = prop.bool("ala_leng_zhong_stage3",
+                                          default=False)
         ala_schur_symmetry_check = prop.bool("ala_schur_symmetry_check",
                                              default=False)
         ala_schur_symmetry_tolerance = prop.float(

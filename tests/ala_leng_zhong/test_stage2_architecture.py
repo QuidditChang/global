@@ -51,6 +51,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertRegex(component,
                          r'ala_leng_zhong_2008\s*=\s*prop\.bool\('
                          r'"ala_leng_zhong_2008",\s*default=False\)')
+        self.assertRegex(component,
+                         r'ala_leng_zhong_stage3\s*=\s*prop\.bool\('
+                         r'"ala_leng_zhong_stage3",\s*default=False\)')
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
