@@ -791,6 +791,10 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
         assemble_grad_rho_p(E,q,bT,lev);
         rd=ala_schur_tight_solve(E,uD,dT,vwork,lev,tight);
         rc=ala_schur_tight_solve(E,uC,cT,vwork,lev,tight);
+        /* assemble_c_u is an additive element assembly; clear its reused
+         * output fields between probes before forming the C blocks. */
+        ala_schur_zero_pressure(E,cuD,lev);
+        ala_schur_zero_pressure(E,cuC,lev);
         assemble_div_u(E,uD,duD,lev); assemble_c_u(E,uD,cuD,lev);
         assemble_div_u(E,uC,duC,lev); assemble_c_u(E,uC,cuC,lev);
         ala_schur_check_field_finite(E,duD,1,E->lmesh.NPNO[lev],lev,"D_Kinv_Dt");

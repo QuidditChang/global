@@ -94,6 +94,14 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("adj_c", self.stokes)
         self.assertIn("adj_b", self.stokes)
 
+    def test_additive_c_assembly_is_cleared_between_probes(self) -> None:
+        clear = self.stokes.index("ala_schur_zero_pressure(E,cuD,lev)")
+        assemble = self.stokes.index("assemble_c_u(E,uD,cuD,lev)", clear)
+        self.assertLess(clear, assemble)
+        clear_c = self.stokes.index("ala_schur_zero_pressure(E,cuC,lev)", clear)
+        assemble_c = self.stokes.index("assemble_c_u(E,uC,cuC,lev)", clear_c)
+        self.assertLess(clear_c, assemble_c)
+
     def test_preconditioner_variants_and_depth_bands_are_measured(self) -> None:
         for name in (
             "BPI_only", "Schwarz_only", "combined_unscaled", "configured"
