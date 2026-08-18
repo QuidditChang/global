@@ -795,6 +795,14 @@ void assemble_c_u(struct All_variables *E,
     const int dims = E->mesh.nsd;
     const int npno = E->lmesh.NPNO[level];
 
+    /* elt_c is allocated only when the compressible continuity term is active. */
+    if(E->control.inv_gruneisen == 0) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=nel;e++)
+                result[m][e] = 0.0;
+        return;
+    }
+
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(a=1;a<=ends;a++) {
             p = (a-1)*dims;

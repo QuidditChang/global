@@ -99,6 +99,14 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertNotIn("assemble_grad_rho_p", cg)
         self.assertNotIn("assemble_div_rho_u", cg)
 
+    def test_zero_compressible_diagnostic_does_not_dereference_elt_c(self):
+        element = read("lib/Element_calculations.c")
+        assembler = function_body(element, "assemble_c_u")
+        guard = assembler.index("if(E->control.inv_gruneisen == 0)")
+        dereference = assembler.index("E->elt_c")
+        self.assertLess(guard, dereference)
+        self.assertIn("result[m][e] = 0.0", assembler[:dereference])
+
     def test_stage2_run_files_exclude_later_stage_operators(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
