@@ -265,11 +265,24 @@ static void initialize_ala_beta(struct All_variables *E)
             beta = E->refstate.ala_beta_interval[nz];
         else
             beta = E->refstate.ala_beta_density[nz];
-        if(!isfinite(E->refstate.ala_beta_supplied[nz]) ||
-           E->refstate.ala_beta_supplied[nz] <= 0.0 ||
-           !isfinite(E->refstate.ala_beta_density[nz]) ||
+        /* TALA and the Stage 2 incompressible gate deliberately use the
+         * density-derived beta.  Legacy dis-containing files carry zero in
+         * their unused supplied-beta slot, so validate that slot only when
+         * the active operator actually selects supplied or interval beta. */
+        if(!isfinite(E->refstate.ala_beta_density[nz]) ||
            E->refstate.ala_beta_density[nz] <= 0.0 ||
-           !isfinite(beta) || beta <= 0.0) {
+           !isfinite(beta) || beta <= 0.0 ||
+           (E->control.ala_pressure_buoyancy &&
+            E->refstate.choice == 0 &&
+            strcmp(E->control.ala_beta_element_source,
+                   "supplied_average") == 0 &&
+            (!isfinite(E->refstate.ala_beta_supplied[nz]) ||
+             E->refstate.ala_beta_supplied[nz] <= 0.0)) ||
+           (E->control.ala_pressure_buoyancy &&
+            E->refstate.choice == 0 &&
+            strcmp(E->control.ala_beta_element_source,"interval") == 0 &&
+            (!isfinite(E->refstate.ala_beta_interval[nz]) ||
+             E->refstate.ala_beta_interval[nz] <= 0.0))) {
             fprintf(stderr,
                     "Invalid ALA beta: rank=%d local_nz=%d "
                     "supplied=%e density=%e selected=%e; "

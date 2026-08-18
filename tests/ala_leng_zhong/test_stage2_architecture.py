@@ -167,6 +167,13 @@ class Stage2ArchitectureTest(unittest.TestCase):
             for i in range(2)))
         self.assertLessEqual(residual, 1.0e-10)
 
+    def test_tala_does_not_require_unused_supplied_beta(self):
+        source = read("lib/Material_properties.c")
+        initializer = function_body(source, "initialize_ala_beta")
+        self.assertIn("density-derived beta", initializer)
+        self.assertIn("E->control.ala_pressure_buoyancy", initializer)
+        self.assertIn("ala_beta_element_source", initializer)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
