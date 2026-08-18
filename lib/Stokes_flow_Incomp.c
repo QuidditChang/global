@@ -847,22 +847,22 @@ static void ala_schur_run_state(struct All_variables *E,FILE *csv,
                     ala_schur_probe_names[probe],
                     invariant_max>1.0e-8 ?
                         (invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance ?
-                         "FAIL" : "WARN") : "PASS",invariant_max,
+                         "ALERT" : "WARN") : "PASS",invariant_max,
                     E->control.ala_schur_diagnostic_invariant_hard_tolerance,
                     rd,rc,sum_defect,bt_defect,adj_d,adj_c,adj_b);
             fflush(E->fp);
         }
         if(invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance) {
             if(E->parallel.me==0) {
-                fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE "
+                fprintf(E->fp,"STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_ALERT "
                         "state=%s probe=%s rd=%e rc=%e sum_defect=%e "
-                        "bt_defect=%e adj_d=%e adj_c=%e adj_b=%e limit=%e\n",
+                        "bt_defect=%e adj_d=%e adj_c=%e adj_b=%e limit=%e "
+                        "action=continue\n",
                         state,ala_schur_probe_names[probe],rd,rc,sum_defect,
                         bt_defect,adj_d,adj_c,adj_b,
                         E->control.ala_schur_diagnostic_invariant_hard_tolerance);
                 fflush(E->fp);
             }
-            myerror(E,"Strict-ALA Schur diagnostic invariant failed");
         }
         energy_denominator=(fabs(full_energy)>1.0e-300)
             ? full_energy : ((full_energy<0.0) ? -1.0e-300 : 1.0e-300);

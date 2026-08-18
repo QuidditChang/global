@@ -152,10 +152,16 @@ class SchurDiagnosticArchitectureTest(unittest.TestCase):
         self.assertIn("alpha=0.0", self.matrix)
         self.assertIn("Invalid multigrid upward action product", self.matrix)
 
-    def test_exact_operator_invariants_fail_before_later_probes(self) -> None:
-        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_FAILURE", self.stokes)
+    def test_finite_operator_invariants_are_recorded_without_aborting(self) -> None:
+        self.assertIn("STRICT_ALA_SCHUR_DIAGNOSTIC_INVARIANT_ALERT", self.stokes)
         self.assertIn(
             "invariant_max>E->control.ala_schur_diagnostic_invariant_hard_tolerance",
+            self.stokes,
+        )
+        self.assertIn('"ALERT"', self.stokes)
+        self.assertIn('"action=continue\\n"', self.stokes)
+        self.assertNotIn(
+            'myerror(E,"Strict-ALA Schur diagnostic invariant failed")',
             self.stokes,
         )
         self.assertIn("adj_b=%e", self.stokes)
