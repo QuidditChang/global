@@ -54,7 +54,7 @@ stage_A() {
     test -f "$CANONICAL_CFG"
     test -f "$RUNS_DIR/refstate_ALA_strict.txt"
     test -f "$RUNS_DIR/interval_ALA_strict.txt"
-    test "$(git -C "$SOURCE_REPO" branch --show-current)" = cmbhf_ALA_strict
+test "$(git -C "$SOURCE_REPO" symbolic-ref --short HEAD)" = cmbhf_ALA_strict
     test -z "$(git -C "$SOURCE_REPO" status --porcelain)"
     git clone --no-local "$SOURCE_REPO" "$BUILD"
     test -z "$(git -C "$BUILD" status --porcelain)"

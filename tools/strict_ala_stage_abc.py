@@ -73,7 +73,7 @@ def manifest(args):
     result = {
         "schema": "strict-ala-stage-abc-v1",
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": {"repository": str(repo), "branch": git(repo, "branch", "--show-current"),
+        "source": {"repository": str(repo), "branch": git(repo, "symbolic-ref", "--short", "HEAD"),
                    "head": git(repo, "rev-parse", "HEAD"),
                    "status": git(repo, "status", "--short"),
                    "diff_binary": git(repo, "diff", "--binary")},
