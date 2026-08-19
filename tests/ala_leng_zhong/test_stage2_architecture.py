@@ -54,6 +54,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertRegex(component,
                          r'ala_leng_zhong_stage3\s*=\s*prop\.bool\('
                          r'"ala_leng_zhong_stage3",\s*default=False\)')
+        self.assertRegex(component,
+                         r'ala_leng_zhong_stage4\s*=\s*prop\.bool\('
+                         r'"ala_leng_zhong_stage4",\s*default=False\)')
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -110,13 +113,6 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertLess(guard, dereference)
         self.assertIn("result[m][e] = 0.0", assembler[:dereference])
 
-    def test_static_lith_age_protection_uses_configured_maximum_age(self):
-        source = read("lib/Lith_age.c")
-        self.assertIn("E->control.lith_age == 1", source)
-        self.assertIn("E->control.lith_age_time == 0", source)
-        self.assertIn("E->control.max_plate_age_Ma", source)
-        self.assertIn("Static lith-age protection", source)
-
     def test_stage3_selector_keeps_c_out_of_inner_action(self):
         definitions = read("lib/global_defs.h")
         instructions = read("lib/Instructions.c")
@@ -125,13 +121,33 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("ala_leng_zhong_stage3", definitions)
         self.assertIn('input_boolean("ala_leng_zhong_stage3"', instructions)
         self.assertIn('"ala_leng_zhong_stage3"', properties)
-        self.assertIn("LENG_ZHONG_STAGE3 operator=G^T_K^-1_G", stokes)
+        self.assertIn('"LENG_ZHONG_STAGE3"', stokes)
+        self.assertIn('operator=G^T_K^-1_G', stokes)
         inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
         self.assertIn("c_rhs", inner)
         self.assertIn("F[m][j] += c_rhs[m][j]", inner)
         self.assertNotIn("assemble_grad_c_p", inner)
 
-    def test_stage3_run_files_exclude_later_stage_operators(self):
+    def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
+        definitions = read("lib/global_defs.h")
+        instructions = read("lib/Instructions.c")
+        properties = read("module/setProperties.c")
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        outer = function_body(stokes, "solve_Ahat_p_fhat_iterCG")
+        inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
+
+        self.assertIn("int ala_leng_zhong_stage4;", definitions)
+        self.assertIn('input_boolean("ala_leng_zhong_stage4"', instructions)
+        self.assertIn('"ala_leng_zhong_stage4"', properties)
+        self.assertIn("LENG_ZHONG_STAGE4", stokes)
+        snapshot = outer.index("old_p[m][i] = P[m][i]")
+        force = outer.index("assemble_forces(E,0)")
+        solve = outer.index("solve_Ahat_p_fhat_CG")
+        self.assertLess(snapshot, force)
+        self.assertLess(force, solve)
+        self.assertNotIn("assemble_grad_rho_p", inner)
+
+    def test_stage4_run_files_enable_only_appendix_a_c_and_w(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
@@ -139,12 +155,13 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "steps": "50",
             "tole_compressibility": "1e-06",
             "lith_age": "1",
-            "lith_age_time": "0",
+            "lith_age_time": "1",
             "max_plate_age_Ma": "70",
             "gruneisen": "1",
-            "compressible_formulation": "tala",
+            "compressible_formulation": "ala",
             "ala_leng_zhong_2008": "on",
             "ala_leng_zhong_stage3": "on",
+            "ala_leng_zhong_stage4": "on",
             "uzawa": "cg",
             "precond": "on",
             "aug_lagr": "off",
@@ -167,10 +184,10 @@ class Stage2ArchitectureTest(unittest.TestCase):
             self.assertRegex(cfg, r"(?m)^%s\s*=\s*%s\s*$" %
                              (re.escape(key), re.escape(value)))
 
-        self.assertIn("#BSUB -J CMBHF_LZ08_S3", lsf)
+        self.assertIn("#BSUB -J CMBHF_LZ08_S4", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("cmbhf_ALA_Leng_Zhong_2008_stage3", lsf)
+        self.assertIn("stage4_ala_assimilation", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.

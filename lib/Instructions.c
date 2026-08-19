@@ -519,6 +519,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_leng_zhong_2008),"off",m);
   input_boolean("ala_leng_zhong_stage3",
                 &(E->control.ala_leng_zhong_stage3),"off",m);
+  input_boolean("ala_leng_zhong_stage4",
+                &(E->control.ala_leng_zhong_stage4),"off",m);
   input_boolean("ala_schur_symmetry_check",
                 &(E->control.ala_schur_symmetry_check),"off",m);
   input_double("ala_schur_symmetry_tolerance",
@@ -763,13 +765,22 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_leng_zhong_stage3 &&
      (!E->control.ala_leng_zhong_2008 ||
       E->control.inv_gruneisen == 0 ||
-      E->control.ala_pressure_buoyancy ||
       !E->control.precondition ||
       E->control.augmented_Lagr ||
       E->control.ala_augmented_lagrangian_gamma != 0.0))
       myerror(E, "ala_leng_zhong_stage3 requires the Leng selector, "
-              "gruneisen != 0, TALA, precond=on, aug_lagr=off, and "
+              "gruneisen != 0, precond=on, aug_lagr=off, and "
               "ala_augmented_lagrangian_gamma=0");
+  if(E->control.ala_leng_zhong_stage4 &&
+     (!E->control.ala_leng_zhong_stage3 ||
+      !E->control.ala_pressure_buoyancy))
+      myerror(E, "ala_leng_zhong_stage4 requires Stage 3 and "
+              "compressible_formulation=ala");
+  if(E->control.ala_leng_zhong_stage3 &&
+     !E->control.ala_leng_zhong_stage4 &&
+     E->control.ala_pressure_buoyancy)
+      myerror(E, "ala_leng_zhong_stage3 without Stage 4 requires "
+              "compressible_formulation=tala");
   if(E->control.ala_leng_zhong_2008 &&
      (E->control.ala_pressure_defect_corrections != 0 ||
       E->control.ala_coupled_defect_corrections != 0 ||
@@ -1134,7 +1145,8 @@ void read_initial_settings(struct All_variables *E)
        * BiCGStab or its dedicated complete-operator PCG experiment. */
       input_string("uzawa",E->control.uzawa,"cg",m);
       if(strcmp(E->control.uzawa, "cg") == 0) {
-          if(E->control.ala_pressure_buoyancy)
+          if(E->control.ala_pressure_buoyancy &&
+             !E->control.ala_leng_zhong_stage4)
               myerror(E,
                       "strict ALA requires uzawa=bicg or uzawa=ala_cg");
           /* more convergence parameters for "cg" */
@@ -1716,6 +1728,7 @@ void global_default_values(E)
     E->control.augmented = 0.0;
     E->control.ala_leng_zhong_2008 = 0;
     E->control.ala_leng_zhong_stage3 = 0;
+    E->control.ala_leng_zhong_stage4 = 0;
     E->control.ala_augmented_lagrangian_gamma = 0.0;
     E->control.ala_schur_symmetry_check = 0;
     E->control.ala_schur_symmetry_tolerance = 1.0e-3;

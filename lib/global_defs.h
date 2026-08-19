@@ -473,6 +473,7 @@ struct CONTROL {
     char compressible_formulation[20];
     int ala_leng_zhong_2008;
     int ala_leng_zhong_stage3;
+    int ala_leng_zhong_stage4;
     double ala_augmented_lagrangian_gamma;
 
     /* strict-ALA Krylov diagnostics and inexact velocity solves */

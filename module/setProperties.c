@@ -1057,6 +1057,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_leng_zhong_2008, fp);
     getIntProperty(properties, "ala_leng_zhong_stage3",
                    E->control.ala_leng_zhong_stage3, fp);
+    getIntProperty(properties, "ala_leng_zhong_stage4",
+                   E->control.ala_leng_zhong_stage4, fp);
     getIntProperty(properties, "ala_schur_symmetry_check",
                    E->control.ala_schur_symmetry_check, fp);
     getDoubleProperty(properties, "ala_schur_symmetry_tolerance",
@@ -1301,13 +1303,22 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_leng_zhong_stage3 &&
        (!E->control.ala_leng_zhong_2008 ||
         E->control.inv_gruneisen == 0 ||
-        E->control.ala_pressure_buoyancy ||
         !E->control.precondition ||
         E->control.augmented_Lagr ||
         E->control.ala_augmented_lagrangian_gamma != 0.0))
         myerror(E, "ala_leng_zhong_stage3 requires the Leng selector, "
-                "gruneisen != 0, TALA, precond=on, aug_lagr=off, and "
+                "gruneisen != 0, precond=on, aug_lagr=off, and "
                 "ala_augmented_lagrangian_gamma=0");
+    if(E->control.ala_leng_zhong_stage4 &&
+       (!E->control.ala_leng_zhong_stage3 ||
+        !E->control.ala_pressure_buoyancy))
+        myerror(E, "ala_leng_zhong_stage4 requires Stage 3 and "
+                "compressible_formulation=ala");
+    if(E->control.ala_leng_zhong_stage3 &&
+       !E->control.ala_leng_zhong_stage4 &&
+       E->control.ala_pressure_buoyancy)
+        myerror(E, "ala_leng_zhong_stage3 without Stage 4 requires "
+                "compressible_formulation=tala");
     if(E->control.ala_leng_zhong_2008 &&
        (E->control.ala_pressure_defect_corrections != 0 ||
         E->control.ala_coupled_defect_corrections != 0 ||
@@ -1673,7 +1684,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         /* "cg" is legacy split; strict ALA uses bicg or ala_cg. */
         getStringProperty(properties, "uzawa", E->control.uzawa, fp);
         if(strcmp(E->control.uzawa, "cg") == 0) {
-            if(E->control.ala_pressure_buoyancy)
+            if(E->control.ala_pressure_buoyancy &&
+               !E->control.ala_leng_zhong_stage4)
                 myerror(E,
                         "strict ALA requires uzawa=bicg or uzawa=ala_cg");
             /* more convergence parameters for "cg" */

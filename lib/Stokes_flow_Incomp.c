@@ -8026,10 +8026,13 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
     if(E->control.ala_leng_zhong_2008) {
         if(E->control.ala_leng_zhong_stage3) {
             if(E->parallel.me==0) {
-                fprintf(E->fp,
-                        "LENG_ZHONG_STAGE3 operator=G^T_K^-1_G "
-                        "velocity_operator=K_unaugmented bpi=D_only "
-                        "C=on(W=off) aug_lagr=%d gamma=%e\n",
+                fprintf(E->fp, "%s operator=G^T_K^-1_G "
+                        "velocity_operator=K_unaugmented bpi=D_only C=on "
+                        "W=%s aug_lagr=%d gamma=%e\n",
+                        E->control.ala_leng_zhong_stage4
+                            ? "LENG_ZHONG_STAGE4" : "LENG_ZHONG_STAGE3",
+                        E->control.ala_leng_zhong_stage4 ? "on(lagged)"
+                                                        : "off",
                         E->control.augmented_Lagr,
                         E->control.ala_augmented_lagrangian_gamma);
                 fflush(E->fp);
@@ -9915,7 +9918,9 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
             for(i=1;i<=npno;i++) old_p[m][i] = P[m][i];
         }
 
-        if(E->control.ala_pressure_buoyancy)
+        /* Stage 4 rebuilds the momentum RHS with -W*P_old before the
+         * ordinary Stokes solve; P is unchanged since the snapshot above. */
+        if(E->control.ala_leng_zhong_stage4)
             assemble_forces(E,0);
 
         /* The inner solver writes its used count back through steps_max. */
@@ -9937,11 +9942,17 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         num_of_loop++;
 
         if(E->parallel.me == 0) {
-            fprintf(stderr, "LENG_ZHONG_STAGE3_OUTER loop=%d "
+            fprintf(stderr, "%s loop=%d "
                     "epsilon_V=%e epsilon_P=%e inner_residual=%e\n",
+                    E->control.ala_leng_zhong_stage4
+                        ? "LENG_ZHONG_STAGE4_OUTER"
+                        : "LENG_ZHONG_STAGE3_OUTER",
                     num_of_loop, relative_err_v, relative_err_p, residual);
-            fprintf(E->fp, "LENG_ZHONG_STAGE3_OUTER loop=%d "
+            fprintf(E->fp, "%s loop=%d "
                     "epsilon_V=%e epsilon_P=%e inner_residual=%e\n",
+                    E->control.ala_leng_zhong_stage4
+                        ? "LENG_ZHONG_STAGE4_OUTER"
+                        : "LENG_ZHONG_STAGE3_OUTER",
                     num_of_loop, relative_err_v, relative_err_p, residual);
         }
 
