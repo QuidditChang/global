@@ -165,6 +165,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertLess(loop_end, continuity)
         self.assertLess(continuity, momentum_audit)
         self.assertIn("strict_ala_continuity_metrics", outer)
+        self.assertIn("calloc(neq+1,sizeof(double))", outer)
         self.assertIn("assemble_unaugmented_del2_u", momentum)
         self.assertIn("assemble_forces(E,0)", momentum)
         self.assertIn("assemble_grad_p", momentum)

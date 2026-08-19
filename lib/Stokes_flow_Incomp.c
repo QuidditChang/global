@@ -9918,8 +9918,10 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     }
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)   {
-    	old_v[m] = (double *)malloc(neq*sizeof(double));
-    	diff_v[m] = (double *)malloc(neq*sizeof(double));
+        /* Velocity operators use the constrained neq sentinel.  These
+         * workspaces are also passed to the Stage 5 momentum audit. */
+        old_v[m] = (double *)calloc(neq+1,sizeof(double));
+        diff_v[m] = (double *)calloc(neq+1,sizeof(double));
     	old_p[m] = (double *)malloc((npno+1)*sizeof(double));
     	diff_p[m] = (double *)malloc((npno+1)*sizeof(double));
     }
