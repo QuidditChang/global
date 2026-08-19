@@ -178,6 +178,10 @@ class Incompressible(CitcomComponent):
             "ala_schur_diagnostic_progress_interval", default=100)
         ala_schur_diagnostic_random_seed = prop.int(
             "ala_schur_diagnostic_random_seed", default=20080516)
+        ala_stage_abc_adjoint_diagnostic = prop.bool(
+            "ala_stage_abc_adjoint_diagnostic", default=False)
+        ala_stage_abc_production_logging = prop.bool(
+            "ala_stage_abc_production_logging", default=False)
         ala_coupled_shallow_vanka_layers = prop.int(
             "ala_coupled_shallow_vanka_layers", default=0)
         ala_coupled_shallow_vanka_core_layers = prop.int(

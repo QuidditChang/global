@@ -112,6 +112,61 @@ void assemble_forces(E,penalty)
 }
 
 
+/* Assemble the physical force into caller-owned storage.  This mirrors
+ * assemble_forces() without touching E->F, so production diagnostics can
+ * inspect the original momentum equation without mutating solver state. */
+void assemble_forces_into(struct All_variables *E, int penalty,
+                          double **target)
+{
+  double elt_f[24];
+  int m,a,e,i,a1,a2,a3,p,node;
+  void get_elt_f();
+  void get_elt_tr();
+  void strip_bcs_from_residual();
+  const int dims=E->mesh.nsd;
+  const int ends=enodes[E->mesh.nsd];
+  const int neq=E->lmesh.neq;
+  const int nel=E->lmesh.nel;
+  const int lev=E->mesh.levmax;
+
+  (void)penalty;
+  /* Reuse the buoyancy assembled immediately before the Stokes solve. */
+  for(m=1;m<=E->sphere.caps_per_proc;m++) {
+    for(a=0;a<neq;a++) target[m][a]=0.0;
+    for(e=1;e<=nel;e++) {
+      get_elt_f(E,e,elt_f,1,m);
+      for(a=1;a<=ends;a++) {
+        node=E->ien[m][e].node[a];
+        p=(a-1)*dims;
+        a1=E->id[m][node].doff[1];
+        a2=E->id[m][node].doff[2];
+        a3=E->id[m][node].doff[3];
+        target[m][a1] += elt_f[p];
+        target[m][a2] += elt_f[p+1];
+        target[m][a3] += elt_f[p+2];
+      }
+    }
+    for(i=1;i<=E->boundary.nel;i++) {
+      e=E->boundary.element[m][i];
+      for(a=0;a<24;a++) elt_f[a]=0.0;
+      for(a=SIDE_BEGIN;a<=SIDE_END;a++) get_elt_tr(E,i,a,elt_f,m);
+      for(a=1;a<=ends;a++) {
+        node=E->ien[m][e].node[a];
+        p=(a-1)*dims;
+        a1=E->id[m][node].doff[1];
+        a2=E->id[m][node].doff[2];
+        a3=E->id[m][node].doff[3];
+        target[m][a1] += elt_f[p];
+        target[m][a2] += elt_f[p+1];
+        target[m][a3] += elt_f[p+2];
+      }
+    }
+  }
+  (E->solver.exchange_id_d)(E,target,lev);
+  strip_bcs_from_residual(E,target,lev);
+}
+
+
 void assemble_forces_pseudo_surf(E,penalty)
      struct All_variables *E;
      int penalty;
@@ -418,6 +473,9 @@ void assemble_del2_u(E,u,Au,level,strip_bcs)
   void e_assemble_del2_u();
   void n_assemble_del2_u();
 
+  if(E->control.ala_stage_abc_production_logging)
+    E->control.ala_stage_abc_k_application_count++;
+
   if(E->control.NMULTIGRID||E->control.NASSEMBLE)
     n_assemble_del2_u(E,u,Au,level,strip_bcs);
   else
@@ -605,9 +663,10 @@ void build_diagonal_of_Ahat(E)
 {
     double assemble_dAhatp_entry();
 
-    double BU;
+    double BU,start,CPU_time0();
     int m,e,npno,level;
 
+  start=CPU_time0();
   /* Initialize every level and cap before honoring the off switch.  The old
      early return initialized only the first level/cap and left the remaining
      entries stale even though all strict-ALA Krylov paths read BPI. */
@@ -618,8 +677,11 @@ void build_diagonal_of_Ahat(E)
         E->BPI[level][m][e]=1.0;
     }
 
-  if(!E->control.precondition)
+  if(!E->control.precondition) {
+    if(E->control.ala_stage_abc_production_logging)
+      E->control.ala_stage_abc_bpi_seconds+=CPU_time0()-start;
     return;
+  }
 
   for(level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -633,6 +695,8 @@ void build_diagonal_of_Ahat(E)
       }
     }
 
+  if(E->control.ala_stage_abc_production_logging)
+    E->control.ala_stage_abc_bpi_seconds+=CPU_time0()-start;
   return;
 }
 

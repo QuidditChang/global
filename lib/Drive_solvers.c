@@ -99,6 +99,7 @@ void general_stokes_solver(struct All_variables *E)
   void sphere_harmonics_layer();
   void get_system_viscosity();
   void strict_ala_schur_diagnostic();
+  void strict_ala_stage_B_diagnostic();
   void remove_rigid_rot();
 
   float vmag;
@@ -146,6 +147,24 @@ void general_stokes_solver(struct All_variables *E)
       }
     }
   }
+
+  if(E->monitor.solution_cycles==0 && E->parallel.me==0) {
+    fprintf(E->fp,"STRICT_ALA_STAGE_ABC_CONTROLS stage_B=%s stage_C=%s "
+            "operator=B_Kgamma_inverse_BT gamma=%e outer_solver=%s "
+            "outer_iterations=%d inner_max_cycles=%d "
+            "continuity_tolerance=%e momentum_tolerance=%e\n",
+            E->control.ala_stage_abc_adjoint_diagnostic ? "on" : "off",
+            E->control.ala_stage_abc_production_logging ? "on" : "off",
+            E->control.ala_augmented_lagrangian_gamma,
+            E->control.ala_outer_solver,E->control.p_iterations,
+            E->control.v_steps_low,E->control.tole_comp,
+            E->control.ala_unaugmented_momentum_tolerance);
+    fflush(E->fp);
+  }
+
+  if(E->control.ala_stage_abc_adjoint_diagnostic &&
+     E->monitor.solution_cycles==0)
+    strict_ala_stage_B_diagnostic(E);
 
   solve_constrained_flow_iterative(E);
 

@@ -1,0 +1,156 @@
+#!/bin/bash
+#BSUB -J STRICT_ALA_ABC
+#BSUB -q medium
+#BSUB -n 400
+#BSUB -R "span[ptile=40]"
+#BSUB -W 168:00
+#BSUB -o strict_ala_abc_%J.out
+#BSUB -e strict_ala_abc_%J.err
+
+set -euo pipefail
+
+SOURCE_REPO=${STRICT_ALA_SOURCE_REPO:-/work/ess-zhangkd/CitcomS/src/global}
+CANONICAL_CFG=${STRICT_ALA_CANONICAL_CFG:-/work/ess-zhangkd/CitcomS/runs/cmbhf_ALA_strict.cfg}
+RUNS_DIR=${STRICT_ALA_RUNS_DIR:-/work/ess-zhangkd/CitcomS/runs}
+JOB_ROOT=/scratch/$(date +%F)/ess-zhangkd/STRICT_STAGE_ABC_${LSB_JOBID}
+MANIFEST=${JOB_ROOT}/00_manifest
+STAGE_B=${JOB_ROOT}/01_stage_B
+C0=${JOB_ROOT}/02_C0_BPI
+C1=${JOB_ROOT}/03_C1_CONFIGURED
+FINAL=${JOB_ROOT}/04_final
+BUILD=${JOB_ROOT}/build/source
+mkdir -p "$MANIFEST" "$STAGE_B/baseline" "$STAGE_B/alternate" "$C0" "$C1" "$FINAL"
+
+archive_failure() {
+    printf '%s\n' "stage=$1 status=FAIL job=${LSB_JOBID}" > "$FINAL/failure.txt"
+    tar -C "$(dirname "$JOB_ROOT")" -czf "${JOB_ROOT}.failure.tgz" "$(basename "$JOB_ROOT")" || true
+}
+trap 'archive_failure "${CURRENT_STAGE:-startup}"' ERR
+
+run_app() {
+    local case_name=$1 cfg=$2 log=$3
+    export STRICT_ALA_CASE=$case_name
+    (cd "$(dirname "$cfg")" && "$BUILD/bin/pycitcoms" --pyre-start "$PYRE_START" \
+      pythia pyre.schedulers:jobstart \
+      --scheduler-class=pyre.schedulers.SchedulerLSF:SchedulerLSF \
+      CitcomS.SimpleApp:SimpleApp "$cfg" \
+      --nodes=384 --macros.nodes=384 --macros.job.name="STRICT_${case_name}" \
+      >"$log" 2>&1)
+}
+
+patch_cfg() {
+    local cfg=$1 root=$2 stage_b_flag=$3 stage_c_flag=$4
+    sed -i -E \
+      -e "s#^( *datadir *= *).*#\1${root}/DATA/%RANK#" \
+      -e "s#^( *datadir_old *= *).*#\1${root}/Restart#" "$cfg"
+    sed -i -E "/^( *ala_schur_diagnostic_random_seed)/a\\
+ala_stage_abc_adjoint_diagnostic = ${stage_b_flag}\\
+ala_stage_abc_production_logging = ${stage_c_flag}" "$cfg"
+    mkdir -p "$root/DATA" "$root/Restart"
+}
+
+stage_A() {
+    CURRENT_STAGE=stage_A
+    test -f "$CANONICAL_CFG"
+    test -f "$RUNS_DIR/refstate_ALA_strict.txt"
+    test -f "$RUNS_DIR/interval_ALA_strict.txt"
+    test "$(git -C "$SOURCE_REPO" branch --show-current)" = cmbhf_ALA_strict
+    test -z "$(git -C "$SOURCE_REPO" status --porcelain)"
+    git clone --no-local "$SOURCE_REPO" "$BUILD"
+    test -z "$(git -C "$BUILD" status --porcelain)"
+    export STAGE_ABC_BUILD_COMMAND='./config_script'
+    (cd "$BUILD" && ./config_script) >"$MANIFEST/clean_build.log" 2>&1
+    test -x "$BUILD/bin/pycitcoms"
+    mapfile -t LIBS < <(find "$BUILD" -type f -name 'CitcomSLib*.so' -print)
+    test "${#LIBS[@]}" -gt 0
+    python3 "$BUILD/tools/strict_ala_stage_abc.py" generate-cfg \
+      --base "$CANONICAL_CFG" --c0 "$C0/cmbhf_ALA_strict_stage_C0_BPI.cfg" \
+      --c1 "$C1/cmbhf_ALA_strict_stage_C1_configured.cfg" \
+      --diff "$MANIFEST/strict_ala_stage_A_cfg_diff.txt"
+    cp "$CANONICAL_CFG" "$STAGE_B/baseline/stage_B.cfg"
+    cp "$CANONICAL_CFG" "$STAGE_B/alternate/stage_B.cfg"
+    patch_cfg "$STAGE_B/baseline/stage_B.cfg" "$STAGE_B/baseline" on off
+    patch_cfg "$STAGE_B/alternate/stage_B.cfg" "$STAGE_B/alternate" on off
+    sed -i -E -e 's/^( *nprocx *= *).*/\12/' -e 's/^( *nprocy *= *).*/\18/' \
+      "$STAGE_B/alternate/stage_B.cfg"
+    patch_cfg "$C0/cmbhf_ALA_strict_stage_C0_BPI.cfg" "$C0" off on
+    patch_cfg "$C1/cmbhf_ALA_strict_stage_C1_configured.cfg" "$C1" off on
+    python3 "$BUILD/tools/strict_ala_stage_abc.py" check-cfg \
+      --c0 "$C0/cmbhf_ALA_strict_stage_C0_BPI.cfg" \
+      --c1 "$C1/cmbhf_ALA_strict_stage_C1_configured.cfg" \
+      --diff "$MANIFEST/strict_ala_stage_A_cfg_diff.txt"
+    cp "$RUNS_DIR/refstate_ALA_strict.txt" "$MANIFEST/"
+    cp "$RUNS_DIR/interval_ALA_strict.txt" "$MANIFEST/"
+    for d in "$STAGE_B/baseline" "$STAGE_B/alternate" "$C0" "$C1"; do
+      cp "$RUNS_DIR/refstate_ALA_strict.txt" "$d/"
+      cp "$RUNS_DIR/interval_ALA_strict.txt" "$d/"
+    done
+    python3 "$BUILD/tools/strict_ala_stage_abc.py" manifest --repo "$BUILD" \
+      --output "$MANIFEST/strict_ala_stage_A_manifest.json" \
+      --input "$CANONICAL_CFG" "$RUNS_DIR/refstate_ALA_strict.txt" \
+              "$RUNS_DIR/interval_ALA_strict.txt" \
+      --binary "$BUILD/bin/pycitcoms" "${LIBS[@]}"
+    find "$BUILD/bin" "$BUILD/lib" -type f \( -name pycitcoms -o -name 'CitcomSLib*.so' \) \
+      -exec sha256sum {} + > "$MANIFEST/binary.pre.sha256"
+}
+
+stage_B() {
+    CURRENT_STAGE=stage_B_baseline
+    run_app B_BASELINE "$STAGE_B/baseline/stage_B.cfg" "$STAGE_B/baseline/raw.log"
+    CURRENT_STAGE=stage_B_alternate
+    run_app B_ALTERNATE "$STAGE_B/alternate/stage_B.cfg" "$STAGE_B/alternate/raw.log"
+    find "$STAGE_B" -name 'global.strict_ala_stage_B_adjoint.csv' -exec tail -n +2 {} \; \
+      > "$STAGE_B/adjoint.rows"
+    first=$(find "$STAGE_B" -name 'global.strict_ala_stage_B_adjoint.csv' | head -1)
+    head -1 "$first" > "$STAGE_B/strict_ala_stage_B_adjoint.csv"
+    cat "$STAGE_B/adjoint.rows" >> "$STAGE_B/strict_ala_stage_B_adjoint.csv"
+    find "$STAGE_B" -name 'global.strict_ala_stage_B_gauge.csv' -exec tail -n +2 {} \; \
+      > "$STAGE_B/gauge.rows"
+    first=$(find "$STAGE_B" -name 'global.strict_ala_stage_B_gauge.csv' | head -1)
+    head -1 "$first" > "$STAGE_B/strict_ala_stage_B_gauge.csv"
+    cat "$STAGE_B/gauge.rows" >> "$STAGE_B/strict_ala_stage_B_gauge.csv"
+    env -u PYTHONHOME python3 "$BUILD/tools/strict_ala_stage_abc.py" decide-stage-b \
+      --adjoint "$STAGE_B/strict_ala_stage_B_adjoint.csv" \
+      --gauge "$STAGE_B/strict_ala_stage_B_gauge.csv" \
+      --output "$STAGE_B/strict_ala_stage_B_decision.json"
+}
+
+stage_C0() { CURRENT_STAGE=stage_C0; run_app C0 "$C0/cmbhf_ALA_strict_stage_C0_BPI.cfg" "$C0/raw.log"; }
+stage_C1() { CURRENT_STAGE=stage_C1; run_app C1 "$C1/cmbhf_ALA_strict_stage_C1_configured.cfg" "$C1/raw.log"; }
+
+final_audit() {
+    CURRENT_STAGE=final_audit
+    find "$BUILD/bin" "$BUILD/lib" -type f \( -name pycitcoms -o -name 'CitcomSLib*.so' \) \
+      -exec sha256sum {} + > "$MANIFEST/binary.post.sha256"
+    cmp "$MANIFEST/binary.pre.sha256" "$MANIFEST/binary.post.sha256"
+    first=$(find "$C0" -name 'global.strict_ala_stage_C_iterations.csv' | head -1)
+    head -1 "$first" > "$FINAL/strict_ala_stage_C_iterations.csv"
+    for d in "$C0" "$C1"; do find "$d" -name 'global.strict_ala_stage_C_iterations.csv' -exec tail -n +2 {} \;; done >> "$FINAL/strict_ala_stage_C_iterations.csv"
+    first=$(find "$C0" -name 'global.strict_ala_stage_C_inner_solves.csv' | head -1)
+    head -1 "$first" > "$FINAL/strict_ala_stage_C_inner_solves.csv"
+    for d in "$C0" "$C1"; do find "$d" -name 'global.strict_ala_stage_C_inner_solves.csv' -exec tail -n +2 {} \;; done >> "$FINAL/strict_ala_stage_C_inner_solves.csv"
+    env -u PYTHONHOME python3 "$BUILD/tools/strict_ala_stage_abc.py" decide-stage-c \
+      --iterations "$FINAL/strict_ala_stage_C_iterations.csv" \
+      --output "$FINAL/strict_ala_stage_C_decision.json"
+    env -u PYTHONHOME python3 "$BUILD/tools/strict_ala_stage_abc.py" final-audit \
+      --iterations "$FINAL/strict_ala_stage_C_iterations.csv" \
+      --inner "$FINAL/strict_ala_stage_C_inner_solves.csv" \
+      --cost "$FINAL/strict_ala_stage_C_cost.csv" \
+      --decision "$FINAL/strict_ala_stage_C_decision.json" \
+      --manifest "$MANIFEST/strict_ala_stage_A_manifest.json" \
+      --output "$FINAL/strict_ala_stage_ABC_final_audit.json"
+    bjobs -l "$LSB_JOBID" > "$FINAL/scheduler_accounting.txt" 2>&1 || true
+    touch "$FINAL/STRICT_ALA_STAGE_ABC_COMPLETE"
+}
+
+export LSB_STDOUT_DIRECT=y I_MPI_HYDRA_BRANCH_COUNT=39 I_MPI_LSF_USE_COLLECTIVE_LAUNCH=1
+stage_A
+export PYTHONHOME=/work/ess-zhangkd/CitcomS/vendor/python2.6.9
+export PATH=/work/ess-zhangkd/CitcomS/vendor/python2.6.9/bin:$PATH
+export PYTHONPATH=$BUILD:${PYTHONPATH:-}
+PYRE_START=$BUILD/python/merlin-1.6.egg:$BUILD/python/Cheetah-2.0rc8-py2.5-linux-x86_64.egg:$BUILD/python/pythia-0.8.1.15-py2.6.egg:$BUILD:$BUILD/bin:$BUILD/python
+stage_B
+stage_C0
+stage_C1
+final_audit
+echo "STRICT_ALA_STAGE_ABC_COMPLETE root=$JOB_ROOT"

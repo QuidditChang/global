@@ -211,7 +211,7 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
   char message[200];
 
   double CPU_time0(),initial_time,time;
-  double residual,prior_residual,r0;
+  double residual,prior_residual,r0,elapsed,requested_relative;
   double *D1[NCS], *r[NCS], *Au[NCS];
 
   gneq  = E->mesh.NEQ[high_lev];
@@ -291,12 +291,49 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
     fflush(E->fp);
   }
 
+  elapsed=CPU_time0()-initial_time;
+  if(max_cycles>0 && E->control.ala_stage_abc_production_logging) {
+    /* Stage C treats reaching the limit as exhaustion even when the last
+     * cycle happens to cross the target.  This makes the max-cycle contract
+     * explicit and leaves one cycle of headroom for a valid solve. */
+    valid=(isfinite(residual) && residual<=acc && cycles<max_cycles);
+    E->control.ala_stage_abc_inner_call_count++;
+    E->control.ala_stage_abc_inner_cycle_count+=cycles;
+    E->control.ala_stage_abc_inner_seconds+=elapsed;
+    requested_relative=acc/max(r0,1.0e-300);
+    if(E->parallel.me==0) {
+      FILE *inner_fp;
+      char inner_path[512];
+      int write_header;
+      snprintf(inner_path,sizeof(inner_path),
+               "%s.strict_ala_stage_C_inner_solves.csv",
+               E->control.data_file);
+      inner_fp=fopen(inner_path,"a+");
+      if(inner_fp==NULL)
+        myerror(E,"Unable to open strict-ALA Stage-C inner-solve log");
+      fseek(inner_fp,0,SEEK_END);
+      write_header=(ftell(inner_fp)==0);
+      if(write_header)
+        fprintf(inner_fp,"case,call_id,outer_iteration,role,rhs_norm,requested_relative_tolerance,target_absolute,achieved_absolute,achieved_relative,cycles,max_cycles,seconds,status\n");
+      fprintf(inner_fp,
+              "%s,%lld,%d,%s,%.17e,%.17e,%.17e,%.17e,%.17e,%d,%d,%.17e,%s\n",
+              getenv("STRICT_ALA_CASE") ? getenv("STRICT_ALA_CASE") : "UNKNOWN",
+              E->control.ala_stage_abc_inner_call_count,
+              E->control.ala_stage_abc_outer_iteration,
+              E->control.ala_stage_abc_inner_role,r0,
+              requested_relative,acc,residual,
+              residual/max(r0,1.0e-300),cycles,max_cycles,elapsed,
+              valid ? "CONVERGED" : "INVALID");
+      fclose(inner_fp);
+    }
+  }
+
   if(max_cycles>0 && E->parallel.me==0) {
     fprintf(E->fp,"ALA COUPLED INNER VELOCITY summary status=%s "
             "cycles=%d max_cycles=%d residual=%e initial=%e target=%e "
             "relative=%e seconds=%e\n",valid ? "converged" : "cycle_limit",
             cycles,max_cycles,residual,r0,acc,
-            residual/max(r0,1.0e-300),CPU_time0()-initial_time);
+            residual/max(r0,1.0e-300),elapsed);
     fprintf(stderr,"ALA COUPLED INNER VELOCITY summary status=%s "
             "cycles=%d max_cycles=%d residual=%e target=%e\n",
             valid ? "converged" : "cycle_limit",cycles,max_cycles,
@@ -310,6 +347,9 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
 
   E->control.total_iteration_cycles += count;
   E->control.total_v_solver_calls += 1;
+
+  if(max_cycles>0 && E->control.ala_stage_abc_production_logging && !valid)
+    myerror(E,"Strict-ALA Stage-C K_gamma inverse contract failed");
 
   return(valid);
 }

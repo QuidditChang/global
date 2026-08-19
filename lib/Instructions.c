@@ -585,6 +585,10 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_schur_diagnostic_progress_interval),"100",m);
   input_int("ala_schur_diagnostic_random_seed",
             &(E->control.ala_schur_diagnostic_random_seed),"20080516",m);
+  input_boolean("ala_stage_abc_adjoint_diagnostic",
+                &(E->control.ala_stage_abc_adjoint_diagnostic),"off",m);
+  input_boolean("ala_stage_abc_production_logging",
+                &(E->control.ala_stage_abc_production_logging),"off",m);
   input_int("ala_coupled_shallow_vanka_layers",
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",
@@ -922,6 +926,20 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_schur_diagnostic_max_cycles < 1 ||
      E->control.ala_schur_diagnostic_progress_interval < 1)
       myerror(E, "ALA Schur diagnostic velocity solve limits must be positive");
+  if(E->control.ala_stage_abc_adjoint_diagnostic &&
+     E->control.ala_stage_abc_production_logging)
+      myerror(E,"Stage-B diagnostic and Stage-C logging are mutually exclusive");
+  if((E->control.ala_stage_abc_adjoint_diagnostic ||
+      E->control.ala_stage_abc_production_logging) &&
+     (!E->control.ala_pressure_buoyancy ||
+      E->control.ala_augmented_lagrangian_gamma<=0.0))
+      myerror(E,"Strict ALA Stage A/B/C diagnostics require ALA and gamma_AL > 0");
+  if(E->control.ala_stage_abc_production_logging &&
+     strcmp(E->control.ala_outer_solver,"fgmres")!=0)
+      myerror(E,"Strict ALA Stage-C logging requires ala_outer_solver=fgmres");
+  if(E->control.ala_stage_abc_production_logging &&
+     E->control.ala_unaugmented_momentum_tolerance<=0.0)
+      myerror(E,"Strict ALA Stage-C logging requires the physical momentum gate");
   if(E->control.ala_depth_diagnostic_bins < 1 ||
      E->control.ala_depth_diagnostic_bins > 128)
       myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
@@ -1713,6 +1731,19 @@ void global_default_values(E)
     E->control.ala_schur_diagnostic_progress_interval = 100;
     E->control.ala_schur_diagnostic_random_seed = 20080516;
     E->control.ala_schur_diagnostic_viscosity_mode = 0;
+    E->control.ala_stage_abc_adjoint_diagnostic = 0;
+    E->control.ala_stage_abc_production_logging = 0;
+    E->control.ala_stage_abc_inner_call_count = 0;
+    E->control.ala_stage_abc_inner_cycle_count = 0;
+    E->control.ala_stage_abc_schur_action_count = 0;
+    E->control.ala_stage_abc_preconditioner_count = 0;
+    E->control.ala_stage_abc_k_application_count = 0;
+    E->control.ala_stage_abc_inner_seconds = 0.0;
+    E->control.ala_stage_abc_fgmres_start = 0.0;
+    E->control.ala_stage_abc_bpi_seconds = 0.0;
+    E->control.ala_stage_abc_schwarz_seconds = 0.0;
+    E->control.ala_stage_abc_outer_iteration = -1;
+    strcpy(E->control.ala_stage_abc_inner_role,"unclassified");
     E->control.ala_coupled_shallow_vanka_layers = 0;
     E->control.ala_coupled_shallow_vanka_core_layers = -1;
     E->control.ala_coupled_shallow_vanka_band_sweeps = 0;

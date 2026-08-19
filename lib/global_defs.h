@@ -509,6 +509,19 @@ struct CONTROL {
     int ala_schur_diagnostic_random_seed;
     /* Internal OLD/NEW selector; never populated from user input. */
     int ala_schur_diagnostic_viscosity_mode;
+    int ala_stage_abc_adjoint_diagnostic;
+    int ala_stage_abc_production_logging;
+    long long ala_stage_abc_inner_call_count;
+    long long ala_stage_abc_inner_cycle_count;
+    long long ala_stage_abc_schur_action_count;
+    long long ala_stage_abc_preconditioner_count;
+    long long ala_stage_abc_k_application_count;
+    double ala_stage_abc_inner_seconds;
+    double ala_stage_abc_fgmres_start;
+    double ala_stage_abc_bpi_seconds;
+    double ala_stage_abc_schwarz_seconds;
+    int ala_stage_abc_outer_iteration;
+    char ala_stage_abc_inner_role[48];
     int ala_coupled_shallow_vanka_layers;
     int ala_coupled_shallow_vanka_core_layers;
     int ala_coupled_shallow_vanka_band_sweeps;

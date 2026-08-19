@@ -30,6 +30,7 @@
 /*   Functions which solve for the velocity and pressure fields using Uzawa-type iteration loop.  */
 
 #include <math.h>
+#include <float.h>
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
@@ -43,6 +44,7 @@ void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
 void assemble_grad_c_p(struct All_variables *,double **,double **,int);
 int solve_del2_u_bounded(struct All_variables *,double **,double **,double,
                          int,int,int);
+double CPU_time0(void);
 
 void myerror(struct All_variables *,char *);
 double assemble_Ahatp_jacobi_entry(struct All_variables *,int,int,int,int);
@@ -152,6 +154,23 @@ static void strict_ala_momentum_decomposition_audit(
 static double strict_ala_inner_accuracy(struct All_variables *E,
                                         double **F, int lev,
                                         double relative_accuracy);
+static int strict_ala_stage_c_velocity_solve(struct All_variables *E,
+                                             double **u, double **rhs,
+                                             double target, int lev,
+                                             int iteration,
+                                             const char *role);
+static void strict_ala_stage_c_momentum_metrics(
+    struct All_variables *E, double **V, double **P, double **force_work,
+    double **grad_work, double **residual_work, int lev,
+    double *numerator, double *denominator, double *rms, double *relative);
+static void strict_ala_stage_c_log_iteration(
+    struct All_variables *E, int iteration, int restart_cycle,
+    double recursive_residual, double explicit_residual,
+    double krylov_drift, double continuity_numerator,
+    double continuity_denominator, double continuity_relative,
+    double momentum_numerator, double momentum_denominator,
+    double momentum_relative, double momentum_rms,
+    int restart_boundary, int best_iterate, int final_iterate);
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               double **r, double **z,
                                               double **work, int lev,
@@ -1110,6 +1129,250 @@ void strict_ala_schur_diagnostic(struct All_variables *E)
         MPI_Finalize();
         exit(EXIT_SUCCESS);
     }
+}
+
+
+#define ALA_STAGE_B_PROBE_COUNT 7
+
+static const int ala_stage_b_probe_ids[ALA_STAGE_B_PROBE_COUNT]={1,2,5,6,7,17,18};
+
+static void ala_stage_b_apply_forward(struct All_variables *E,int operator_id,
+                                      double **u,double **result,int lev)
+{
+    void assemble_div_u(),assemble_c_u(),assemble_div_rho_u();
+    if(operator_id==0) assemble_div_u(E,u,result,lev);
+    else if(operator_id==1) {
+        ala_schur_zero_pressure(E,result,lev);
+        assemble_c_u(E,u,result,lev);
+    }
+    else assemble_div_rho_u(E,u,result,lev);
+}
+
+static void ala_stage_b_apply_transpose(struct All_variables *E,int operator_id,
+                                        double **q,double **result,int lev)
+{
+    void assemble_grad_p();
+    if(operator_id==0) assemble_grad_p(E,q,result,lev);
+    else if(operator_id==1) assemble_grad_c_p(E,q,result,lev);
+    else assemble_grad_rho_p(E,q,result,lev);
+}
+
+static void ala_stage_b_build_velocity(struct All_variables *E,int kind,
+                                       double **u,int lev)
+{
+    int m,node,d,eq;
+    double theta,phi,r,value,norm;
+    double global_vdot();
+    void strip_bcs_from_residual();
+    const double pi=3.14159265358979323846;
+
+    ala_schur_zero_velocity(E,u,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(node=1;node<=E->lmesh.NNO[lev];node++) {
+            theta=E->SX[lev][m][1][node];
+            phi=E->SX[lev][m][2][node];
+            r=E->SX[lev][m][3][node];
+            for(d=1;d<=3;d++) {
+                eq=E->ID[lev][m][node].doff[d];
+                if(kind==0)
+                    value=sin((double)d*theta)*cos((double)(d+1)*phi)
+                          *sin(pi*(r-E->sphere.ri)
+                               /max(1.0-E->sphere.ri,DBL_MIN));
+                else
+                    value=sin(12.9898*theta+78.233*phi+37.719*r
+                              +19.19*(double)d);
+                u[m][eq]=value;
+            }
+        }
+    strip_bcs_from_residual(E,u,lev);
+    norm=sqrt(global_vdot(E,u,u,lev));
+    if(!isfinite(norm) || norm<=DBL_MIN)
+        myerror(E,"Degenerate strict-ALA Stage-B velocity probe");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(eq=0;eq<E->lmesh.NEQ[lev];eq++) u[m][eq]/=norm;
+}
+
+static double ala_stage_b_velocity_difference(struct All_variables *E,
+                                               double **a,double **b,int lev)
+{
+    int m,i;
+    double norm;
+    double global_vdot();
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) b[m][i]-=a[m][i];
+    norm=sqrt(max(global_vdot(E,b,b,lev),0.0));
+    return norm;
+}
+
+static double ala_stage_b_pressure_difference(struct All_variables *E,
+                                               double **a,double **b,int lev)
+{
+    int m,e;
+    double norm;
+    double global_pdot();
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) b[m][e]-=a[m][e];
+    norm=sqrt(max(global_pdot(E,b,b,lev),0.0));
+    return norm;
+}
+
+void strict_ala_stage_B_diagnostic(struct All_variables *E)
+{
+    int ip,iv,op,m,e,i,csv_ok=1;
+    int probe_id;
+    char adjoint_path[512],gauge_path[512],layout[64];
+    FILE *adjoint=NULL,*gauge=NULL;
+    double lhs,rhs,lhs2,rhs2,abs_defect,qnorm,unorm,aunorm,atnorm;
+    double denom_lr,denom_action,repeat_abs,repeat_relative,scale_floor;
+    double delta_lr,delta_scale,at_repeat,au_repeat,reduction_factor;
+    double dnorm,cnorm,bnorm,sum_norm,split_abs,split_relative;
+    double snorm,qts,ratio_d,ratio_b,srepeat_abs,srepeat_relative,achieved;
+    double global_vdot(),global_pdot();
+    const int lev=E->mesh.levmax;
+    const int neq=E->lmesh.NEQ[lev];
+    const int npno=E->lmesh.NPNO[lev];
+    const char *operator_names[3]={"D","C","B"};
+    const char *velocity_names[2]={"structured","fixed_random"};
+    double **q=ala_schur_alloc_pressure(E,lev);
+    double **frozen=ala_schur_alloc_pressure(E,lev);
+    double **au=ala_schur_alloc_pressure(E,lev);
+    double **au2=ala_schur_alloc_pressure(E,lev);
+    double **s1=ala_schur_alloc_pressure(E,lev);
+    double **s2=ala_schur_alloc_pressure(E,lev);
+    double **u=ala_schur_alloc_velocity(E,lev);
+    double **at=ala_schur_alloc_velocity(E,lev);
+    double **at2=ala_schur_alloc_velocity(E,lev);
+    double **dt=ala_schur_alloc_velocity(E,lev);
+    double **ct=ala_schur_alloc_velocity(E,lev);
+    double **bt=ala_schur_alloc_velocity(E,lev);
+    double **solution1=ala_schur_alloc_velocity(E,lev);
+    double **solution2=ala_schur_alloc_velocity(E,lev);
+    double **work=ala_schur_alloc_velocity(E,lev);
+
+    snprintf(layout,sizeof(layout),"%dx%dx%d",
+             E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz);
+    if(E->parallel.me==0) {
+        snprintf(adjoint_path,sizeof(adjoint_path),
+                 "%s.strict_ala_stage_B_adjoint.csv",E->control.data_file);
+        snprintf(gauge_path,sizeof(gauge_path),
+                 "%s.strict_ala_stage_B_gauge.csv",E->control.data_file);
+        adjoint=fopen(adjoint_path,"w");
+        gauge=fopen(gauge_path,"w");
+        csv_ok=(adjoint!=NULL && gauge!=NULL);
+    }
+    MPI_Bcast(&csv_ok,1,MPI_INT,0,E->parallel.world);
+    if(!csv_ok) myerror(E,"Unable to open strict-ALA Stage-B output");
+    if(E->parallel.me==0) {
+        fprintf(adjoint,"layout,operator,probe,velocity_probe,lhs,rhs,signed_defect,absolute_defect,u_norm,q_norm,Au_norm,ATq_norm,denom_lr,denom_action,repeat_lhs_abs,repeat_rhs_abs,repeat_ATq_norm,repeat_Au_norm,repeatability_relative,scale_floor,delta_lr,delta_scale\n");
+        fprintf(gauge,"layout,probe,q_norm,DTq_norm,CTq_norm,BTq_norm,S_gamma_q_norm,qT_S_gamma_q,ratio_D,ratio_B,BT_sum_norm,BT_split_absolute,BT_split_relative,repeat_action_absolute,repeat_action_relative,achieved_first,achieved_second,scale_floor\n");
+        fprintf(E->fp,"STRICT_ALA_STAGE_B_BEGIN layout=%s probes=%d velocity_probes=2 operators=D,C,B observation_only=on\n",
+                layout,ALA_STAGE_B_PROBE_COUNT);
+        fflush(E->fp);
+    }
+    reduction_factor=1.0+log((double)max(E->parallel.nproc,1))/log(2.0);
+
+    for(ip=0;ip<ALA_STAGE_B_PROBE_COUNT;ip++) {
+        probe_id=ala_stage_b_probe_ids[ip];
+        ala_schur_build_probe(E,probe_id,q,frozen,lev);
+        qnorm=sqrt(global_pdot(E,q,q,lev));
+        for(iv=0;iv<2;iv++) {
+            ala_stage_b_build_velocity(E,iv,u,lev);
+            unorm=sqrt(global_vdot(E,u,u,lev));
+            for(op=0;op<3;op++) {
+                ala_stage_b_apply_transpose(E,op,q,at,lev);
+                ala_stage_b_apply_forward(E,op,u,au,lev);
+                lhs=global_vdot(E,u,at,lev);
+                rhs=global_pdot(E,q,au,lev);
+                atnorm=sqrt(max(global_vdot(E,at,at,lev),0.0));
+                aunorm=sqrt(max(global_pdot(E,au,au,lev),0.0));
+                ala_stage_b_apply_transpose(E,op,q,at2,lev);
+                ala_stage_b_apply_forward(E,op,u,au2,lev);
+                lhs2=global_vdot(E,u,at2,lev);
+                rhs2=global_pdot(E,q,au2,lev);
+                at_repeat=ala_stage_b_velocity_difference(E,at,at2,lev);
+                au_repeat=ala_stage_b_pressure_difference(E,au,au2,lev);
+                abs_defect=fabs(lhs-rhs);
+                denom_lr=max(fabs(lhs),fabs(rhs));
+                denom_action=max(unorm*atnorm,qnorm*aunorm);
+                repeat_abs=max(fabs(lhs-lhs2),fabs(rhs-rhs2));
+                repeat_relative=repeat_abs/max(denom_action,DBL_MIN);
+                scale_floor=max(repeat_abs,
+                    DBL_EPSILON*reduction_factor*(denom_lr+denom_action));
+                scale_floor=max(scale_floor,DBL_MIN);
+                delta_lr=abs_defect/max(denom_lr,scale_floor);
+                delta_scale=abs_defect/max(max(denom_lr,denom_action),scale_floor);
+                if(E->parallel.me==0)
+                    fprintf(adjoint,
+                        "%s,%s,%s,%s,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e\n",
+                        layout,operator_names[op],ala_schur_probe_names[probe_id],
+                        velocity_names[iv],lhs,rhs,lhs-rhs,abs_defect,unorm,
+                        qnorm,aunorm,atnorm,denom_lr,denom_action,
+                        fabs(lhs-lhs2),fabs(rhs-rhs2),at_repeat,au_repeat,
+                        repeat_relative,scale_floor,delta_lr,delta_scale);
+            }
+        }
+
+        if(probe_id==6 || probe_id==7 || probe_id==17 || probe_id==18) {
+            ala_stage_b_apply_transpose(E,0,q,dt,lev);
+            ala_stage_b_apply_transpose(E,1,q,ct,lev);
+            ala_stage_b_apply_transpose(E,2,q,bt,lev);
+            dnorm=sqrt(max(global_vdot(E,dt,dt,lev),0.0));
+            cnorm=sqrt(max(global_vdot(E,ct,ct,lev),0.0));
+            bnorm=sqrt(max(global_vdot(E,bt,bt,lev),0.0));
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=0;i<neq;i++) at[m][i]=dt[m][i]+ct[m][i];
+            sum_norm=sqrt(max(global_vdot(E,at,at,lev),0.0));
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=0;i<neq;i++) at2[m][i]=bt[m][i]-at[m][i];
+            split_abs=sqrt(max(global_vdot(E,at2,at2,lev),0.0));
+            split_relative=split_abs/max(max(bnorm,sum_norm),DBL_MIN);
+
+            achieved=ala_schur_tight_solve(E,solution1,bt,work,lev,
+                E->control.ala_schur_diagnostic_tight_tolerance);
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=1;e<=npno;e++) s1[m][e]=0.0;
+            ala_stage_b_apply_forward(E,2,solution1,s1,lev);
+            qts=global_pdot(E,q,s1,lev);
+            snorm=sqrt(max(global_pdot(E,s1,s1,lev),0.0));
+            {
+                double achieved2=ala_schur_tight_solve(E,solution2,bt,work,lev,
+                    E->control.ala_schur_diagnostic_tight_tolerance);
+                ala_stage_b_apply_forward(E,2,solution2,s2,lev);
+                srepeat_abs=ala_stage_b_pressure_difference(E,s1,s2,lev);
+                srepeat_relative=srepeat_abs/max(snorm,DBL_MIN);
+                ratio_d=dnorm/max(qnorm,DBL_MIN);
+                ratio_b=bnorm/max(qnorm,DBL_MIN);
+                scale_floor=max(srepeat_abs,
+                    DBL_EPSILON*reduction_factor*max(snorm,bnorm));
+                scale_floor=max(scale_floor,DBL_MIN);
+                if(E->parallel.me==0)
+                    fprintf(gauge,
+                        "%s,%s,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e\n",
+                        layout,ala_schur_probe_names[probe_id],qnorm,dnorm,cnorm,
+                        bnorm,snorm,qts,ratio_d,ratio_b,sum_norm,split_abs,
+                        split_relative,srepeat_abs,srepeat_relative,achieved,
+                        achieved2,scale_floor);
+            }
+        }
+    }
+    if(E->parallel.me==0) {
+        fflush(adjoint); fflush(gauge);
+        fclose(adjoint); fclose(gauge);
+        fprintf(E->fp,"STRICT_ALA_STAGE_B_COMPLETE layout=%s adjoint_rows=%d gauge_rows=4\n",
+                layout,ALA_STAGE_B_PROBE_COUNT*2*3);
+        fflush(E->fp);
+    }
+    ala_schur_free_field(E,q); ala_schur_free_field(E,frozen);
+    ala_schur_free_field(E,au); ala_schur_free_field(E,au2);
+    ala_schur_free_field(E,s1); ala_schur_free_field(E,s2);
+    ala_schur_free_field(E,u); ala_schur_free_field(E,at);
+    ala_schur_free_field(E,at2); ala_schur_free_field(E,dt);
+    ala_schur_free_field(E,ct); ala_schur_free_field(E,bt);
+    ala_schur_free_field(E,solution1); ala_schur_free_field(E,solution2);
+    ala_schur_free_field(E,work);
+    MPI_Barrier(E->parallel.world);
+    MPI_Finalize();
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -2533,6 +2796,97 @@ static float solve_ala_coupled_fgmres_core(
  * stores both the preconditioned pressure vectors and their velocity
  * corrections, so the original coupled (P,V) iterate is updated with the
  * same transpose and K^{-1} actions used by the PCG path. */
+static int strict_ala_stage_c_velocity_solve(struct All_variables *E,
+                                             double **u, double **rhs,
+                                             double target, int lev,
+                                             int iteration,
+                                             const char *role)
+{
+    int solve_del2_u_bounded();
+    int ok;
+    E->control.ala_stage_abc_outer_iteration=iteration;
+    strncpy(E->control.ala_stage_abc_inner_role,role,
+            sizeof(E->control.ala_stage_abc_inner_role)-1);
+    E->control.ala_stage_abc_inner_role[
+        sizeof(E->control.ala_stage_abc_inner_role)-1]='\0';
+    ok=solve_del2_u_bounded(E,u,rhs,target,lev,
+                            max(E->control.v_steps_low,1),100);
+    E->control.ala_stage_abc_schur_action_count++;
+    return ok;
+}
+
+static void strict_ala_stage_c_momentum_metrics(
+    struct All_variables *E, double **V, double **P, double **force_work,
+    double **grad_work, double **residual_work, int lev,
+    double *numerator, double *denominator, double *rms, double *relative)
+{
+    int m,i,neq,gneq;
+    double force_norm,residual_norm;
+    void assemble_forces_into();
+    void assemble_unaugmented_del2_u();
+    void assemble_grad_p();
+    void strip_bcs_from_residual();
+    double global_vdot();
+    neq=E->lmesh.neq;
+    gneq=E->mesh.neq;
+    assemble_forces_into(E,0,force_work);
+    assemble_unaugmented_del2_u(E,V,residual_work,lev,1);
+    assemble_grad_p(E,P,grad_work,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)
+            residual_work[m][i]=force_work[m][i]-grad_work[m][i]
+                                -residual_work[m][i];
+    strip_bcs_from_residual(E,residual_work,lev);
+    force_norm=sqrt(max(global_vdot(E,force_work,force_work,lev),0.0));
+    residual_norm=sqrt(max(global_vdot(E,residual_work,residual_work,lev),0.0));
+    *numerator=residual_norm;
+    *denominator=max(force_norm,1.0e-32);
+    *rms=residual_norm/sqrt(max((double)gneq,1.0));
+    *relative=residual_norm/(*denominator);
+}
+
+static void strict_ala_stage_c_log_iteration(
+    struct All_variables *E, int iteration, int restart_cycle,
+    double recursive_residual, double explicit_residual,
+    double krylov_drift, double continuity_numerator,
+    double continuity_denominator, double continuity_relative,
+    double momentum_numerator, double momentum_denominator,
+    double momentum_relative, double momentum_rms,
+    int restart_boundary, int best_iterate, int final_iterate)
+{
+    FILE *fp;
+    char path[512];
+    int header;
+    const char *case_name=getenv("STRICT_ALA_CASE");
+    if(case_name==NULL) case_name="UNKNOWN";
+    if(!E->control.ala_stage_abc_production_logging || E->parallel.me!=0)
+        return;
+    snprintf(path,sizeof(path),"%s.strict_ala_stage_C_iterations.csv",
+             E->control.data_file);
+    fp=fopen(path,"a+");
+    if(fp==NULL)
+        myerror(E,"Unable to open strict-ALA Stage-C iteration log");
+    fseek(fp,0,SEEK_END);
+    header=(ftell(fp)==0);
+    if(header)
+        fprintf(fp,"case,iteration,restart_cycle,krylov_recursive,krylov_explicit,krylov_drift,continuity_numerator,continuity_denominator,continuity_relative,momentum_numerator,momentum_denominator,momentum_relative,momentum_rms,cumulative_inner_solves,cumulative_inner_cycles,cumulative_K_gamma_applications,cumulative_schur_actions,cumulative_preconditioner_applications,bpi_construction_seconds,schwarz_construction_seconds,elapsed_seconds,restart_boundary,best_iterate,final_iterate\n");
+    fprintf(fp,"%s,%d,%d,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%lld,%lld,%lld,%lld,%lld,%.17e,%.17e,%.17e,%d,%d,%d\n",
+            case_name,iteration,restart_cycle,recursive_residual,explicit_residual,
+            krylov_drift,continuity_numerator,continuity_denominator,
+            continuity_relative,momentum_numerator,momentum_denominator,
+            momentum_relative,momentum_rms,
+            E->control.ala_stage_abc_inner_call_count,
+            E->control.ala_stage_abc_inner_cycle_count,
+            E->control.ala_stage_abc_k_application_count,
+            E->control.ala_stage_abc_schur_action_count,
+            E->control.ala_stage_abc_preconditioner_count,
+            E->control.ala_stage_abc_bpi_seconds,
+            E->control.ala_stage_abc_schwarz_seconds,
+            CPU_time0()-E->control.ala_stage_abc_fgmres_start,
+            restart_boundary,best_iterate,final_iterate);
+    fclose(fp);
+}
+
 static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                                    double **P, int *steps_max, int lev,
                                    struct ala_pressure_preconditioner_cache
@@ -2543,9 +2897,11 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     void assemble_grad_rho_p();
     void strip_bcs_from_residual();
     int solve_del2_u();
+    int solve_del2_u_bounded();
     void parallel_process_termination();
     double global_pdot();
     double global_vdot();
+    double CPU_time0();
     int m,j,i,e,count,valid,levnpno,neq,restart,used;
     int arnoldi_breakdown,converged;
     int momentum_gate,continuity_converged,momentum_converged;
@@ -2555,6 +2911,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double term_strength,initial_term_strength,velocity_norm;
     double initial_velocity_norm;
     double momentum_rms,momentum_relative;
+    double stage_momentum_num,stage_momentum_den,stage_momentum_rms,
+           stage_momentum_relative,stage_continuity_den;
     double initial_rnorm,residual_est,residual,delta;
     double audit_best_cancellation;
     double sum,explicit_norm;
@@ -2570,6 +2928,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
     double **w,**tmpF,**tmpU,**pressure_defect,**pressure_correction;
     double **pressure_correction_action;
+    double **stage_force,**stage_grad,**stage_residual;
     double ***vb,***zb,***ub;
     int max_basis;
     struct ala_block_vector pressure_residual_view;
@@ -2591,9 +2950,13 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     pressure_defect=(double **)calloc(NCS,sizeof(double *));
     pressure_correction=(double **)calloc(NCS,sizeof(double *));
     pressure_correction_action=(double **)calloc(NCS,sizeof(double *));
+    stage_force=(double **)calloc(NCS,sizeof(double *));
+    stage_grad=(double **)calloc(NCS,sizeof(double *));
+    stage_residual=(double **)calloc(NCS,sizeof(double *));
     if(vb==NULL || zb==NULL || ub==NULL || w==NULL || tmpF==NULL ||
        tmpU==NULL || pressure_defect==NULL || pressure_correction==NULL ||
-       pressure_correction_action==NULL)
+       pressure_correction_action==NULL || stage_force==NULL ||
+       stage_grad==NULL || stage_residual==NULL)
         myerror(E,"Unable to allocate ALA FGMRES basis tables");
     for(j=0;j<max_basis;j++) {
         vb[j]=(double **)calloc(NCS,sizeof(double *));
@@ -2619,9 +2982,13 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         pressure_correction[m]=(double *)calloc(levnpno+1,sizeof(double));
         pressure_correction_action[m]=
             (double *)calloc(levnpno+1,sizeof(double));
+        stage_force[m]=(double *)calloc(neq+1,sizeof(double));
+        stage_grad[m]=(double *)calloc(neq+1,sizeof(double));
+        stage_residual[m]=(double *)calloc(neq+1,sizeof(double));
         if(w[m]==NULL || tmpF[m]==NULL || tmpU[m]==NULL ||
            pressure_defect[m]==NULL || pressure_correction[m]==NULL ||
-           pressure_correction_action[m]==NULL)
+           pressure_correction_action[m]==NULL || stage_force[m]==NULL ||
+           stage_grad[m]==NULL || stage_residual[m]==NULL)
             myerror(E,"Unable to allocate ALA FGMRES operator workspace");
         for(j=0;j<max_basis;j++) {
             vb[j][m]=(double *)calloc(levnpno+1,sizeof(double));
@@ -2640,6 +3007,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     initial_mass_norm=0.0;
     assemble_div_rho_u(E,V,r,lev);
     initial_rnorm=sqrt(global_pdot(E,r,r,lev));
+    if(E->control.ala_stage_abc_production_logging)
+        E->control.ala_stage_abc_fgmres_start=CPU_time0();
     assemble_div_rho_u(E,V,explicit_r,lev);
     strict_ala_continuity_metrics(E,V,r,div_u,lev,&initial_mass_norm,
                                   &cancellation_l2);
@@ -2683,7 +3052,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
-    strict_ala_momentum_decomposition_audit(
+            strict_ala_momentum_decomposition_audit(
         E,V,P,tmpF,tmpU,lev,"startup",0,
         &momentum_rms,&momentum_relative);
     momentum_converged=(!momentum_gate ||
@@ -2725,6 +3094,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             apply_ala_pressure_preconditioner(E,vb[j],zb[j],
                                               preconditioner_work,lev,count,
                                               cache);
+            if(E->control.ala_stage_abc_production_logging)
+                E->control.ala_stage_abc_preconditioner_count++;
             if(E->control.ala_pressure_defect_corrections>0) {
                 pressure_defect_damping=
                     E->control.ala_pressure_defect_damping;
@@ -2735,7 +3106,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 assemble_grad_rho_p(E,zb[j],tmpF,lev);
                 inner_accuracy=strict_ala_inner_accuracy(
                     E,tmpF,lev,E->control.ala_inner_accuracy_max);
-                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                valid=E->control.ala_stage_abc_production_logging
+                    ? strict_ala_stage_c_velocity_solve(E,tmpU,tmpF,
+                        inner_accuracy,lev,count,"defect_base")
+                    : solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
                 if(!valid)
                     parallel_process_termination();
                 strip_bcs_from_residual(E,tmpU,lev);
@@ -2763,10 +3137,15 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 apply_ala_pressure_preconditioner(
                     E,pressure_defect,pressure_correction,
                     preconditioner_work,lev,-1,cache);
+                if(E->control.ala_stage_abc_production_logging)
+                    E->control.ala_stage_abc_preconditioner_count++;
                 assemble_grad_rho_p(E,pressure_correction,tmpF,lev);
                 inner_accuracy=strict_ala_inner_accuracy(
                     E,tmpF,lev,E->control.ala_inner_accuracy_max);
-                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                valid=E->control.ala_stage_abc_production_logging
+                    ? strict_ala_stage_c_velocity_solve(E,tmpU,tmpF,
+                        inner_accuracy,lev,count,"defect_correction")
+                    : solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
                 if(!valid)
                     parallel_process_termination();
                 strip_bcs_from_residual(E,tmpU,lev);
@@ -2861,7 +3240,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 assemble_grad_rho_p(E,zb[j],tmpF,lev);
                 inner_accuracy=strict_ala_inner_accuracy(
                     E,tmpF,lev,E->control.ala_inner_accuracy_max);
-                valid=solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
+                valid=E->control.ala_stage_abc_production_logging
+                    ? strict_ala_stage_c_velocity_solve(E,tmpU,tmpF,
+                        inner_accuracy,lev,count,"schur_action")
+                    : solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev);
                 if(!valid)
                     parallel_process_termination();
                 strip_bcs_from_residual(E,tmpU,lev);
@@ -3046,6 +3428,24 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             else if(!momentum_gate)
                 momentum_converged=1;
             converged=(continuity_converged && momentum_converged);
+            if(E->control.ala_stage_abc_production_logging) {
+                strict_ala_stage_c_momentum_metrics(
+                    E,V,P,stage_force,stage_grad,stage_residual,lev,
+                    &stage_momentum_num,&stage_momentum_den,
+                    &stage_momentum_rms,&stage_momentum_relative);
+                stage_continuity_den=mass_norm/
+                    max(cancellation_l2,1.0e-300);
+                strict_ala_stage_c_log_iteration(
+                    E,count,(count-1)/max(restart,1)+1,
+                    residual_est*initial_rnorm,explicit_norm,
+                    residual_est/max(algebraic_relative,1.0e-300),
+                    mass_norm,stage_continuity_den,cancellation_l2,
+                    stage_momentum_num,stage_momentum_den,
+                    stage_momentum_relative,stage_momentum_rms,
+                    (count%restart)==0,
+                    cancellation_l2<=audit_best_cancellation,
+                    (converged || arnoldi_breakdown || count==*steps_max));
+            }
             if(converged || arnoldi_breakdown)
                 break;
             for(i=0;i<used;i++)
@@ -3098,6 +3498,17 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
     }
     if(!converged) {
+        if(E->control.ala_stage_abc_production_logging) {
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"STRICT_ALA_STAGE_C_NUMERICAL_NONCONVERGENCE "
+                        "iterations=%d continuity=%e target=%e "
+                        "momentum=%e target=%e\n",count,residual,
+                        E->control.tole_comp,momentum_relative,
+                        E->control.ala_unaugmented_momentum_tolerance);
+                fflush(E->fp);
+            }
+        }
+        else {
         if(E->parallel.me==0) {
             fprintf(E->fp,"Strict ALA FGMRES failed joint acceptance: "
                     "cancellation=%e tolerance=%e momentum_relative=%e "
@@ -3116,6 +3527,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             fflush(E->fp);
         }
         parallel_process_termination();
+        }
     }
     *steps_max=count;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -3125,6 +3537,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         free((void *)pressure_defect[m]);
         free((void *)pressure_correction[m]);
         free((void *)pressure_correction_action[m]);
+        free((void *)stage_force[m]);
+        free((void *)stage_grad[m]);
+        free((void *)stage_residual[m]);
         for(j=0;j<max_basis;j++)
             free((void *)vb[j][m]);
         for(j=0;j<restart;j++) {
@@ -3147,6 +3562,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     free((void *)pressure_defect);
     free((void *)pressure_correction);
     free((void *)pressure_correction_action);
+    free((void *)stage_force);
+    free((void *)stage_grad);
+    free((void *)stage_residual);
     return((float)residual);
 }
 
@@ -4398,6 +4816,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     build_seconds=CPU_time0()-build_start;
     MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
+    if(E->control.ala_stage_abc_production_logging)
+        E->control.ala_stage_abc_schwarz_seconds+=global_build_seconds;
     if(global_blocks+global_fallback==0)
         myerror(E,"ALA shallow-patch depth selects no global elements");
     if(global_interface_blocks==0)
@@ -10205,7 +10625,10 @@ static double initial_vel_residual(struct All_variables *E,
 
 
     /* solve K*u1 = F for u1 */
-    valid = solve_del2_u(E, E->u1, F, imp*v_res, lev);
+    valid = E->control.ala_stage_abc_production_logging
+        ? strict_ala_stage_c_velocity_solve(E,E->u1,F,imp*v_res,lev,
+                                            -1,"initial_momentum")
+        : solve_del2_u(E, E->u1, F, imp*v_res, lev);
     if(!valid && (E->parallel.me==0)) {
         fputs("Warning: solver not converging! 0\n", stderr);
         fputs("Warning: solver not converging! 0\n", E->fp);
