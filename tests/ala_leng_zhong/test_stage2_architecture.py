@@ -57,6 +57,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertRegex(component,
                          r'ala_leng_zhong_stage4\s*=\s*prop\.bool\('
                          r'"ala_leng_zhong_stage4",\s*default=False\)')
+        self.assertRegex(component,
+                         r'ala_leng_zhong_stage5\s*=\s*prop\.bool\('
+                         r'"ala_leng_zhong_stage5",\s*default=False\)')
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -147,7 +150,29 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertLess(force, solve)
         self.assertNotIn("assemble_grad_rho_p", inner)
 
-    def test_stage4_run_files_enable_only_appendix_a_c_and_w(self):
+    def test_stage5_audits_complete_fixed_point_after_outer_iteration(self):
+        definitions = read("lib/global_defs.h")
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        outer = function_body(stokes, "solve_Ahat_p_fhat_iterCG")
+        momentum = function_body(
+            stokes, "strict_ala_momentum_residual_audit")
+
+        self.assertIn("int ala_leng_zhong_stage5;", definitions)
+        self.assertIn("LENG_ZHONG_STAGE5_RESULT", outer)
+        loop_end = outer.index("} /* end of while */")
+        continuity = outer.index("assemble_div_rho_u(E,V,diff_p,lev)")
+        momentum_audit = outer.index("strict_ala_momentum_residual_audit")
+        self.assertLess(loop_end, continuity)
+        self.assertLess(continuity, momentum_audit)
+        self.assertIn("strict_ala_continuity_metrics", outer)
+        self.assertIn("assemble_unaugmented_del2_u", momentum)
+        self.assertIn("assemble_forces(E,0)", momentum)
+        self.assertIn("assemble_grad_p", momentum)
+        self.assertNotIn("assemble_grad_rho_p", momentum)
+        inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
+        self.assertNotIn("assemble_grad_rho_p", inner)
+
+    def test_stage5_run_files_enable_fixed_point_audit(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
@@ -162,6 +187,10 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "ala_leng_zhong_2008": "on",
             "ala_leng_zhong_stage3": "on",
             "ala_leng_zhong_stage4": "on",
+            "ala_leng_zhong_stage5": "on",
+            "ala_leng_zhong_stage5_continuity_tolerance": "1e-3",
+            "ala_leng_zhong_stage5_momentum_tolerance": "1e-3",
+            "ala_leng_zhong_stage5_initial_guess_scale": "1.0",
             "uzawa": "cg",
             "precond": "on",
             "aug_lagr": "off",
@@ -184,10 +213,10 @@ class Stage2ArchitectureTest(unittest.TestCase):
             self.assertRegex(cfg, r"(?m)^%s\s*=\s*%s\s*$" %
                              (re.escape(key), re.escape(value)))
 
-        self.assertIn("#BSUB -J CMBHF_LZ08_S4", lsf)
+        self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage4_ala_assimilation", lsf)
+        self.assertIn("stage5_fixed_point_baseline", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.

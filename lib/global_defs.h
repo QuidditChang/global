@@ -474,6 +474,10 @@ struct CONTROL {
     int ala_leng_zhong_2008;
     int ala_leng_zhong_stage3;
     int ala_leng_zhong_stage4;
+    int ala_leng_zhong_stage5;
+    double ala_leng_zhong_stage5_continuity_tolerance;
+    double ala_leng_zhong_stage5_momentum_tolerance;
+    double ala_leng_zhong_stage5_initial_guess_scale;
     double ala_augmented_lagrangian_gamma;
 
     /* strict-ALA Krylov diagnostics and inexact velocity solves */

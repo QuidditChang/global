@@ -112,6 +112,14 @@ class Incompressible(CitcomComponent):
                                           default=False)
         ala_leng_zhong_stage4 = prop.bool("ala_leng_zhong_stage4",
                                           default=False)
+        ala_leng_zhong_stage5 = prop.bool("ala_leng_zhong_stage5",
+                                          default=False)
+        ala_leng_zhong_stage5_continuity_tolerance = prop.float(
+            "ala_leng_zhong_stage5_continuity_tolerance", default=1.0e-3)
+        ala_leng_zhong_stage5_momentum_tolerance = prop.float(
+            "ala_leng_zhong_stage5_momentum_tolerance", default=1.0e-3)
+        ala_leng_zhong_stage5_initial_guess_scale = prop.float(
+            "ala_leng_zhong_stage5_initial_guess_scale", default=1.0)
         ala_schur_symmetry_check = prop.bool("ala_schur_symmetry_check",
                                              default=False)
         ala_schur_symmetry_tolerance = prop.float(

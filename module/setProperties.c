@@ -1059,6 +1059,20 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_leng_zhong_stage3, fp);
     getIntProperty(properties, "ala_leng_zhong_stage4",
                    E->control.ala_leng_zhong_stage4, fp);
+    getIntProperty(properties, "ala_leng_zhong_stage5",
+                   E->control.ala_leng_zhong_stage5, fp);
+    getDoubleProperty(properties,
+                      "ala_leng_zhong_stage5_continuity_tolerance",
+                      E->control.ala_leng_zhong_stage5_continuity_tolerance,
+                      fp);
+    getDoubleProperty(properties,
+                      "ala_leng_zhong_stage5_momentum_tolerance",
+                      E->control.ala_leng_zhong_stage5_momentum_tolerance,
+                      fp);
+    getDoubleProperty(properties,
+                      "ala_leng_zhong_stage5_initial_guess_scale",
+                      E->control.ala_leng_zhong_stage5_initial_guess_scale,
+                      fp);
     getIntProperty(properties, "ala_schur_symmetry_check",
                    E->control.ala_schur_symmetry_check, fp);
     getDoubleProperty(properties, "ala_schur_symmetry_tolerance",
@@ -1314,6 +1328,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         !E->control.ala_pressure_buoyancy))
         myerror(E, "ala_leng_zhong_stage4 requires Stage 3 and "
                 "compressible_formulation=ala");
+    if(E->control.ala_leng_zhong_stage5 &&
+       !E->control.ala_leng_zhong_stage4)
+        myerror(E, "ala_leng_zhong_stage5 requires Stage 4");
+    if(E->control.ala_leng_zhong_stage5 &&
+       (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
+        E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
+        E->control.ala_leng_zhong_stage5_initial_guess_scale < 0.0 ||
+        E->control.ala_leng_zhong_stage5_initial_guess_scale > 1.0))
+        myerror(E, "Leng_Zhong Stage 5 requires positive equation "
+                "tolerances and initial_guess_scale in [0,1]");
     if(E->control.ala_leng_zhong_stage3 &&
        !E->control.ala_leng_zhong_stage4 &&
        E->control.ala_pressure_buoyancy)

@@ -8029,8 +8029,11 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
                 fprintf(E->fp, "%s operator=G^T_K^-1_G "
                         "velocity_operator=K_unaugmented bpi=D_only C=on "
                         "W=%s aug_lagr=%d gamma=%e\n",
-                        E->control.ala_leng_zhong_stage4
-                            ? "LENG_ZHONG_STAGE4" : "LENG_ZHONG_STAGE3",
+                        E->control.ala_leng_zhong_stage5
+                            ? "LENG_ZHONG_STAGE5"
+                            : (E->control.ala_leng_zhong_stage4
+                               ? "LENG_ZHONG_STAGE4"
+                               : "LENG_ZHONG_STAGE3"),
                         E->control.ala_leng_zhong_stage4 ? "on(lagged)"
                                                         : "off",
                         E->control.augmented_Lagr,
@@ -9884,7 +9887,11 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
 {
     int m, i;
     int cycles, num_of_loop;
-    double residual;
+    int outer_converged, equations_converged;
+    double residual, continuity_mass_norm, continuity_relative;
+    double momentum_rms, momentum_relative;
+    double velocity_rms, pressure_mean, pressure_gauge_rms, pressure_volume;
+    double local_pressure[2], global_pressure[2];
     double relative_err_v, relative_err_p;
     double *old_v[NCS], *old_p[NCS],*diff_v[NCS],*diff_p[NCS];
 
@@ -9894,6 +9901,21 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
 
     double global_vdot(),global_pdot();
     void assemble_forces();
+    void assemble_div_rho_u();
+    void velocities_conform_bcs();
+
+    if(E->control.ala_leng_zhong_stage5 &&
+       E->control.ala_leng_zhong_stage5_initial_guess_scale != 1.0) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(i=0;i<neq;i++)
+                V[m][i] *=
+                    E->control.ala_leng_zhong_stage5_initial_guess_scale;
+            for(i=1;i<=npno;i++)
+                P[m][i] *=
+                    E->control.ala_leng_zhong_stage5_initial_guess_scale;
+        }
+        velocities_conform_bcs(E,V);
+    }
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)   {
     	old_v[m] = (double *)malloc(neq*sizeof(double));
@@ -9957,6 +9979,70 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         }
 
     } /* end of while */
+
+    if(E->control.ala_leng_zhong_stage5) {
+        assemble_div_rho_u(E,V,diff_p,lev);
+        strict_ala_continuity_metrics(E,V,diff_p,old_p,lev,
+                                      &continuity_mass_norm,
+                                      &continuity_relative);
+        strict_ala_momentum_residual_audit(E,V,P,old_v,diff_v,lev,
+                                           &momentum_rms,
+                                           &momentum_relative);
+
+        velocity_rms = sqrt(global_vdot(E,V,V,lev)
+                            / max((double)E->mesh.neq,1.0));
+        local_pressure[0] = 0.0;
+        local_pressure[1] = 0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=E->lmesh.nel;i++) {
+                local_pressure[0] += E->eco[m][i].area * P[m][i];
+                local_pressure[1] += E->eco[m][i].area;
+            }
+        MPI_Allreduce(local_pressure,global_pressure,2,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        pressure_volume = global_pressure[1];
+        pressure_mean = global_pressure[0]
+                        / max(pressure_volume,1.0e-300);
+        local_pressure[0] = 0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=E->lmesh.nel;i++)
+                local_pressure[0] += E->eco[m][i].area
+                    * (P[m][i]-pressure_mean) * (P[m][i]-pressure_mean);
+        MPI_Allreduce(local_pressure,global_pressure,1,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        pressure_gauge_rms = sqrt(global_pressure[0]
+                                  / max(pressure_volume,1.0e-300));
+
+        outer_converged = relative_err_v < E->control.relative_err_accuracy &&
+                          relative_err_p < E->control.relative_err_accuracy;
+        equations_converged = isfinite(continuity_relative) &&
+            isfinite(momentum_relative) &&
+            continuity_relative <=
+                E->control.ala_leng_zhong_stage5_continuity_tolerance &&
+            momentum_relative <=
+                E->control.ala_leng_zhong_stage5_momentum_tolerance;
+        if(E->parallel.me==0) {
+            fprintf(E->fp,
+                    "LENG_ZHONG_STAGE5_RESULT status=%s outer_status=%s "
+                    "loops=%d epsilon_V=%e epsilon_P=%e outer_tolerance=%e "
+                    "continuity_mass_norm=%e continuity_relative=%e "
+                    "continuity_tolerance=%e momentum_rms=%e "
+                    "momentum_relative=%e momentum_tolerance=%e "
+                    "initial_guess_scale=%e velocity_rms=%e "
+                    "pressure_gauge_rms=%e pressure_mean=%e\n",
+                    outer_converged && equations_converged ? "pass" : "fail",
+                    outer_converged ? "converged" : "iteration_limit",
+                    num_of_loop,relative_err_v,relative_err_p,
+                    E->control.relative_err_accuracy,continuity_mass_norm,
+                    continuity_relative,
+                    E->control.ala_leng_zhong_stage5_continuity_tolerance,
+                    momentum_rms,momentum_relative,
+                    E->control.ala_leng_zhong_stage5_momentum_tolerance,
+                    E->control.ala_leng_zhong_stage5_initial_guess_scale,
+                    velocity_rms,pressure_gauge_rms,pressure_mean);
+            fflush(E->fp);
+        }
+    }
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)   {
     	free((void *) old_v[m]);
