@@ -131,6 +131,23 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("F[m][j] += c_rhs[m][j]", inner)
         self.assertNotIn("assemble_grad_c_p", inner)
 
+    def test_stage3_inner_cg_stops_on_frozen_continuity_equation(self):
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
+
+        self.assertIn("frozen_relative >= E->control.tole_comp", inner)
+        self.assertIn("frozen_norm=max", inner.replace("sqrt(", ""))
+        self.assertIn("d_norm+c_old_norm", inner)
+        self.assertIn("? (frozen_relative<E->control.tole_comp)", inner)
+        self.assertIn("LENG_ZHONG_FROZEN_CONTINUITY", inner)
+        stage3_loop = inner[inner.index("while("):
+                            inner.index("} /* end loop for conjugate gradient */")]
+        self.assertIn("E->control.ala_leng_zhong_stage3", stage3_loop)
+        self.assertIn("dpressure >= imp", stage3_loop)
+        self.assertRegex(stage3_loop,
+                         r"ala_leng_zhong_stage3\s*\n\s*\?\s*"
+                         r"\(frozen_relative")
+
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
         instructions = read("lib/Instructions.c")

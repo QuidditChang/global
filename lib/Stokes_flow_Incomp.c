@@ -8093,6 +8093,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     double frozen_norm, full_norm, c_change_norm;
     double frozen_relative, full_relative, c_change_relative;
     double d_c_old_cosine;
+    const char *leng_result_name;
 
     double global_vdot(), global_pdot();
 
@@ -8113,6 +8114,13 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     neq = E->lmesh.neq;
     lev = E->mesh.levmax;
     iteration_cap = *steps_max;
+    leng_result_name = E->control.ala_leng_zhong_stage5
+        ? "LENG_ZHONG_STAGE5_INNER_RESULT"
+        : (E->control.ala_leng_zhong_stage4
+           ? "LENG_ZHONG_STAGE4_INNER_RESULT"
+           : (E->control.ala_leng_zhong_stage3
+              ? "LENG_ZHONG_STAGE3_INNER_RESULT"
+              : "LENG_ZHONG_STAGE2_RESULT"));
 
     for (m=1; m<=E->sphere.caps_per_proc; m++)   {
         F[m] = (double *)malloc(neq*sizeof(double));
@@ -8156,6 +8164,15 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     /* initial residual r1 = div(V) */
     assemble_div_u(E, V, r1, lev);
 
+    d_norm = 0.0;
+    c_old_norm = 0.0;
+    frozen_norm = 0.0;
+    frozen_relative = 0.0;
+    if(E->control.ala_leng_zhong_stage3) {
+        d_norm=sqrt(max(global_pdot(E,r1,r1,lev),0.0));
+        c_old_norm=sqrt(max(global_pdot(E,c_rhs,c_rhs,lev),0.0));
+    }
+
 
     /* add the contribution of compressibility to the initial residual */
     if(E->control.inv_gruneisen != 0)
@@ -8163,6 +8180,11 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             for(j=1;j<=npno;j++) {
                 r1[m][j] += c_rhs[m][j];
             }
+
+    if(E->control.ala_leng_zhong_stage3) {
+        frozen_norm=sqrt(max(global_pdot(E,r1,r1,lev),0.0));
+        frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+    }
 
     residual = incompressibility_residual(E, V, r1);
 
@@ -8178,13 +8200,24 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         print_convergence_progress(E, count, time0, sq_vdotv,
                                    dvelocity, dpressure);
     }
+    if(E->control.ala_leng_zhong_stage3 && E->parallel.me==0) {
+        fprintf(E->fp,
+                "LENG_ZHONG_FROZEN_CONTINUITY step=%d iteration=%d "
+                "D_new=%e C_old=%e residual=%e relative=%e "
+                "tolerance=%e\n",
+                E->monitor.solution_cycles,count,d_norm,c_old_norm,
+                frozen_norm,frozen_relative,E->control.tole_comp);
+        fflush(E->fp);
+    }
 
 
     r0dotz0 = 0;
 
     while( (count < *steps_max) &&
-           (E->monitor.incompressibility >= E->control.tole_comp) &&
-           (dpressure >= imp) && (dvelocity >= imp) )  {
+           (E->control.ala_leng_zhong_stage3
+            ? (frozen_relative >= E->control.tole_comp)
+            : ((E->monitor.incompressibility >= E->control.tole_comp) &&
+               (dpressure >= imp) && (dvelocity >= imp))) )  {
 
 
         /* preconditioner BPI ~= inv(K), z1 = BPI*r1 */
@@ -8201,9 +8234,10 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
            (!isfinite(r1dotz1) || r1dotz1<=0.0)) {
             if(E->parallel.me==0) {
                 fprintf(E->fp,
-                        "LENG_ZHONG_STAGE2_RESULT status=breakdown "
+                        "%s status=breakdown "
                         "reason=nonpositive_preconditioned_residual "
-                        "iteration=%d value=%e\n",count,r1dotz1);
+                        "iteration=%d value=%e\n",leng_result_name,count,
+                        r1dotz1);
                 fflush(E->fp);
             }
             myerror(E, "Leng_Zhong Stage 2 CG preconditioned residual "
@@ -8232,8 +8266,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         if(!valid && E->control.ala_leng_zhong_2008) {
             if(E->parallel.me==0) {
                 fprintf(E->fp,
-                        "LENG_ZHONG_STAGE2_RESULT status=breakdown "
-                        "reason=velocity_solve iteration=%d\n",count);
+                        "%s status=breakdown "
+                        "reason=velocity_solve iteration=%d\n",
+                        leng_result_name,count);
                 fflush(E->fp);
             }
             myerror(E, "Leng_Zhong Stage 2 velocity solve did not converge");
@@ -8259,9 +8294,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
            (!isfinite(curvature) || curvature<=0.0)) {
             if(E->parallel.me==0) {
                 fprintf(E->fp,
-                        "LENG_ZHONG_STAGE2_RESULT status=breakdown "
+                        "%s status=breakdown "
                         "reason=nonpositive_curvature iteration=%d value=%e\n",
-                        count,curvature);
+                        leng_result_name,count,curvature);
                 fflush(E->fp);
             }
             myerror(E, "Leng_Zhong Stage 2 CG curvature is not positive "
@@ -8294,10 +8329,16 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
         /* compute velocity and incompressibility residual */
         assemble_div_u(E, V, F, lev);
+        if(E->control.ala_leng_zhong_stage3)
+            d_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
         if(E->control.inv_gruneisen != 0)
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(j=1;j<=npno;j++)
                     F[m][j] += c_rhs[m][j];
+        if(E->control.ala_leng_zhong_stage3) {
+            frozen_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
+            frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+        }
         if(E->control.ala_leng_zhong_2008)
             residual = incompressibility_residual(E, V, F);
         else
@@ -8316,6 +8357,15 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         if (E->control.print_convergence && E->parallel.me==0)  {
             print_convergence_progress(E, count, time0, sq_vdotv,
                                        dvelocity, dpressure);
+        }
+        if(E->control.ala_leng_zhong_stage3 && E->parallel.me==0) {
+            fprintf(E->fp,
+                    "LENG_ZHONG_FROZEN_CONTINUITY step=%d iteration=%d "
+                    "D_new=%e C_old=%e residual=%e relative=%e "
+                    "tolerance=%e\n",
+                    E->monitor.solution_cycles,count,d_norm,c_old_norm,
+                    frozen_norm,frozen_relative,E->control.tole_comp);
+            fflush(E->fp);
         }
 
 
@@ -8392,16 +8442,19 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     if(E->control.ala_leng_zhong_2008 && E->parallel.me==0) {
         const char *status;
-        if(E->monitor.incompressibility<E->control.tole_comp)
+        if(E->control.ala_leng_zhong_stage3
+           ? (frozen_relative<E->control.tole_comp)
+           : (E->monitor.incompressibility<E->control.tole_comp))
             status="converged";
         else if(count>=iteration_cap)
             status="iteration_cap";
         else
             status="stopped_on_update";
         fprintf(E->fp,
-                "LENG_ZHONG_STAGE2_RESULT status=%s iteration_cap=%d "
-                "iterations_used=%d residual=%e K_solves=%d\n",
-                status,iteration_cap,count,residual,count+1);
+                "%s status=%s iteration_cap=%d iterations_used=%d "
+                "residual=%e frozen_relative=%e tolerance=%e K_solves=%d\n",
+                leng_result_name,status,iteration_cap,count,residual,
+                frozen_relative,E->control.tole_comp,count+1);
         fflush(E->fp);
     }
 
@@ -10149,11 +10202,18 @@ static double initial_vel_residual(struct All_variables *E,
     if(!valid && E->control.ala_leng_zhong_2008) {
         if(E->parallel.me==0) {
             fprintf(E->fp,
-                    "LENG_ZHONG_STAGE2_RESULT status=breakdown "
-                    "reason=initial_velocity_solve iteration=0\n");
+                    "%s status=breakdown "
+                    "reason=initial_velocity_solve iteration=0\n",
+                    E->control.ala_leng_zhong_stage5
+                        ? "LENG_ZHONG_STAGE5_INNER_RESULT"
+                        : (E->control.ala_leng_zhong_stage4
+                           ? "LENG_ZHONG_STAGE4_INNER_RESULT"
+                           : (E->control.ala_leng_zhong_stage3
+                              ? "LENG_ZHONG_STAGE3_INNER_RESULT"
+                              : "LENG_ZHONG_STAGE2_RESULT")));
             fflush(E->fp);
         }
-        myerror(E, "Leng_Zhong Stage 2 initial velocity solve did not "
+        myerror(E, "Leng_Zhong initial velocity solve did not "
                 "converge");
     }
     if(!valid && (E->parallel.me==0)) {
