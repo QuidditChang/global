@@ -323,7 +323,7 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
         self.assertIn("ala_outer_solver                = fgmres", cfg)
         self.assertIn("ala_inner_accuracy_max    = 1e-2", cfg)
-        self.assertIn("ala_pressure_defect_corrections = 1", cfg)
+        self.assertIn("ala_pressure_defect_corrections = 0", cfg)
         self.assertIn("ala_pressure_defect_damping     = 0.13", cfg)
         self.assertIn(
             "ala_coupled_initial_velocity_relative_tolerance = 0.0", cfg
@@ -348,7 +348,15 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
             "ala_coupled_shallow_vanka_sweeps             = 0", cfg
         )
         self.assertIn("ala_shallow_patch_preconditioner   = on", cfg)
-        self.assertIn("ala_shallow_patch_depth_km         = 410.0", cfg)
+        self.assertIn("ala_shallow_patch_depth_km         = 660.0", cfg)
+        self.assertIn("ala_shallow_patch_mid_depth_km     = 200.0", cfg)
+        self.assertIn(
+            "ala_shallow_patch_transition_depth_km = 410.0", cfg
+        )
+        self.assertIn("ala_shallow_patch_mid_action_scale = 2.0", cfg)
+        self.assertIn(
+            "ala_shallow_patch_transition_action_scale = 4.0", cfg
+        )
         self.assertIn("ala_shallow_patch_weight           = 1.0", cfg)
         self.assertIn("ala_shallow_patch_regularization   = 1.0e-3", cfg)
         self.assertIn("ala_pressure_bpi_weight                 = 1.0", cfg)
@@ -362,6 +370,30 @@ class CoupledFGMRESArchitectureTest(unittest.TestCase):
         self.assertIn(
             "ala_shallow_patch_velocity_solver  = element_vanka", cfg
         )
+
+    def test_transition_band_schwarz_is_symmetric_and_local(self) -> None:
+        cfg = (PROJECT_ROOT / "runs/cmbhf_ALA_strict.cfg").read_text()
+        controls = (
+            "ala_shallow_patch_mid_depth_km",
+            "ala_shallow_patch_transition_depth_km",
+            "ala_shallow_patch_mid_action_scale",
+            "ala_shallow_patch_transition_action_scale",
+        )
+        definitions = (LIB_ROOT / "global_defs.h").read_text()
+        instructions = (LIB_ROOT / "Instructions.c").read_text()
+        properties = (GLOBAL_ROOT / "module/setProperties.c").read_text()
+        pyre = (
+            GLOBAL_ROOT
+            / "CitcomS/Components/Stokes_solver/Incompressible.py"
+        ).read_text()
+        output = (LIB_ROOT / "Output_h5.c").read_text()
+        for control in controls:
+            for text in (definitions, instructions, properties, pyre, output):
+                self.assertIn(control, text)
+        self.assertIn("pressure_transition_weighted_r", self.stokes)
+        self.assertIn("sqrt(band_scale)*r[m][e]", self.stokes)
+        self.assertIn("work[m][e] *= band_sqrt", self.stokes)
+        self.assertIn("operator=BPI+W*Schwarz*W", self.stokes)
         self.assertIn(
             "ala_coupled_factor2_coarse_correction = off", cfg
         )
