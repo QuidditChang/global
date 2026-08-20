@@ -172,13 +172,17 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertNotIn("assemble_grad_rho_p", momentum)
         inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
         self.assertNotIn("assemble_grad_rho_p", inner)
+        self.assertIn("LENG_ZHONG_STAGE5_CONTINUITY_INNER", inner)
+        self.assertIn("r1[m][j]+c_rhs[m][j]", inner)
+        self.assertIn("r1[m][j]+r2[m][j]", inner)
+        self.assertIn("r2[m][j]-c_rhs[m][j]", inner)
 
     def test_stage5_run_files_enable_fixed_point_audit(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
         required = {
-            "steps": "50",
+            "steps": "1",
             "tole_compressibility": "1e-06",
             "lith_age": "1",
             "lith_age_time": "1",
@@ -217,7 +221,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_fixed_point_baseline", lsf)
+        self.assertIn("stage5_continuity_diagnostic", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.

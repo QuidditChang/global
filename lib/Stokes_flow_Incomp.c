@@ -8089,6 +8089,10 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     double *shuffle[NCS];
     double alpha, curvature, delta, r0dotz0, r1dotz1,sq_vdotv;
     double residual, v_res;
+    double d_norm, c_old_norm, c_new_norm;
+    double frozen_norm, full_norm, c_change_norm;
+    double frozen_relative, full_relative, c_change_relative;
+    double d_c_old_cosine;
 
     double global_vdot(), global_pdot();
 
@@ -8330,6 +8334,49 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         r0dotz0 = r1dotz1;
 
     } /* end loop for conjugate gradient */
+
+    if(E->control.ala_leng_zhong_stage5) {
+        /* Appendix-A audit of the split inner solve.  c_rhs is C*V_old,
+         * captured before initial_vel_residual changes V. */
+        assemble_div_u(E,V,r1,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++)
+                r2[m][j]=0.0;
+        assemble_c_u(E,V,r2,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++) {
+                z1[m][j]=r1[m][j]+c_rhs[m][j];
+                s1[m][j]=r1[m][j]+r2[m][j];
+                s2[m][j]=r2[m][j]-c_rhs[m][j];
+            }
+        d_norm=sqrt(max(global_pdot(E,r1,r1,lev),0.0));
+        c_old_norm=sqrt(max(global_pdot(E,c_rhs,c_rhs,lev),0.0));
+        c_new_norm=sqrt(max(global_pdot(E,r2,r2,lev),0.0));
+        frozen_norm=sqrt(max(global_pdot(E,z1,z1,lev),0.0));
+        full_norm=sqrt(max(global_pdot(E,s1,s1,lev),0.0));
+        c_change_norm=sqrt(max(global_pdot(E,s2,s2,lev),0.0));
+        frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+        full_relative=full_norm/max(d_norm+c_new_norm,1.0e-300);
+        c_change_relative=c_change_norm
+                          /max(c_old_norm+c_new_norm,1.0e-300);
+        d_c_old_cosine=global_pdot(E,r1,c_rhs,lev)
+            /max(d_norm*c_old_norm,1.0e-300);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,
+                    "LENG_ZHONG_STAGE5_CONTINUITY_INNER step=%d "
+                    "D_new=%e C_old=%e C_new=%e "
+                    "frozen_residual=%e frozen_relative=%e "
+                    "full_residual=%e full_relative=%e "
+                    "C_change=%e C_change_relative=%e "
+                    "D_C_old_cosine=%e legacy_div_v=%e "
+                    "iterations=%d\n",
+                    E->monitor.solution_cycles,d_norm,c_old_norm,c_new_norm,
+                    frozen_norm,frozen_relative,full_norm,full_relative,
+                    c_change_norm,c_change_relative,d_c_old_cosine,
+                    E->monitor.incompressibility,count);
+            fflush(E->fp);
+        }
+    }
 
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         free((void *) F[m]);
