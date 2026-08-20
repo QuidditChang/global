@@ -13,6 +13,27 @@ SPEC.loader.exec_module(MOD)
 
 
 class StageABCInstrumentationTest(unittest.TestCase):
+    def test_cfg_input_discovery_ignores_non_file_controls(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            exact = td / "refstate.txt"
+            exact.write_text("reference state\n")
+            prefix = td / "velocity"
+            (td / "velocity.0").write_text("boundary data\n")
+            cfg = td / "case.cfg"
+            cfg.write_text(
+                "profile_optional = temperature,pressure,velocity\n"
+                "datafile = global\n"
+                "logfile = global_AhatP%%P\n"
+                "file_vbcs = 1\n"
+                "refstate_file = refstate.txt\n"
+                "vel_bound_file = %s\n" % prefix
+            )
+            self.assertEqual(
+                set(MOD.cfg_input_files(cfg)),
+                {exact.resolve(), (td / "velocity.0").resolve()},
+            )
+
     def test_cfg_generator_changes_only_schwarz_switch(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td); base = td / "base.cfg"; c0 = td / "c0.cfg"; c1 = td / "c1.cfg"

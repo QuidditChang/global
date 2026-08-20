@@ -55,19 +55,31 @@ def cfg_values(path):
         if m: values[m.group(1)] = m.group(2)
     return values
 
+def cfg_input_files(cfg):
+    """Resolve cfg keys whose names end in _file, including prefix inputs."""
+    cfg = Path(cfg)
+    files = []
+    for line in cfg.read_text().splitlines():
+        m = re.match(r"^\s*([A-Za-z0-9_]+_file)\s*=\s*(\S+)", line)
+        if not m or m.group(2).lower() in ("on", "off", "0", "1"):
+            continue
+        raw = Path(m.group(2))
+        candidate = raw if raw.is_absolute() else cfg.parent / raw
+        if candidate.is_file():
+            files.append(candidate.resolve())
+        elif candidate.parent.is_dir():
+            files.extend(
+                p.resolve()
+                for p in candidate.parent.glob(candidate.name + "*")
+                if p.is_file()
+            )
+    return files
+
 def manifest(args):
     repo = Path(args.repo).resolve()
     files = [Path(p).resolve() for p in args.input]
     for cfg in [p for p in files if p.suffix == ".cfg" and p.is_file()]:
-        for line in cfg.read_text().splitlines():
-            m = re.match(r"^\s*([A-Za-z0-9_]*(?:file|_file)[A-Za-z0-9_]*)\s*=\s*(\S+)", line)
-            if not m or m.group(2).lower() in ("on", "off", "0", "1"):
-                continue
-            raw = Path(m.group(2))
-            candidate = raw if raw.is_absolute() else cfg.parent / raw
-            if candidate.is_file(): files.append(candidate.resolve())
-            elif candidate.parent.is_dir():
-                files.extend(p.resolve() for p in candidate.parent.glob(candidate.name + "*") if p.is_file())
+        files.extend(cfg_input_files(cfg))
     files = list(dict.fromkeys(files))
     binary = [Path(p).resolve() for p in args.binary]
     result = {
