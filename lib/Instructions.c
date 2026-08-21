@@ -523,6 +523,12 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_leng_zhong_stage4),"off",m);
   input_boolean("ala_leng_zhong_stage5",
                 &(E->control.ala_leng_zhong_stage5),"off",m);
+  input_int("ala_leng_zhong_residual_replacement_interval",
+            &(E->control.ala_leng_zhong_residual_replacement_interval),
+            "10",m);
+  input_double("ala_leng_zhong_residual_drift_tolerance",
+               &(E->control.ala_leng_zhong_residual_drift_tolerance),
+               "0.1",m);
   input_double("ala_leng_zhong_stage5_continuity_tolerance",
                &(E->control.ala_leng_zhong_stage5_continuity_tolerance),
                "1.0e-3",m);
@@ -790,6 +796,11 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_leng_zhong_stage5 &&
      !E->control.ala_leng_zhong_stage4)
       myerror(E, "ala_leng_zhong_stage5 requires Stage 4");
+  if(E->control.ala_leng_zhong_stage3 &&
+     (E->control.ala_leng_zhong_residual_replacement_interval <= 0 ||
+      E->control.ala_leng_zhong_residual_drift_tolerance <= 0.0))
+      myerror(E, "Leng_Zhong residual replacement interval and drift "
+              "tolerance must be positive");
   if(E->control.ala_leng_zhong_stage5 &&
      (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
       E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
@@ -1751,6 +1762,8 @@ void global_default_values(E)
     E->control.ala_leng_zhong_stage3 = 0;
     E->control.ala_leng_zhong_stage4 = 0;
     E->control.ala_leng_zhong_stage5 = 0;
+    E->control.ala_leng_zhong_residual_replacement_interval = 10;
+    E->control.ala_leng_zhong_residual_drift_tolerance = 0.1;
     E->control.ala_leng_zhong_stage5_continuity_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_momentum_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_initial_guess_scale = 1.0;

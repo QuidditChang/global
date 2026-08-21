@@ -1061,6 +1061,14 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_leng_zhong_stage4, fp);
     getIntProperty(properties, "ala_leng_zhong_stage5",
                    E->control.ala_leng_zhong_stage5, fp);
+    getIntProperty(properties,
+                   "ala_leng_zhong_residual_replacement_interval",
+                   E->control.ala_leng_zhong_residual_replacement_interval,
+                   fp);
+    getDoubleProperty(properties,
+                      "ala_leng_zhong_residual_drift_tolerance",
+                      E->control.ala_leng_zhong_residual_drift_tolerance,
+                      fp);
     getDoubleProperty(properties,
                       "ala_leng_zhong_stage5_continuity_tolerance",
                       E->control.ala_leng_zhong_stage5_continuity_tolerance,
@@ -1331,6 +1339,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_leng_zhong_stage5 &&
        !E->control.ala_leng_zhong_stage4)
         myerror(E, "ala_leng_zhong_stage5 requires Stage 4");
+    if(E->control.ala_leng_zhong_stage3 &&
+       (E->control.ala_leng_zhong_residual_replacement_interval <= 0 ||
+        E->control.ala_leng_zhong_residual_drift_tolerance <= 0.0))
+        myerror(E, "Leng_Zhong residual replacement interval and drift "
+                "tolerance must be positive");
     if(E->control.ala_leng_zhong_stage5 &&
        (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
         E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||

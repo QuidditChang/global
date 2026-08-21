@@ -475,6 +475,8 @@ struct CONTROL {
     int ala_leng_zhong_stage3;
     int ala_leng_zhong_stage4;
     int ala_leng_zhong_stage5;
+    int ala_leng_zhong_residual_replacement_interval;
+    double ala_leng_zhong_residual_drift_tolerance;
     double ala_leng_zhong_stage5_continuity_tolerance;
     double ala_leng_zhong_stage5_momentum_tolerance;
     double ala_leng_zhong_stage5_initial_guess_scale;

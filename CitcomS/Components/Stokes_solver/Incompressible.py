@@ -114,6 +114,10 @@ class Incompressible(CitcomComponent):
                                           default=False)
         ala_leng_zhong_stage5 = prop.bool("ala_leng_zhong_stage5",
                                           default=False)
+        ala_leng_zhong_residual_replacement_interval = prop.int(
+            "ala_leng_zhong_residual_replacement_interval", default=10)
+        ala_leng_zhong_residual_drift_tolerance = prop.float(
+            "ala_leng_zhong_residual_drift_tolerance", default=0.1)
         ala_leng_zhong_stage5_continuity_tolerance = prop.float(
             "ala_leng_zhong_stage5_continuity_tolerance", default=1.0e-3)
         ala_leng_zhong_stage5_momentum_tolerance = prop.float(

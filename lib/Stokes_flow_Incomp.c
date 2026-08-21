@@ -8082,6 +8082,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                                   double imp, int *steps_max)
 {
     int m, j, count, valid, lev, npno, neq, iteration_cap;
+    int restart_direction, replace_residual, replacement_count;
     int gnpno, gneq;
 
     double *r1[NCS], *r2[NCS], *z1[NCS], *s1[NCS], *s2[NCS], *F[NCS];
@@ -8092,6 +8093,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     double d_norm, c_old_norm, c_new_norm;
     double frozen_norm, full_norm, c_change_norm;
     double frozen_relative, full_relative, c_change_relative;
+    double initial_frozen_norm, frozen_reduction;
+    double recursive_norm, explicit_difference_norm, residual_drift;
     double d_c_old_cosine;
     const char *leng_result_name;
 
@@ -8134,6 +8137,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     time0 = CPU_time0();
     count = 0;
+    restart_direction = 1;
+    replacement_count = 0;
 
 
     /* copy the original force vector since we need to keep it intact
@@ -8168,6 +8173,11 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     c_old_norm = 0.0;
     frozen_norm = 0.0;
     frozen_relative = 0.0;
+    initial_frozen_norm = 0.0;
+    frozen_reduction = 0.0;
+    recursive_norm = 0.0;
+    explicit_difference_norm = 0.0;
+    residual_drift = 0.0;
     if(E->control.ala_leng_zhong_stage3) {
         d_norm=sqrt(max(global_pdot(E,r1,r1,lev),0.0));
         c_old_norm=sqrt(max(global_pdot(E,c_rhs,c_rhs,lev),0.0));
@@ -8184,6 +8194,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     if(E->control.ala_leng_zhong_stage3) {
         frozen_norm=sqrt(max(global_pdot(E,r1,r1,lev),0.0));
         frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+        initial_frozen_norm=max(frozen_norm,1.0e-300);
+        frozen_reduction=1.0;
     }
 
     residual = incompressibility_residual(E, V, r1);
@@ -8203,10 +8215,12 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     if(E->control.ala_leng_zhong_stage3 && E->parallel.me==0) {
         fprintf(E->fp,
                 "LENG_ZHONG_FROZEN_CONTINUITY step=%d iteration=%d "
-                "D_new=%e C_old=%e residual=%e relative=%e "
+                "D_new=%e C_old=%e residual=%e cancellation=%e "
+                "reduction=%e recursive=%e drift=%e replacement=%d "
                 "tolerance=%e\n",
                 E->monitor.solution_cycles,count,d_norm,c_old_norm,
-                frozen_norm,frozen_relative,E->control.tole_comp);
+                frozen_norm,frozen_relative,frozen_reduction,recursive_norm,
+                residual_drift,0,E->control.tole_comp);
         fflush(E->fp);
     }
 
@@ -8215,7 +8229,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     while( (count < *steps_max) &&
            (E->control.ala_leng_zhong_stage3
-            ? (frozen_relative >= E->control.tole_comp)
+            ? (frozen_reduction >= E->control.tole_comp)
             : ((E->monitor.incompressibility >= E->control.tole_comp) &&
                (dpressure >= imp) && (dvelocity >= imp))) )  {
 
@@ -8247,10 +8261,12 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
 
         /* update search direction */
-        if(count == 0)
+        if(restart_direction) {
             for (m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++)
                     s2[m][j] = z1[m][j];
+            restart_direction = 0;
+        }
         else {
             /* s2 = z1 + s1 * <r1,z1>/<r0,z0> */
             delta = r1dotz1 / r0dotz0;
@@ -8338,6 +8354,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         if(E->control.ala_leng_zhong_stage3) {
             frozen_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
             frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+            frozen_reduction=frozen_norm/initial_frozen_norm;
         }
         if(E->control.ala_leng_zhong_2008)
             residual = incompressibility_residual(E, V, F);
@@ -8352,6 +8369,30 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
         count++;
 
+        replace_residual = 0;
+        if(E->control.ala_leng_zhong_stage3) {
+            recursive_norm=sqrt(max(global_pdot(E,r2,r2,lev),0.0));
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(j=1;j<=npno;j++)
+                    z1[m][j]=r2[m][j]-F[m][j];
+            explicit_difference_norm=sqrt(max(
+                global_pdot(E,z1,z1,lev),0.0));
+            residual_drift=explicit_difference_norm
+                           /max(frozen_norm,1.0e-300);
+            replace_residual =
+                (count % E->control.
+                    ala_leng_zhong_residual_replacement_interval == 0) ||
+                (residual_drift > E->control.
+                    ala_leng_zhong_residual_drift_tolerance);
+            if(replace_residual) {
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(j=1;j<=npno;j++)
+                        r2[m][j]=F[m][j];
+                restart_direction = 1;
+                replacement_count++;
+            }
+        }
+
 	sq_vdotv = sqrt(E->monitor.vdotv);
 
         if (E->control.print_convergence && E->parallel.me==0)  {
@@ -8361,10 +8402,13 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         if(E->control.ala_leng_zhong_stage3 && E->parallel.me==0) {
             fprintf(E->fp,
                     "LENG_ZHONG_FROZEN_CONTINUITY step=%d iteration=%d "
-                    "D_new=%e C_old=%e residual=%e relative=%e "
+                    "D_new=%e C_old=%e residual=%e cancellation=%e "
+                    "reduction=%e recursive=%e drift=%e replacement=%d "
                     "tolerance=%e\n",
                     E->monitor.solution_cycles,count,d_norm,c_old_norm,
-                    frozen_norm,frozen_relative,E->control.tole_comp);
+                    frozen_norm,frozen_relative,frozen_reduction,
+                    recursive_norm,residual_drift,replace_residual,
+                    E->control.tole_comp);
             fflush(E->fp);
         }
 
@@ -8443,7 +8487,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     if(E->control.ala_leng_zhong_2008 && E->parallel.me==0) {
         const char *status;
         if(E->control.ala_leng_zhong_stage3
-           ? (frozen_relative<E->control.tole_comp)
+           ? (frozen_reduction<E->control.tole_comp)
            : (E->monitor.incompressibility<E->control.tole_comp))
             status="converged";
         else if(count>=iteration_cap)
@@ -8452,9 +8496,11 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             status="stopped_on_update";
         fprintf(E->fp,
                 "%s status=%s iteration_cap=%d iterations_used=%d "
-                "residual=%e frozen_relative=%e tolerance=%e K_solves=%d\n",
+                "residual=%e frozen_reduction=%e frozen_cancellation=%e "
+                "replacements=%d tolerance=%e K_solves=%d\n",
                 leng_result_name,status,iteration_cap,count,residual,
-                frozen_relative,E->control.tole_comp,count+1);
+                frozen_reduction,frozen_relative,replacement_count,
+                E->control.tole_comp,count+1);
         fflush(E->fp);
     }
 

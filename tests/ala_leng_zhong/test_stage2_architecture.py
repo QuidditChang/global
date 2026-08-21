@@ -60,6 +60,23 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertRegex(component,
                          r'ala_leng_zhong_stage5\s*=\s*prop\.bool\('
                          r'"ala_leng_zhong_stage5",\s*default=False\)')
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_residual_replacement_interval\s*=\s*prop\.int\('
+            r'\s*"ala_leng_zhong_residual_replacement_interval",\s*'
+            r'default=10\)')
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_residual_drift_tolerance\s*=\s*prop\.float\('
+            r'\s*"ala_leng_zhong_residual_drift_tolerance",\s*'
+            r'default=0\.1\)')
+        self.assertIn(
+            'input_int("ala_leng_zhong_residual_replacement_interval"',
+            instructions)
+        self.assertIn(
+            'getIntProperty(properties,\n'
+            '                   "ala_leng_zhong_residual_replacement_interval"',
+            properties)
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -131,14 +148,18 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("F[m][j] += c_rhs[m][j]", inner)
         self.assertNotIn("assemble_grad_c_p", inner)
 
-    def test_stage3_inner_cg_stops_on_frozen_continuity_equation(self):
+    def test_stage3_inner_cg_restarts_from_explicit_frozen_residual(self):
         stokes = read("lib/Stokes_flow_Incomp.c")
         inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
 
-        self.assertIn("frozen_relative >= E->control.tole_comp", inner)
+        self.assertIn("frozen_reduction >= E->control.tole_comp", inner)
         self.assertIn("frozen_norm=max", inner.replace("sqrt(", ""))
-        self.assertIn("d_norm+c_old_norm", inner)
-        self.assertIn("? (frozen_relative<E->control.tole_comp)", inner)
+        self.assertIn("frozen_norm/initial_frozen_norm", inner)
+        self.assertIn("r2[m][j]-F[m][j]", inner)
+        self.assertIn("r2[m][j]=F[m][j]", inner)
+        self.assertIn("restart_direction = 1", inner)
+        self.assertIn("ala_leng_zhong_residual_replacement_interval", inner)
+        self.assertIn("ala_leng_zhong_residual_drift_tolerance", inner)
         self.assertIn("LENG_ZHONG_FROZEN_CONTINUITY", inner)
         stage3_loop = inner[inner.index("while("):
                             inner.index("} /* end loop for conjugate gradient */")]
@@ -146,7 +167,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("dpressure >= imp", stage3_loop)
         self.assertRegex(stage3_loop,
                          r"ala_leng_zhong_stage3\s*\n\s*\?\s*"
-                         r"\(frozen_relative")
+                         r"\(frozen_reduction")
 
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
@@ -210,6 +231,8 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "ala_leng_zhong_stage3": "on",
             "ala_leng_zhong_stage4": "on",
             "ala_leng_zhong_stage5": "on",
+            "ala_leng_zhong_residual_replacement_interval": "10",
+            "ala_leng_zhong_residual_drift_tolerance": "0.1",
             "ala_leng_zhong_stage5_continuity_tolerance": "1e-3",
             "ala_leng_zhong_stage5_momentum_tolerance": "1e-3",
             "ala_leng_zhong_stage5_initial_guess_scale": "1.0",
@@ -238,7 +261,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_continuity_diagnostic", lsf)
+        self.assertIn("stage5_continuity_restart", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.
