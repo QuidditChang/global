@@ -703,6 +703,115 @@ double assemble_Ahatp_jacobi_entry(E,e1,e2,level,m)
 }
 
 
+double assemble_leng_zhong_Ahatp_jacobi_entry(E,e1,e2,level,m)
+     struct All_variables *E;
+     int e1,e2,level,m;
+{
+    int a,b,d,p1,p2,node1,node2,eqn;
+    double g1,g2,value;
+    const int ends=enodes[E->mesh.nsd];
+    const int dims=E->mesh.nsd;
+
+    value=0.0;
+    for(a=1;a<=ends;a++) {
+      node1=E->IEN[level][m][e1].node[a];
+      for(b=1;b<=ends;b++) {
+        node2=E->IEN[level][m][e2].node[b];
+        if(node1 != node2)
+          continue;
+        for(d=1;d<=dims;d++) {
+          p1=(a-1)*dims+d-1;
+          p2=(b-1)*dims+d-1;
+          g1=E->elt_del[level][m][e1].g[p1][0];
+          g2=E->elt_del[level][m][e2].g[p2][0];
+          eqn=E->ID[level][m][node1].doff[d];
+          value += g1*E->ALA_velocity_BI[level][m][eqn]*g2;
+        }
+      }
+    }
+    return(value);
+}
+
+
+void build_leng_zhong_radial_line_preconditioner(E)
+     struct All_variables *E;
+{
+    int m,col,k,e,previous,level,elz,ncolumns;
+    int local_fallback,global_fallback,local_columns,global_columns;
+    double diagonal,offdiag,pivot,previous_pivot,line_max;
+    double local_min,local_max,global_min,global_max;
+    const double pivot_fraction=1.0e-12;
+
+    level=E->mesh.levmax;
+    elz=E->lmesh.ELZ[level];
+    ncolumns=E->lmesh.ELX[level]*E->lmesh.ELY[level];
+    local_columns=ncolumns*E->sphere.caps_per_proc;
+    local_fallback=0;
+    local_min=1.0e300;
+    local_max=0.0;
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+      for(col=0;col<ncolumns;col++) {
+        E->ALA_BPI_line_valid[level][m][col+1]=1;
+        line_max=0.0;
+        for(k=0;k<elz;k++) {
+          e=col*elz+k+1;
+          diagonal=1.0/E->LZ_BPI[level][m][e];
+          E->ALA_BPI_line_diag[level][m][e]=diagonal;
+          E->ALA_BPI_line_lower[level][m][e]=0.0;
+          line_max=max(line_max,diagonal);
+        }
+
+        previous_pivot=0.0;
+        for(k=0;k<elz;k++) {
+          e=col*elz+k+1;
+          diagonal=E->ALA_BPI_line_diag[level][m][e];
+          if(k==0)
+            pivot=diagonal;
+          else {
+            previous=e-1;
+            offdiag=assemble_leng_zhong_Ahatp_jacobi_entry(
+                E,previous,e,level,m);
+            E->ALA_BPI_line_lower[level][m][e]=
+                offdiag/previous_pivot;
+            pivot=diagonal-
+                E->ALA_BPI_line_lower[level][m][e]*offdiag;
+          }
+          if(!isfinite(pivot) || pivot<=pivot_fraction*line_max) {
+            E->ALA_BPI_line_valid[level][m][col+1]=0;
+            local_fallback++;
+            break;
+          }
+          E->ALA_BPI_line_diag[level][m][e]=pivot;
+          previous_pivot=pivot;
+          local_min=min(local_min,pivot);
+          local_max=max(local_max,pivot);
+        }
+      }
+
+    MPI_Allreduce(&local_fallback,&global_fallback,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_columns,&global_columns,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,
+                  E->parallel.world);
+    if(E->parallel.me==0) {
+      fprintf(E->fp,
+              "Leng_Zhong D-only radial-line preconditioner: "
+              "pivot_range=(%e,%e) fallback_columns=%d/%d\n",
+              global_min,global_max,global_fallback,global_columns);
+      fprintf(stderr,
+              "Leng_Zhong D-only radial-line preconditioner: "
+              "pivot_range=(%e,%e) fallback_columns=%d/%d\n",
+              global_min,global_max,global_fallback,global_columns);
+      fflush(E->fp);
+      fflush(stderr);
+    }
+}
+
+
 void build_radial_line_Ahat_preconditioner(E)
      struct All_variables *E;
 {

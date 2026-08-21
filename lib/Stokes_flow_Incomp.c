@@ -49,6 +49,50 @@ double assemble_Ahatp_jacobi_entry(struct All_variables *,int,int,int,int);
 static float solve_Ahat_p_fhat(struct All_variables *E,
                                double **V, double **P, double **F,
                                double imp, int *steps_max);
+static void apply_leng_zhong_pressure_preconditioner(
+    struct All_variables *E, double **r, double **z, double **work, int lev)
+{
+    int m,j,col,k,e,elz,ncolumns,npno;
+
+    npno=E->lmesh.NPNO[lev];
+    if(!E->control.ala_leng_zhong_radial_line_preconditioner) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++)
+                z[m][j]=E->LZ_BPI[lev][m][j]*r[m][j];
+        return;
+    }
+
+    elz=E->lmesh.ELZ[lev];
+    ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(col=0;col<ncolumns;col++) {
+            if(!E->ALA_BPI_line_valid[lev][m][col+1]) {
+                for(k=0;k<elz;k++) {
+                    e=col*elz+k+1;
+                    z[m][e]=E->LZ_BPI[lev][m][e]*r[m][e];
+                }
+                continue;
+            }
+
+            e=col*elz+1;
+            work[m][e]=r[m][e];
+            for(k=1;k<elz;k++) {
+                e=col*elz+k+1;
+                work[m][e]=r[m][e]
+                    -E->ALA_BPI_line_lower[lev][m][e]*work[m][e-1];
+            }
+            for(k=0;k<elz;k++) {
+                e=col*elz+k+1;
+                z[m][e]=work[m][e]/E->ALA_BPI_line_diag[lev][m][e];
+            }
+            for(k=elz-2;k>=0;k--) {
+                e=col*elz+k+1;
+                z[m][e]-=E->ALA_BPI_line_lower[lev][m][e+1]*z[m][e+1];
+            }
+        }
+}
+
+
 static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                                   double **V, double **P, double **F,
                                   double imp, int *steps_max);
@@ -8027,17 +8071,23 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
         if(E->control.ala_leng_zhong_stage3) {
             if(E->parallel.me==0) {
                 fprintf(E->fp, "%s operator=G^T_K^-1_G "
-                        "velocity_operator=K_unaugmented bpi=D_only C=on "
-                        "W=%s aug_lagr=%d gamma=%e\n",
+                        "velocity_operator=K_unaugmented bpi=D_only_%s C=on "
+                        "W=%s aug_lagr=%d gamma=%e replacement_interval=%d "
+                        "drift_tolerance=%e\n",
                         E->control.ala_leng_zhong_stage5
                             ? "LENG_ZHONG_STAGE5"
                             : (E->control.ala_leng_zhong_stage4
                                ? "LENG_ZHONG_STAGE4"
                                : "LENG_ZHONG_STAGE3"),
+                        E->control.ala_leng_zhong_radial_line_preconditioner
+                            ? "radial_line" : "diagonal",
                         E->control.ala_leng_zhong_stage4 ? "on(lagged)"
                                                         : "off",
                         E->control.augmented_Lagr,
-                        E->control.ala_augmented_lagrangian_gamma);
+                        E->control.ala_augmented_lagrangian_gamma,
+                        E->control.
+                            ala_leng_zhong_residual_replacement_interval,
+                        E->control.ala_leng_zhong_residual_drift_tolerance);
                 fflush(E->fp);
             }
             residual = solve_Ahat_p_fhat_iterCG(E, V, P, F, imp, steps_max);
@@ -8234,12 +8284,15 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                (dpressure >= imp) && (dvelocity >= imp))) )  {
 
 
-        /* preconditioner BPI ~= inv(K), z1 = BPI*r1 */
-        for(m=1; m<=E->sphere.caps_per_proc; m++)
-            for(j=1; j<=npno; j++)
-                z1[m][j] = (E->control.ala_leng_zhong_2008
-                            ? E->LZ_BPI[lev][m][j]
-                            : E->BPI[lev][m][j]) * r1[m][j];
+        /* The Leng path may apply a D-only radial block.  r2 is scratch here
+         * and is overwritten by the recurrence below. */
+        if(E->control.ala_leng_zhong_2008)
+            apply_leng_zhong_pressure_preconditioner(
+                E,r1,z1,r2,lev);
+        else
+            for(m=1; m<=E->sphere.caps_per_proc; m++)
+                for(j=1; j<=npno; j++)
+                    z1[m][j] = E->BPI[lev][m][j] * r1[m][j];
 
 
         /* r1dotz1 = <r1, z1> */
@@ -8380,7 +8433,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             residual_drift=explicit_difference_norm
                            /max(frozen_norm,1.0e-300);
             replace_residual =
-                (count % E->control.
+                (E->control.ala_leng_zhong_residual_replacement_interval>0 &&
+                 count % E->control.
                     ala_leng_zhong_residual_replacement_interval == 0) ||
                 (residual_drift > E->control.
                     ala_leng_zhong_residual_drift_tolerance);

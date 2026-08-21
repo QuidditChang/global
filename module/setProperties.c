@@ -1069,6 +1069,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                       "ala_leng_zhong_residual_drift_tolerance",
                       E->control.ala_leng_zhong_residual_drift_tolerance,
                       fp);
+    getIntProperty(properties,
+                   "ala_leng_zhong_radial_line_preconditioner",
+                   E->control.ala_leng_zhong_radial_line_preconditioner,
+                   fp);
     getDoubleProperty(properties,
                       "ala_leng_zhong_stage5_continuity_tolerance",
                       E->control.ala_leng_zhong_stage5_continuity_tolerance,
@@ -1340,10 +1344,16 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        !E->control.ala_leng_zhong_stage4)
         myerror(E, "ala_leng_zhong_stage5 requires Stage 4");
     if(E->control.ala_leng_zhong_stage3 &&
-       (E->control.ala_leng_zhong_residual_replacement_interval <= 0 ||
+       (E->control.ala_leng_zhong_residual_replacement_interval < 0 ||
         E->control.ala_leng_zhong_residual_drift_tolerance <= 0.0))
-        myerror(E, "Leng_Zhong residual replacement interval and drift "
-                "tolerance must be positive");
+        myerror(E, "Leng_Zhong residual replacement interval must be "
+                "nonnegative and drift tolerance must be positive");
+    if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+       (!E->control.ala_leng_zhong_2008 ||
+        !E->control.precondition ||
+        strcmp(E->control.uzawa,"cg") != 0))
+        myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
+                "the Leng selector, precond=on, and uzawa=cg");
     if(E->control.ala_leng_zhong_stage5 &&
        (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
         E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||

@@ -64,12 +64,17 @@ class Stage2ArchitectureTest(unittest.TestCase):
             component,
             r'ala_leng_zhong_residual_replacement_interval\s*=\s*prop\.int\('
             r'\s*"ala_leng_zhong_residual_replacement_interval",\s*'
-            r'default=10\)')
+            r'default=0\)')
         self.assertRegex(
             component,
             r'ala_leng_zhong_residual_drift_tolerance\s*=\s*prop\.float\('
             r'\s*"ala_leng_zhong_residual_drift_tolerance",\s*'
             r'default=0\.1\)')
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_radial_line_preconditioner\s*=\s*prop\.bool\('
+            r'\s*"ala_leng_zhong_radial_line_preconditioner",\s*'
+            r'default=False\)')
         self.assertIn(
             'input_int("ala_leng_zhong_residual_replacement_interval"',
             instructions)
@@ -77,6 +82,11 @@ class Stage2ArchitectureTest(unittest.TestCase):
             'getIntProperty(properties,\n'
             '                   "ala_leng_zhong_residual_replacement_interval"',
             properties)
+        self.assertIn(
+            'input_boolean("ala_leng_zhong_radial_line_preconditioner"',
+            instructions)
+        self.assertIn(
+            '"ala_leng_zhong_radial_line_preconditioner"', properties)
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -112,13 +122,16 @@ class Stage2ArchitectureTest(unittest.TestCase):
         stokes = read("lib/Stokes_flow_Incomp.c")
         dispatch = function_body(stokes, "solve_Ahat_p_fhat")
         cg = function_body(stokes, "solve_Ahat_p_fhat_CG")
+        lz_preconditioner = function_body(
+            stokes, "apply_leng_zhong_pressure_preconditioner")
         stage2 = dispatch[dispatch.index("if(E->control.ala_leng_zhong_2008)"):
                           dispatch.index("else if(E->control.inv_gruneisen")]
 
         self.assertIn("solve_Ahat_p_fhat_CG", stage2)
         self.assertNotIn("ALA_PCG", stage2)
         self.assertNotIn("BiCG", stage2)
-        self.assertIn("E->LZ_BPI", cg)
+        self.assertIn("apply_leng_zhong_pressure_preconditioner", cg)
+        self.assertIn("E->LZ_BPI", lz_preconditioner)
         self.assertIn("assemble_grad_p", cg)
         self.assertIn("solve_del2_u", cg)
         self.assertIn("assemble_div_u", cg)
@@ -148,7 +161,7 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("F[m][j] += c_rhs[m][j]", inner)
         self.assertNotIn("assemble_grad_c_p", inner)
 
-    def test_stage3_inner_cg_restarts_from_explicit_frozen_residual(self):
+    def test_stage3_inner_cg_replaces_only_drifted_explicit_residual(self):
         stokes = read("lib/Stokes_flow_Incomp.c")
         inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
 
@@ -160,6 +173,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("restart_direction = 1", inner)
         self.assertIn("ala_leng_zhong_residual_replacement_interval", inner)
         self.assertIn("ala_leng_zhong_residual_drift_tolerance", inner)
+        self.assertRegex(
+            inner,
+            r"ala_leng_zhong_residual_replacement_interval>0\s*&&")
         self.assertIn("LENG_ZHONG_FROZEN_CONTINUITY", inner)
         stage3_loop = inner[inner.index("while("):
                             inner.index("} /* end loop for conjugate gradient */")]
@@ -168,6 +184,33 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertRegex(stage3_loop,
                          r"ala_leng_zhong_stage3\s*\n\s*\?\s*"
                          r"\(frozen_reduction")
+
+    def test_leng_radial_line_preconditioner_is_d_only_and_spd(self):
+        element = read("lib/Element_calculations.c")
+        arrays = read("lib/Construct_arrays.c")
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        definitions = read("lib/global_defs.h")
+        builder = function_body(
+            element, "build_leng_zhong_radial_line_preconditioner")
+        offdiag = function_body(
+            element, "assemble_leng_zhong_Ahatp_jacobi_entry")
+        apply = function_body(
+            stokes, "apply_leng_zhong_pressure_preconditioner")
+
+        self.assertIn("ala_leng_zhong_radial_line_preconditioner",
+                      definitions)
+        self.assertIn("LZ_BPI", builder)
+        self.assertIn("pivot<=pivot_fraction*line_max", builder)
+        self.assertIn("ALA_BPI_line_valid", builder)
+        self.assertIn("build_leng_zhong_radial_line_preconditioner(E)",
+                      arrays)
+        self.assertIn("elt_del", offdiag)
+        self.assertIn("ALA_velocity_BI", offdiag)
+        self.assertNotIn("elt_c", offdiag)
+        self.assertIn("ALA_BPI_line_lower", apply)
+        self.assertIn("ALA_BPI_line_diag", apply)
+        self.assertIn("LZ_BPI", apply)
+        self.assertNotIn("BPI[", apply.replace("LZ_BPI[", ""))
 
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
@@ -231,8 +274,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "ala_leng_zhong_stage3": "on",
             "ala_leng_zhong_stage4": "on",
             "ala_leng_zhong_stage5": "on",
-            "ala_leng_zhong_residual_replacement_interval": "10",
+            "ala_leng_zhong_residual_replacement_interval": "0",
             "ala_leng_zhong_residual_drift_tolerance": "0.1",
+            "ala_leng_zhong_radial_line_preconditioner": "on",
             "ala_leng_zhong_stage5_continuity_tolerance": "1e-3",
             "ala_leng_zhong_stage5_momentum_tolerance": "1e-3",
             "ala_leng_zhong_stage5_initial_guess_scale": "1.0",
@@ -261,7 +305,11 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_continuity_restart", lsf)
+        self.assertIn("stage5_lz_radial_line", lsf)
+        self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
+        self.assertIn("stage5_lz_radial_line_AhatP%P_%T", cfg)
+        self.assertNotIn("runtime.cfg", lsf)
+        self.assertNotIn("-i.bak", lsf)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.

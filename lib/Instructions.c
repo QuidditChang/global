@@ -525,10 +525,13 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_leng_zhong_stage5),"off",m);
   input_int("ala_leng_zhong_residual_replacement_interval",
             &(E->control.ala_leng_zhong_residual_replacement_interval),
-            "10",m);
+            "0",m);
   input_double("ala_leng_zhong_residual_drift_tolerance",
                &(E->control.ala_leng_zhong_residual_drift_tolerance),
                "0.1",m);
+  input_boolean("ala_leng_zhong_radial_line_preconditioner",
+                &(E->control.ala_leng_zhong_radial_line_preconditioner),
+                "off",m);
   input_double("ala_leng_zhong_stage5_continuity_tolerance",
                &(E->control.ala_leng_zhong_stage5_continuity_tolerance),
                "1.0e-3",m);
@@ -797,10 +800,15 @@ void read_initial_settings(struct All_variables *E)
      !E->control.ala_leng_zhong_stage4)
       myerror(E, "ala_leng_zhong_stage5 requires Stage 4");
   if(E->control.ala_leng_zhong_stage3 &&
-     (E->control.ala_leng_zhong_residual_replacement_interval <= 0 ||
+     (E->control.ala_leng_zhong_residual_replacement_interval < 0 ||
       E->control.ala_leng_zhong_residual_drift_tolerance <= 0.0))
-      myerror(E, "Leng_Zhong residual replacement interval and drift "
-              "tolerance must be positive");
+      myerror(E, "Leng_Zhong residual replacement interval must be "
+              "nonnegative and drift tolerance must be positive");
+  if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+     (!E->control.ala_leng_zhong_2008 ||
+      !E->control.precondition))
+      myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
+              "the Leng selector and precond=on");
   if(E->control.ala_leng_zhong_stage5 &&
      (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
       E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
@@ -1202,6 +1210,10 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_leng_zhong_2008 &&
      strcmp(E->control.uzawa,"cg") != 0)
       myerror(E, "ala_leng_zhong_2008 Stage 2 requires uzawa=cg");
+  if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+     strcmp(E->control.uzawa,"cg") != 0)
+      myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
+              "uzawa=cg");
   if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
       strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&
      strcmp(E->control.uzawa,"ala_cg") != 0)
@@ -1762,8 +1774,9 @@ void global_default_values(E)
     E->control.ala_leng_zhong_stage3 = 0;
     E->control.ala_leng_zhong_stage4 = 0;
     E->control.ala_leng_zhong_stage5 = 0;
-    E->control.ala_leng_zhong_residual_replacement_interval = 10;
+    E->control.ala_leng_zhong_residual_replacement_interval = 0;
     E->control.ala_leng_zhong_residual_drift_tolerance = 0.1;
+    E->control.ala_leng_zhong_radial_line_preconditioner = 0;
     E->control.ala_leng_zhong_stage5_continuity_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_momentum_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_initial_guess_scale = 1.0;
