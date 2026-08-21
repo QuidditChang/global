@@ -77,10 +77,18 @@ class StageABCInstrumentationTest(unittest.TestCase):
         stokes = (ROOT / "lib" / "Stokes_flow_Incomp.c").read_text()
         gm = (ROOT / "lib" / "General_matrix_functions.c").read_text()
         ins = (ROOT / "lib" / "Instructions.c").read_text()
+        inventory = (ROOT / "CitcomS" / "Components" / "Stokes_solver" /
+                     "Incompressible.py").read_text()
+        bridge = (ROOT / "module" / "setProperties.c").read_text()
         self.assertIn("continuity_numerator,continuity_denominator", stokes)
         self.assertIn("requested_relative_tolerance,target_absolute", gm)
-        self.assertIn('input_boolean("ala_stage_abc_production_logging"', ins)
-        self.assertIn("ala_stage_abc_production_logging = 0", ins)
+        for control in ("ala_stage_abc_adjoint_diagnostic",
+                        "ala_stage_abc_production_logging"):
+            self.assertIn("%s = prop.bool(" % control, inventory)
+            self.assertIn('"%s", default=False' % control, inventory)
+            self.assertIn('getIntProperty(properties, "%s"' % control, bridge)
+            self.assertIn('input_boolean("%s"' % control, ins)
+            self.assertIn("%s = 0" % control, ins)
         self.assertIn(": solve_del2_u(E,tmpU,tmpF,inner_accuracy,lev)", stokes)
 
     def test_observer_uses_independent_force_storage(self):
