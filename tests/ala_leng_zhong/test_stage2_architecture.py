@@ -212,6 +212,16 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("LZ_BPI", apply)
         self.assertNotIn("BPI[", apply.replace("LZ_BPI[", ""))
 
+    def test_python_bridge_validates_uzawa_after_loading_it(self):
+        properties = read("module/setProperties.c")
+        load = properties.index(
+            'getStringProperty(properties, "uzawa", E->control.uzawa, fp)')
+        validation = properties.index(
+            'if(E->control.ala_leng_zhong_radial_line_preconditioner &&\n'
+            '       strcmp(E->control.uzawa,"cg") != 0)')
+
+        self.assertLess(load, validation)
+
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
         instructions = read("lib/Instructions.c")

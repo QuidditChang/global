@@ -1350,10 +1350,9 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                 "nonnegative and drift tolerance must be positive");
     if(E->control.ala_leng_zhong_radial_line_preconditioner &&
        (!E->control.ala_leng_zhong_2008 ||
-        !E->control.precondition ||
-        strcmp(E->control.uzawa,"cg") != 0))
+        !E->control.precondition))
         myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
-                "the Leng selector, precond=on, and uzawa=cg");
+                "the Leng selector and precond=on");
     if(E->control.ala_leng_zhong_stage5 &&
        (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
         E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
@@ -1756,6 +1755,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_leng_zhong_2008 &&
        strcmp(E->control.uzawa,"cg") != 0)
         myerror(E, "ala_leng_zhong_2008 Stage 2 requires uzawa=cg");
+    if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+       strcmp(E->control.uzawa,"cg") != 0)
+        myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
+                "uzawa=cg");
     if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
         strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&
        strcmp(E->control.uzawa,"ala_cg") != 0)
