@@ -100,6 +100,15 @@ class StageABCInstrumentationTest(unittest.TestCase):
         self.assertNotIn("E->F[", helper)
         self.assertNotIn("get_buoyancy(", helper)
 
+    def test_stage_abc_creates_logs_on_rank_zero_only(self):
+        instructions = (ROOT / "lib" / "Instructions.c").read_text()
+        tracer = (ROOT / "lib" / "Full_tracer_advection.c").read_text()
+        guard = 'getenv("STRICT_ALA_CASE") != NULL && E->parallel.me != 0'
+        self.assertIn(guard, instructions)
+        self.assertIn('E->fp = output_open("/dev/null", "w")', instructions)
+        self.assertIn(guard, tracer)
+        self.assertIn('sprintf(output_file,"/dev/null")', tracer)
+
 
 if __name__ == "__main__":
     unittest.main()

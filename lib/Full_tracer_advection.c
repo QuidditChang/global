@@ -27,6 +27,7 @@
  */
 
 #include <math.h>
+#include <stdlib.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "parsing.h"
@@ -140,7 +141,10 @@ void full_tracer_setup(struct All_variables *E)
 
     /* open tracing output file */
 
-    sprintf(output_file,"%s.tracer_log.%d",E->control.data_file,E->parallel.me);
+    if(getenv("STRICT_ALA_CASE") != NULL && E->parallel.me != 0)
+        sprintf(output_file,"/dev/null");
+    else
+        sprintf(output_file,"%s.tracer_log.%d",E->control.data_file,E->parallel.me);
     E->trace.fpt=fopen(output_file,"w");
 
 

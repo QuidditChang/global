@@ -2106,6 +2106,14 @@ static void open_log(struct All_variables *E)
     }
   }
 
+  /* Stage-ABC diagnostics keep one authoritative solver log on rank zero.
+     Nonzero ranks retain a valid stream because legacy code writes E->fp
+     without consistently checking the rank. */
+  if(getenv("STRICT_ALA_CASE") != NULL && E->parallel.me != 0) {
+    E->fp = output_open("/dev/null", "w");
+    return;
+  }
+
   if (E->control.restart || E->control.post_p)
       /* append the log file if restart */
       E->fp = output_open(logfile, "a");
