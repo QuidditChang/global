@@ -257,6 +257,18 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("(1.0-weight)*z[m][e]+weight*work[m][e]", apply)
         self.assertIn("LENG_ZHONG_HORIZONTAL_PATCH_ENERGY", apply)
 
+    def test_leng_cg_restores_best_explicit_frozen_iterate(self):
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        inner = function_body(stokes, "solve_Ahat_p_fhat_CG")
+
+        self.assertIn("best_frozen_relative", inner)
+        self.assertIn("best_V[m][j]=V[m][j]", inner)
+        self.assertIn("best_P[m][j]=P[m][j]", inner)
+        self.assertIn("best_iteration<count", inner)
+        self.assertIn("V[m][j]=best_V[m][j]", inner)
+        self.assertIn("P[m][j]=best_P[m][j]", inner)
+        self.assertIn("LENG_ZHONG_BEST_FROZEN_ITERATE", inner)
+
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
         instructions = read("lib/Instructions.c")
@@ -355,9 +367,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_lz_horizontal_patch", lsf)
+        self.assertIn("stage5_lz_best_iterate", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
-        self.assertIn("stage5_lz_horizontal_patch_AhatP%P_%T", cfg)
+        self.assertIn("stage5_lz_best_iterate_AhatP%P_%T", cfg)
         self.assertNotIn("runtime.cfg", lsf)
         self.assertNotIn("-i.bak", lsf)
 

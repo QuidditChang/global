@@ -8212,10 +8212,12 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 {
     int m, j, count, valid, lev, npno, neq, iteration_cap;
     int restart_direction, replace_residual, replacement_count;
+    int best_iteration, best_iterate_restored;
     int gnpno, gneq;
 
     double *r1[NCS], *r2[NCS], *z1[NCS], *s1[NCS], *s2[NCS], *F[NCS];
     double *c_rhs[NCS];
+    double *best_V[NCS], *best_P[NCS];
     double *shuffle[NCS];
     double alpha, curvature, delta, r0dotz0, r1dotz1,sq_vdotv;
     double residual, v_res;
@@ -8223,6 +8225,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     double frozen_norm, full_norm, c_change_norm;
     double frozen_relative, full_relative, c_change_relative;
     double initial_frozen_norm, frozen_reduction;
+    double best_frozen_norm, best_frozen_relative;
     double recursive_norm, explicit_difference_norm, residual_drift;
     double d_c_old_cosine;
     const char *leng_result_name;
@@ -8262,12 +8265,22 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         s1[m] = (double *)malloc((npno+1)*sizeof(double));
         s2[m] = (double *)malloc((npno+1)*sizeof(double));
         c_rhs[m] = (double *)malloc((npno+1)*sizeof(double));
+        best_V[m] = NULL;
+        best_P[m] = NULL;
+        if(E->control.ala_leng_zhong_stage3) {
+            best_V[m] = (double *)malloc(neq*sizeof(double));
+            best_P[m] = (double *)malloc((npno+1)*sizeof(double));
+            if(best_V[m]==NULL || best_P[m]==NULL)
+                myerror(E,"Unable to allocate Leng_Zhong best iterate");
+        }
     }
 
     time0 = CPU_time0();
     count = 0;
     restart_direction = 1;
     replacement_count = 0;
+    best_iteration = 0;
+    best_iterate_restored = 0;
 
 
     /* copy the original force vector since we need to keep it intact
@@ -8304,6 +8317,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     frozen_relative = 0.0;
     initial_frozen_norm = 0.0;
     frozen_reduction = 0.0;
+    best_frozen_norm = 0.0;
+    best_frozen_relative = 0.0;
     recursive_norm = 0.0;
     explicit_difference_norm = 0.0;
     residual_drift = 0.0;
@@ -8325,6 +8340,14 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
         initial_frozen_norm=max(frozen_norm,1.0e-300);
         frozen_reduction=1.0;
+        best_frozen_norm=frozen_norm;
+        best_frozen_relative=frozen_relative;
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(j=0;j<neq;j++)
+                best_V[m][j]=V[m][j];
+            for(j=1;j<=npno;j++)
+                best_P[m][j]=P[m][j];
+        }
     }
 
     residual = incompressibility_residual(E, V, r1);
@@ -8487,6 +8510,17 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             frozen_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
             frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
             frozen_reduction=frozen_norm/initial_frozen_norm;
+            if(frozen_relative < best_frozen_relative) {
+                best_frozen_norm=frozen_norm;
+                best_frozen_relative=frozen_relative;
+                best_iteration=count+1;
+                for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                    for(j=0;j<neq;j++)
+                        best_V[m][j]=V[m][j];
+                    for(j=1;j<=npno;j++)
+                        best_P[m][j]=P[m][j];
+                }
+            }
         }
         if(E->control.ala_leng_zhong_2008)
             residual = incompressibility_residual(E, V, F);
@@ -8562,6 +8596,39 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
 
     } /* end loop for conjugate gradient */
 
+    /* A finite CG budget can pass the minimum of the explicitly assembled
+     * frozen continuity equation and then deteriorate.  Retain the best
+     * physical iterate without changing the D-only Krylov recurrence. */
+    if(E->control.ala_leng_zhong_stage3 && best_iteration<count) {
+        best_iterate_restored=1;
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(j=0;j<neq;j++)
+                V[m][j]=best_V[m][j];
+            for(j=1;j<=npno;j++)
+                P[m][j]=best_P[m][j];
+        }
+        assemble_div_u(E,V,F,lev);
+        d_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
+        if(E->control.inv_gruneisen != 0)
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(j=1;j<=npno;j++)
+                    F[m][j] += c_rhs[m][j];
+        frozen_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
+        frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
+        frozen_reduction=frozen_norm/initial_frozen_norm;
+        residual=incompressibility_residual(E,V,F);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,
+                    "LENG_ZHONG_BEST_FROZEN_ITERATE restored=1 "
+                    "best_iteration=%d completed_iterations=%d "
+                    "best_residual=%e best_relative=%e "
+                    "restored_residual=%e restored_relative=%e\n",
+                    best_iteration,count,best_frozen_norm,
+                    best_frozen_relative,frozen_norm,frozen_relative);
+            fflush(E->fp);
+        }
+    }
+
     if(E->control.ala_leng_zhong_stage5) {
         /* Appendix-A audit of the split inner solve.  c_rhs is C*V_old,
          * captured before initial_vel_residual changes V. */
@@ -8613,6 +8680,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         free((void *) s1[m]);
         free((void *) s2[m]);
         free((void *) c_rhs[m]);
+        free((void *) best_V[m]);
+        free((void *) best_P[m]);
     }
 
     *steps_max=count;
@@ -8630,10 +8699,12 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         fprintf(E->fp,
                 "%s status=%s iteration_cap=%d iterations_used=%d "
                 "residual=%e frozen_reduction=%e frozen_cancellation=%e "
-                "replacements=%d tolerance=%e K_solves=%d\n",
+                "replacements=%d best_iteration=%d best_restored=%d "
+                "tolerance=%e K_solves=%d\n",
                 leng_result_name,status,iteration_cap,count,residual,
                 frozen_reduction,frozen_relative,replacement_count,
-                E->control.tole_comp,count+1);
+                best_iteration,best_iterate_restored,E->control.tole_comp,
+                count+1);
         fflush(E->fp);
     }
 
