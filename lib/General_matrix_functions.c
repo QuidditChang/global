@@ -1007,6 +1007,11 @@ void gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
 
     const double zeroo = 0.0;
 
+    /* A logical sweep count is identical on every rank.  It is intentionally
+       not process-summed in Stage-E output. */
+    if(E->control.ala_stage_e_diagnostic)
+      E->control.ala_stage_e_velocity_smoother_sweeps += *cycles;
+
     /* Vanka is a multigrid smoother, not the coarse-grid solver.  In
        particular, v_steps_low can be O(1000), which would turn the additive
        element update and its halo exchange into thousands of global sweeps. */

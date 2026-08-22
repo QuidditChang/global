@@ -589,6 +589,8 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_stage_abc_adjoint_diagnostic),"off",m);
   input_boolean("ala_stage_abc_production_logging",
                 &(E->control.ala_stage_abc_production_logging),"off",m);
+  input_boolean("ala_stage_e_diagnostic",
+                &(E->control.ala_stage_e_diagnostic),"off",m);
   input_int("ala_coupled_shallow_vanka_layers",
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",
@@ -940,6 +942,12 @@ void read_initial_settings(struct All_variables *E)
   if(E->control.ala_stage_abc_production_logging &&
      E->control.ala_unaugmented_momentum_tolerance<=0.0)
       myerror(E,"Strict ALA Stage-C logging requires the physical momentum gate");
+  if(E->control.ala_stage_e_diagnostic &&
+     !E->control.ala_stage_abc_production_logging)
+      myerror(E,"Strict ALA Stage-E requires Stage-C production logging");
+  if(E->control.ala_stage_e_diagnostic &&
+     strcmp(E->control.ala_outer_solver,"fgmres")!=0)
+      myerror(E,"Strict ALA Stage-E requires ala_outer_solver=fgmres");
   if(E->control.ala_depth_diagnostic_bins < 1 ||
      E->control.ala_depth_diagnostic_bins > 128)
       myerror(E, "ala_depth_diagnostic_bins must be between 1 and 128");
@@ -1733,11 +1741,14 @@ void global_default_values(E)
     E->control.ala_schur_diagnostic_viscosity_mode = 0;
     E->control.ala_stage_abc_adjoint_diagnostic = 0;
     E->control.ala_stage_abc_production_logging = 0;
+    E->control.ala_stage_e_diagnostic = 0;
     E->control.ala_stage_abc_inner_call_count = 0;
     E->control.ala_stage_abc_inner_cycle_count = 0;
     E->control.ala_stage_abc_schur_action_count = 0;
     E->control.ala_stage_abc_preconditioner_count = 0;
     E->control.ala_stage_abc_k_application_count = 0;
+    E->control.ala_stage_e_k_operator_applications = 0;
+    E->control.ala_stage_e_velocity_smoother_sweeps = 0;
     E->control.ala_stage_abc_inner_seconds = 0.0;
     E->control.ala_stage_abc_fgmres_start = 0.0;
     E->control.ala_stage_abc_bpi_seconds = 0.0;

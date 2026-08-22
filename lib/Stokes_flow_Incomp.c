@@ -417,85 +417,554 @@ static double ala_schur_hash_value(unsigned long key)
     return 2.0*((double)(key&0x00ffffffUL)/16777215.0)-1.0;
 }
 
+/* Return the unnormalised value of one of the frozen 19 pressure probes at a
+ * finest-level pressure coefficient.  Stage-E calls this same helper instead
+ * of maintaining a second probe definition. */
+static double ala_schur_probe_raw_value(struct All_variables *E,int probe,
+    int m,int e,double **frozen_q0,int lev)
+{
+    int ex,ey,ez,tmp,gex,gey,gez,degree=0;
+    double theta,r,depth,x,lower=0.0,upper=0.0;
+    const double pi=3.14159265358979323846;
+    const int elx=E->lmesh.ELX[lev],elz=E->lmesh.ELZ[lev];
+    static const int degrees[4]={1,2,4,8};
+    static const double lo[5]={0.0,200.0,410.0,660.0,1000.0};
+    static const double hi[5]={200.0,410.0,660.0,1000.0,1.0e30};
+
+    if(probe==0) return frozen_q0[m][e];
+    ez=(e-1)%elz+1;
+    tmp=(e-1)/elz;
+    ex=tmp%elx+1;
+    ey=tmp/elx+1;
+    gex=E->lmesh.EXS[lev]+ex;
+    gey=E->lmesh.EYS[lev]+ey;
+    gez=E->lmesh.EZS[lev]+ez;
+    theta=E->ECO[lev][m][e].centre[1];
+    r=E->ECO[lev][m][e].centre[3];
+    depth=(1.0-r)*E->data.radius_km;
+    x=(r-E->sphere.ri)/(1.0-E->sphere.ri);
+    if(probe>=6 && probe<=9) degree=degrees[probe-6];
+    if(probe>=10 && probe<=14) {
+        lower=lo[probe-10];
+        upper=hi[probe-10];
+    }
+    switch(probe) {
+    case 1:
+        return ala_schur_hash_value(
+            (unsigned long)E->control.ala_schur_diagnostic_random_seed
+            +1000003UL*(unsigned long)E->sphere.capid[m]
+            +9176UL*(unsigned long)gex
+            +131UL*(unsigned long)gey+(unsigned long)gez);
+    case 2: return sin(pi*x);
+    case 3: return sin(4.0*pi*x);
+    case 4: return (gez&1)?-1.0:1.0;
+    case 5: return ((gex+gey)&1)?-1.0:1.0;
+    case 6: case 7: case 8: case 9:
+        return ala_schur_legendre(degree,cos(theta));
+    case 10: case 11: case 12: case 13: case 14:
+        if(depth<lower || depth>=upper) return 0.0;
+        if(upper>1.0e20)
+            return sin(0.5*pi*(depth-lower)
+                       /max(E->data.radius_km-lower,1.0));
+        return sin(pi*(depth-lower)/(upper-lower));
+    case 15:
+        return sin(2.0*pi*(double)gex/6.0)
+              *sin(2.0*pi*(double)gey/6.0)
+              *sin(pi*(double)gez/2.0);
+    case 16:
+        return sin(2.0*pi*(double)gex/24.0)
+              *sin(2.0*pi*(double)gey/24.0)
+              *sin(pi*(double)gez/8.0);
+    case 17: return 1.0;
+    case 18:
+        return 0.5*(E->refstate.rho[ez]+E->refstate.rho[ez+1]);
+    default: return 0.0;
+    }
+}
+
 static void ala_schur_build_probe(struct All_variables *E,int probe,
                                   double **q,double **frozen_q0,int lev)
 {
-    int m,e,ex,ey,ez,gex,gey,gez,degree=0;
-    double theta,phi,r,depth,x,value,norm,lower=0.0,upper=0.0;
+    int m,e;
+    double norm;
     double global_pdot();
-    const double pi=3.14159265358979323846;
-    const int elx=E->lmesh.ELX[lev],elz=E->lmesh.ELZ[lev];
 
     ala_schur_zero_pressure(E,q,lev);
-    if(probe==0) {
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(e=1;e<=E->lmesh.NPNO[lev];e++) q[m][e]=frozen_q0[m][e];
-    }
-    else {
-        if(probe>=6 && probe<=9) {
-            static const int degrees[4]={1,2,4,8};
-            degree=degrees[probe-6];
-        }
-        if(probe>=10 && probe<=14) {
-            static const double lo[5]={0.0,200.0,410.0,660.0,1000.0};
-            static const double hi[5]={200.0,410.0,660.0,1000.0,1.0e30};
-            lower=lo[probe-10]; upper=hi[probe-10];
-        }
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
-                for(ex=1;ex<=elx;ex++)
-                    for(ez=1;ez<=elz;ez++) {
-                        e=ez+(ex-1)*elz+(ey-1)*elz*elx;
-                        gex=E->lmesh.EXS[lev]+ex;
-                        gey=E->lmesh.EYS[lev]+ey;
-                        gez=E->lmesh.EZS[lev]+ez;
-                        theta=E->ECO[lev][m][e].centre[1];
-                        phi=E->ECO[lev][m][e].centre[2];
-                        r=E->ECO[lev][m][e].centre[3];
-                        depth=(1.0-r)*E->data.radius_km;
-                        x=(r-E->sphere.ri)/(1.0-E->sphere.ri);
-                        switch(probe) {
-                        case 1:
-                            value=ala_schur_hash_value(
-                                (unsigned long)E->control.ala_schur_diagnostic_random_seed
-                                +1000003UL*(unsigned long)E->sphere.capid[m]
-                                +9176UL*(unsigned long)gex
-                                +131UL*(unsigned long)gey+(unsigned long)gez);
-                            break;
-                        case 2: value=sin(pi*x); break;
-                        case 3: value=sin(4.0*pi*x); break;
-                        case 4: value=(gez&1)?-1.0:1.0; break;
-                        case 5: value=((gex+gey)&1)?-1.0:1.0; break;
-                        case 6: case 7: case 8: case 9:
-                            value=ala_schur_legendre(degree,cos(theta)); break;
-                        case 10: case 11: case 12: case 13: case 14:
-                            if(depth<lower || depth>=upper) value=0.0;
-                            else if(upper>1.0e20) value=sin(0.5*pi*(depth-lower)
-                                                        /max(E->data.radius_km-lower,1.0));
-                            else value=sin(pi*(depth-lower)/(upper-lower));
-                            break;
-                        case 15:
-                            value=sin(2.0*pi*(double)gex/6.0)
-                                 *sin(2.0*pi*(double)gey/6.0)
-                                 *sin(pi*(double)gez/2.0); break;
-                        case 16:
-                            value=sin(2.0*pi*(double)gex/24.0)
-                                 *sin(2.0*pi*(double)gey/24.0)
-                                 *sin(pi*(double)gez/8.0); break;
-                        case 17: value=1.0; break;
-                        case 18:
-                            value=0.5*(E->refstate.rho[ez]
-                                      +E->refstate.rho[ez+1]); break;
-                        default: value=0.0;
-                        }
-                        q[m][e]=value;
-                    }
-    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++)
+            q[m][e]=ala_schur_probe_raw_value(
+                E,probe,m,e,frozen_q0,lev);
     norm=sqrt(global_pdot(E,q,q,lev));
     if(!isfinite(norm) || norm<=1.0e-30)
         myerror(E,"Degenerate strict-ALA Schur diagnostic probe");
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[lev];e++) q[m][e]/=norm;
+}
+
+#define ALA_STAGE_E_REDUCTION_SIZE (ALA_SCHUR_PROBE_COUNT+9)
+
+static int ala_schur_depth_band(double depth);
+
+struct strict_ala_stage_e_observer {
+    int enabled;
+    int lev;
+    int have_previous;
+    int have_restart_pre;
+    double **initial_residual;
+    double **previous_residual;
+    double **restart_pre_residual;
+    double probe_norm[ALA_SCHUR_PROBE_COUNT];
+    double probe_fingerprint[ALA_SCHUR_PROBE_COUNT];
+    double last_correlation[ALA_SCHUR_PROBE_COUNT];
+    double restart_pre_correlation[ALA_SCHUR_PROBE_COUNT];
+    double last_depth_energy[ALA_SCHUR_DEPTH_BANDS];
+    double restart_pre_depth_energy[ALA_SCHUR_DEPTH_BANDS];
+    double previous_norm;
+    double restart_pre_norm;
+    double restart_pre_recursive;
+    double overhead_seconds;
+};
+
+static void strict_ala_stage_e_make_path(struct All_variables *E,
+    const char *suffix,char *path,size_t size)
+{
+    snprintf(path,size,"%s.%s",E->control.data_file,suffix);
+}
+
+static void strict_ala_stage_e_create_csv(struct All_variables *E,
+    const char *suffix,const char *header)
+{
+    char path[512];
+    FILE *fp;
+    if(E->parallel.me!=0) return;
+    strict_ala_stage_e_make_path(E,suffix,path,sizeof(path));
+    fp=fopen(path,"w");
+    if(fp==NULL) myerror(E,"Unable to create strict-ALA Stage-E output");
+    fprintf(fp,"%s\n",header);
+    fclose(fp);
+}
+
+static void strict_ala_stage_e_begin(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer,double **initial_residual,
+    int lev,int pressure_limit)
+{
+    int i,j,m,e,bad=0,bad_global;
+    double raw[ALA_SCHUR_PROBE_COUNT],local_norm[ALA_SCHUR_PROBE_COUNT];
+    double global_norm[ALA_SCHUR_PROBE_COUNT];
+    double local_gram[ALA_SCHUR_PROBE_COUNT*ALA_SCHUR_PROBE_COUNT];
+    double global_gram[ALA_SCHUR_PROBE_COUNT*ALA_SCHUR_PROBE_COUNT];
+    double local_fingerprint[ALA_SCHUR_PROBE_COUNT];
+    double global_fingerprint[ALA_SCHUR_PROBE_COUNT];
+    double weight;
+    double CPU_time0();
+    double start=CPU_time0();
+    char path[512];
+    FILE *fp;
+    const char *case_name=getenv("STRICT_ALA_CASE");
+
+    memset(observer,0,sizeof(*observer));
+    observer->enabled=E->control.ala_stage_e_diagnostic;
+    if(!observer->enabled) return;
+    if(E->control.ala_pcg_restart_interval!=50 || pressure_limit!=60)
+        myerror(E,"Stage-E freezes restart=50 and pressure iterations=60");
+    observer->lev=lev;
+    observer->initial_residual=ala_schur_alloc_pressure(E,lev);
+    observer->previous_residual=ala_schur_alloc_pressure(E,lev);
+    observer->restart_pre_residual=ala_schur_alloc_pressure(E,lev);
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+        local_norm[i]=0.0;
+        local_fingerprint[i]=0.0;
+        for(j=0;j<ALA_SCHUR_PROBE_COUNT;j++)
+            local_gram[i*ALA_SCHUR_PROBE_COUNT+j]=0.0;
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+            observer->initial_residual[m][e]=initial_residual[m][e];
+            for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+                raw[i]=ala_schur_probe_raw_value(
+                    E,i,m,e,observer->initial_residual,lev);
+                local_norm[i]+=raw[i]*raw[i];
+            }
+        }
+    MPI_Allreduce(local_norm,global_norm,ALA_SCHUR_PROBE_COUNT,MPI_DOUBLE,
+                  MPI_SUM,E->parallel.world);
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+        observer->probe_norm[i]=sqrt(global_norm[i]);
+        if(!isfinite(observer->probe_norm[i]) ||
+           observer->probe_norm[i]<=1.0e-30) bad=1;
+    }
+    MPI_Allreduce(&bad,&bad_global,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(bad_global) myerror(E,"Invalid Stage-E probe norm");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+            weight=ala_schur_hash_value(
+                7919UL*(unsigned long)E->sphere.capid[m]
+                +104729UL*(unsigned long)e);
+            for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+                raw[i]=ala_schur_probe_raw_value(
+                    E,i,m,e,observer->initial_residual,lev)
+                    /observer->probe_norm[i];
+                local_fingerprint[i]+=weight*raw[i];
+            }
+            for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+                for(j=0;j<ALA_SCHUR_PROBE_COUNT;j++)
+                    local_gram[i*ALA_SCHUR_PROBE_COUNT+j]+=raw[i]*raw[j];
+        }
+    MPI_Allreduce(local_gram,global_gram,
+                  ALA_SCHUR_PROBE_COUNT*ALA_SCHUR_PROBE_COUNT,MPI_DOUBLE,
+                  MPI_SUM,E->parallel.world);
+    MPI_Allreduce(local_fingerprint,global_fingerprint,
+                  ALA_SCHUR_PROBE_COUNT,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+        observer->probe_fingerprint[i]=global_fingerprint[i];
+    if(E->parallel.me==0) {
+        strict_ala_stage_e_make_path(E,"strict_ala_stage_E_probe_gram.csv",
+                                     path,sizeof(path));
+        fp=fopen(path,"w");
+        if(fp==NULL) myerror(E,"Unable to create Stage-E Gram output");
+        fprintf(fp,"case,probe_i,probe_j,value,probe_i_raw_norm,"
+                   "probe_j_raw_norm,probe_i_fingerprint,"
+                   "probe_j_fingerprint\n");
+        for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+            for(j=0;j<ALA_SCHUR_PROBE_COUNT;j++)
+                fprintf(fp,"%s,%s,%s,%.17e,%.17e,%.17e,%.17e,%.17e\n",
+                    case_name ? case_name : "UNKNOWN",
+                    ala_schur_probe_names[i],ala_schur_probe_names[j],
+                    global_gram[i*ALA_SCHUR_PROBE_COUNT+j],
+                    observer->probe_norm[i],observer->probe_norm[j],
+                    observer->probe_fingerprint[i],
+                    observer->probe_fingerprint[j]);
+        fclose(fp);
+    }
+    strict_ala_stage_e_create_csv(E,"strict_ala_stage_E_iterations.csv",
+        "case,iteration,restart_cycle,true_continuity_relative,"
+        "true_momentum_relative,recursive_residual,explicit_residual,"
+        "krylov_drift,krylov_residual_ratio,"
+        "krylov_residual_rel_difference,rho,residual_direction_cosine,"
+        "residual_norm,depth_0_200_energy,depth_200_410_energy,"
+        "depth_410_660_energy,depth_660_1000_energy,depth_1000_cmb_energy,"
+        "depth_0_200_fraction,depth_200_410_fraction,"
+        "depth_410_660_fraction,depth_660_1000_fraction,"
+        "depth_1000_cmb_fraction,pressure_schur_actions,K_gamma_rhs_solves,"
+        "K_gamma_operator_applications,velocity_MG_cycles,"
+        "velocity_smoother_sweeps,preconditioner_applications,"
+        "elapsed_seconds,diagnostic_overhead_seconds,restart_boundary,"
+        "residual_state_guard_pass");
+    strict_ala_stage_e_create_csv(E,"strict_ala_stage_E_correlations.csv",
+        "case,iteration,probe,correlation,normalized_correlation,"
+        "probe_raw_norm,probe_fingerprint,residual_norm");
+    strict_ala_stage_e_create_csv(E,"strict_ala_stage_E_hessenberg.csv",
+        "case,restart_cycle,column,row,value,cycle_start_residual_norm");
+    strict_ala_stage_e_create_csv(E,"strict_ala_stage_E_work_counters.csv",
+        "case,iteration,pressure_schur_actions,K_gamma_rhs_solves,"
+        "K_gamma_operator_applications,velocity_MG_cycles,"
+        "velocity_smoother_sweeps,preconditioner_applications,"
+        "inner_seconds,diagnostic_overhead_seconds,aggregation_semantics");
+    strict_ala_stage_e_create_csv(E,"strict_ala_stage_E_restart.csv",
+        "case,iteration,probe,pre_correlation,post_correlation,"
+        "pre_residual_norm,post_residual_norm,residual_jump_relative,"
+        "pre_post_cosine,pre_recursive_residual,post_recursive_residual,"
+        "pre_depth_0_200,pre_depth_200_410,pre_depth_410_660,"
+        "pre_depth_660_1000,pre_depth_1000_cmb,post_depth_0_200,"
+        "post_depth_200_410,post_depth_410_660,post_depth_660_1000,"
+        "post_depth_1000_cmb");
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"STRICT_ALA_STAGE_E_BEGIN case=%s probes=19 "
+                "sampling=every_iteration restart=50 pressure_limit=60 "
+                "reduction=batched\n",case_name ? case_name : "UNKNOWN");
+        fflush(E->fp);
+    }
+    observer->overhead_seconds+=CPU_time0()-start;
+}
+
+static void strict_ala_stage_e_sample(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer,double **residual,
+    int iteration,double continuity_relative,double momentum_relative,
+    double recursive_residual,double explicit_residual,int restart_boundary)
+{
+    int i,m,e,b,guard_local=1;
+    double raw[ALA_SCHUR_PROBE_COUNT];
+    double local[ALA_STAGE_E_REDUCTION_SIZE],global[ALA_STAGE_E_REDUCTION_SIZE];
+    double residual2_after=0.0,residual_norm,previous_norm,rho,cosine;
+    double ratio,rel_difference,depth_fraction;
+    double CPU_time0();
+    double start=CPU_time0(),accounted;
+    char path[512];
+    FILE *fp;
+    const char *case_name=getenv("STRICT_ALA_CASE");
+    const int residual2_index=ALA_SCHUR_PROBE_COUNT;
+    const int previous2_index=residual2_index+1;
+    const int previous_dot_index=residual2_index+2;
+    const int depth_index=residual2_index+3;
+    const int guard_index=depth_index+ALA_SCHUR_DEPTH_BANDS;
+
+    if(!observer->enabled) return;
+    for(i=0;i<ALA_STAGE_E_REDUCTION_SIZE;i++) local[i]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[observer->lev];e++) {
+            for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+                raw[i]=ala_schur_probe_raw_value(E,i,m,e,
+                    observer->initial_residual,observer->lev)
+                    /observer->probe_norm[i];
+                local[i]+=raw[i]*residual[m][e];
+            }
+            local[residual2_index]+=residual[m][e]*residual[m][e];
+            if(observer->have_previous) {
+                local[previous2_index]+=
+                    observer->previous_residual[m][e]
+                    *observer->previous_residual[m][e];
+                local[previous_dot_index]+=
+                    observer->previous_residual[m][e]*residual[m][e];
+            }
+            b=ala_schur_depth_band((1.0-E->ECO[observer->lev][m][e]
+                                    .centre[3])*E->data.radius_km);
+            local[depth_index+b]+=residual[m][e]*residual[m][e];
+        }
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[observer->lev];e++)
+            residual2_after+=residual[m][e]*residual[m][e];
+    if(residual2_after!=local[residual2_index]) guard_local=0;
+    local[guard_index]=guard_local ? 0.0 : 1.0;
+    MPI_Allreduce(local,global,ALA_STAGE_E_REDUCTION_SIZE,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    residual_norm=sqrt(max(global[residual2_index],0.0));
+    previous_norm=sqrt(max(global[previous2_index],0.0));
+    rho=observer->have_previous
+        ? residual_norm/max(previous_norm,1.0e-300) : 1.0;
+    cosine=observer->have_previous
+        ? global[previous_dot_index]
+          /max(residual_norm*previous_norm,1.0e-300) : 1.0;
+    ratio=recursive_residual/max(explicit_residual,1.0e-300);
+    rel_difference=fabs(recursive_residual-explicit_residual)
+        /max(explicit_residual,1.0e-300);
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+        observer->last_correlation[i]=global[i];
+    for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+        observer->last_depth_energy[b]=global[depth_index+b];
+    accounted=CPU_time0();
+    observer->overhead_seconds+=accounted-start;
+    if(E->parallel.me==0) {
+        strict_ala_stage_e_make_path(E,"strict_ala_stage_E_iterations.csv",
+                                     path,sizeof(path));
+        fp=fopen(path,"a");
+        if(fp==NULL) myerror(E,"Unable to append Stage-E iteration output");
+        fprintf(fp,"%s,%d,%d,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,"
+                   "%.17e,%.17e,%.17e,%.17e",
+                case_name ? case_name : "UNKNOWN",iteration,
+                iteration==0 ? 1 : (iteration-1)/50+1,
+                continuity_relative,momentum_relative,
+                recursive_residual,explicit_residual,ratio,ratio,
+                rel_difference,rho,cosine,residual_norm);
+        for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+            fprintf(fp,",%.17e",global[depth_index+b]);
+        for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++) {
+            depth_fraction=global[depth_index+b]
+                /max(global[residual2_index],1.0e-300);
+            fprintf(fp,",%.17e",depth_fraction);
+        }
+        fprintf(fp,",%lld,%lld,%lld,%lld,%lld,%lld,%.17e,%.17e,%d,%d\n",
+                E->control.ala_stage_abc_schur_action_count,
+                E->control.ala_stage_abc_inner_call_count,
+                E->control.ala_stage_e_k_operator_applications,
+                E->control.ala_stage_abc_inner_cycle_count,
+                E->control.ala_stage_e_velocity_smoother_sweeps,
+                E->control.ala_stage_abc_preconditioner_count,
+                CPU_time0()-E->control.ala_stage_abc_fgmres_start,
+                observer->overhead_seconds,restart_boundary,
+                global[guard_index]==0.0 ? 1 : 0);
+        fclose(fp);
+        strict_ala_stage_e_make_path(E,"strict_ala_stage_E_correlations.csv",
+                                     path,sizeof(path));
+        fp=fopen(path,"a");
+        if(fp==NULL) myerror(E,"Unable to append Stage-E correlations");
+        for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+            fprintf(fp,"%s,%d,%s,%.17e,%.17e,%.17e,%.17e,%.17e\n",
+                case_name ? case_name : "UNKNOWN",iteration,
+                ala_schur_probe_names[i],global[i],
+                global[i]/max(residual_norm,1.0e-300),
+                observer->probe_norm[i],observer->probe_fingerprint[i],
+                residual_norm);
+        fclose(fp);
+        strict_ala_stage_e_make_path(E,
+            "strict_ala_stage_E_work_counters.csv",path,sizeof(path));
+        fp=fopen(path,"a");
+        if(fp==NULL) myerror(E,"Unable to append Stage-E work counters");
+        fprintf(fp,"%s,%d,%lld,%lld,%lld,%lld,%lld,%lld,%.17e,%.17e,"
+                   "globally_identical_logical_counts_not_process_sums\n",
+                case_name ? case_name : "UNKNOWN",iteration,
+                E->control.ala_stage_abc_schur_action_count,
+                E->control.ala_stage_abc_inner_call_count,
+                E->control.ala_stage_e_k_operator_applications,
+                E->control.ala_stage_abc_inner_cycle_count,
+                E->control.ala_stage_e_velocity_smoother_sweeps,
+                E->control.ala_stage_abc_preconditioner_count,
+                E->control.ala_stage_abc_inner_seconds,
+                observer->overhead_seconds);
+        fclose(fp);
+    }
+    if(global[guard_index]!=0.0)
+        myerror(E,"Stage-E observer modified its residual input");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[observer->lev];e++)
+            observer->previous_residual[m][e]=residual[m][e];
+    observer->previous_norm=residual_norm;
+    observer->have_previous=1;
+    observer->overhead_seconds+=CPU_time0()-accounted;
+}
+
+static void strict_ala_stage_e_restart_pre(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer,double **residual,
+    double recursive_residual)
+{
+    int i,m,e,b;
+    double CPU_time0();
+    double start=CPU_time0();
+    if(!observer->enabled) return;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[observer->lev];e++)
+            observer->restart_pre_residual[m][e]=residual[m][e];
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++)
+        observer->restart_pre_correlation[i]=observer->last_correlation[i];
+    for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+        observer->restart_pre_depth_energy[b]=observer->last_depth_energy[b];
+    observer->restart_pre_norm=observer->previous_norm;
+    observer->restart_pre_recursive=recursive_residual;
+    observer->have_restart_pre=1;
+    observer->overhead_seconds+=CPU_time0()-start;
+}
+
+static void strict_ala_stage_e_restart_post(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer,double **residual,
+    int iteration,double recursive_residual)
+{
+    int i,m,e,b;
+    double raw[ALA_SCHUR_PROBE_COUNT];
+    double local[ALA_SCHUR_PROBE_COUNT+ALA_SCHUR_DEPTH_BANDS+3];
+    double global[ALA_SCHUR_PROBE_COUNT+ALA_SCHUR_DEPTH_BANDS+3];
+    double post_norm,jump2,cosine;
+    double CPU_time0();
+    double start=CPU_time0();
+    char path[512];
+    FILE *fp;
+    const char *case_name=getenv("STRICT_ALA_CASE");
+    const int norm_index=ALA_SCHUR_PROBE_COUNT;
+    const int dot_index=norm_index+1;
+    const int jump_index=norm_index+2;
+    const int depth_index=norm_index+3;
+    if(!observer->enabled || !observer->have_restart_pre) return;
+    for(i=0;i<ALA_SCHUR_PROBE_COUNT+ALA_SCHUR_DEPTH_BANDS+3;i++) local[i]=0.0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[observer->lev];e++) {
+            for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+                raw[i]=ala_schur_probe_raw_value(E,i,m,e,
+                    observer->initial_residual,observer->lev)
+                    /observer->probe_norm[i];
+                local[i]+=raw[i]*residual[m][e];
+            }
+            local[norm_index]+=residual[m][e]*residual[m][e];
+            local[dot_index]+=observer->restart_pre_residual[m][e]
+                              *residual[m][e];
+            jump2=residual[m][e]-observer->restart_pre_residual[m][e];
+            local[jump_index]+=jump2*jump2;
+            b=ala_schur_depth_band((1.0-E->ECO[observer->lev][m][e]
+                                    .centre[3])*E->data.radius_km);
+            local[depth_index+b]+=residual[m][e]*residual[m][e];
+        }
+    MPI_Allreduce(local,global,
+                  ALA_SCHUR_PROBE_COUNT+ALA_SCHUR_DEPTH_BANDS+3,
+                  MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    post_norm=sqrt(max(global[norm_index],0.0));
+    cosine=global[dot_index]/max(observer->restart_pre_norm*post_norm,1.0e-300);
+    if(E->parallel.me==0) {
+        strict_ala_stage_e_make_path(E,"strict_ala_stage_E_restart.csv",
+                                     path,sizeof(path));
+        fp=fopen(path,"a");
+        if(fp==NULL) myerror(E,"Unable to append Stage-E restart output");
+        for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
+            fprintf(fp,"%s,%d,%s,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,"
+                       "%.17e,%.17e",
+                    case_name ? case_name : "UNKNOWN",iteration,
+                    ala_schur_probe_names[i],
+                    observer->restart_pre_correlation[i],global[i],
+                    observer->restart_pre_norm,post_norm,
+                    sqrt(max(global[jump_index],0.0))
+                        /max(observer->restart_pre_norm,1.0e-300),
+                    cosine,observer->restart_pre_recursive,
+                    recursive_residual);
+            for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+                fprintf(fp,",%.17e",observer->restart_pre_depth_energy[b]);
+            for(b=0;b<ALA_SCHUR_DEPTH_BANDS;b++)
+                fprintf(fp,",%.17e",global[depth_index+b]);
+            fprintf(fp,"\n");
+        }
+        fclose(fp);
+    }
+    observer->have_restart_pre=0;
+    observer->overhead_seconds+=CPU_time0()-start;
+}
+
+static void strict_ala_stage_e_log_hessenberg(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer,int cycle,int column,
+    double *column_values,double cycle_start_norm)
+{
+    int row;
+    double CPU_time0();
+    double start=CPU_time0();
+    char path[512];
+    FILE *fp;
+    const char *case_name=getenv("STRICT_ALA_CASE");
+    if(!observer->enabled || E->parallel.me!=0) return;
+    strict_ala_stage_e_make_path(E,"strict_ala_stage_E_hessenberg.csv",
+                                 path,sizeof(path));
+    fp=fopen(path,"a");
+    if(fp==NULL) myerror(E,"Unable to append Stage-E Hessenberg output");
+    for(row=0;row<=column+1;row++)
+        fprintf(fp,"%s,%d,%d,%d,%.17e,%.17e\n",
+                case_name ? case_name : "UNKNOWN",cycle,column,row,
+                column_values[row],cycle_start_norm);
+    fclose(fp);
+    observer->overhead_seconds+=CPU_time0()-start;
+}
+
+static void strict_ala_stage_e_finalize(struct All_variables *E,
+    struct strict_ala_stage_e_observer *observer)
+{
+    const char *case_name=getenv("STRICT_ALA_CASE");
+    double CPU_time0();
+    double start=CPU_time0();
+    if(!observer->enabled) return;
+    observer->overhead_seconds+=CPU_time0()-start;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"STRICT_ALA_STAGE_E_COMPLETE case=%s overhead=%e "
+                "pressure_schur_actions=%lld K_gamma_rhs_solves=%lld "
+                "K_gamma_operator_applications=%lld velocity_MG_cycles=%lld "
+                "velocity_smoother_sweeps=%lld\n",
+                case_name ? case_name : "UNKNOWN",
+                observer->overhead_seconds,
+                E->control.ala_stage_abc_schur_action_count,
+                E->control.ala_stage_abc_inner_call_count,
+                E->control.ala_stage_e_k_operator_applications,
+                E->control.ala_stage_abc_inner_cycle_count,
+                E->control.ala_stage_e_velocity_smoother_sweeps);
+        fprintf(stderr,"STRICT_ALA_STAGE_E_COMPLETE case=%s overhead=%e "
+                "pressure_schur_actions=%lld K_gamma_rhs_solves=%lld "
+                "K_gamma_operator_applications=%lld velocity_MG_cycles=%lld "
+                "velocity_smoother_sweeps=%lld\n",
+                case_name ? case_name : "UNKNOWN",
+                observer->overhead_seconds,
+                E->control.ala_stage_abc_schur_action_count,
+                E->control.ala_stage_abc_inner_call_count,
+                E->control.ala_stage_e_k_operator_applications,
+                E->control.ala_stage_abc_inner_cycle_count,
+                E->control.ala_stage_e_velocity_smoother_sweeps);
+        fflush(E->fp);
+        fflush(stderr);
+    }
+    ala_schur_free_field(E,observer->initial_residual);
+    ala_schur_free_field(E,observer->previous_residual);
+    ala_schur_free_field(E,observer->restart_pre_residual);
+    memset(observer,0,sizeof(*observer));
 }
 
 static double ala_schur_velocity_residual(struct All_variables *E,double **u,
@@ -2831,7 +3300,7 @@ static void strict_ala_stage_c_momentum_metrics(
     double *numerator, double *denominator, double *rms, double *relative)
 {
     int m,i,neq,gneq;
-    long long k_application_count;
+    long long k_application_count,stage_e_k_application_count;
     double force_norm,residual_norm;
     void assemble_forces_into();
     void assemble_unaugmented_del2_u();
@@ -2841,6 +3310,8 @@ static void strict_ala_stage_c_momentum_metrics(
     neq=E->lmesh.neq;
     gneq=E->mesh.neq;
     k_application_count=E->control.ala_stage_abc_k_application_count;
+    stage_e_k_application_count=
+        E->control.ala_stage_e_k_operator_applications;
     assemble_forces_into(E,0,P,force_work);
     assemble_unaugmented_del2_u(E,V,residual_work,lev,1);
     assemble_grad_p(E,P,grad_work,lev);
@@ -2857,6 +3328,8 @@ static void strict_ala_stage_c_momentum_metrics(
     *relative=residual_norm/(*denominator);
     /* Observer work is not production solver cost. */
     E->control.ala_stage_abc_k_application_count=k_application_count;
+    E->control.ala_stage_e_k_operator_applications=
+        stage_e_k_application_count;
 }
 
 static void strict_ala_stage_c_log_iteration(
@@ -2940,6 +3413,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     double pressure_gram_determinant,pressure_residual_product;
     double pressure_velocity_action_defect,pressure_velocity_action_norm;
     double h[65][64],cs[64],sn[64],g[65],y[64],y_old[64];
+    double h_stage_e_column[65];
     double **w,**tmpF,**tmpU,**pressure_defect,**pressure_correction;
     double **pressure_correction_action;
     double **stage_force,**stage_grad,**stage_residual;
@@ -2947,6 +3421,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     int max_basis;
     struct ala_block_vector pressure_residual_view;
     struct ala_block_vector pressure_action_view;
+    struct strict_ala_stage_e_observer stage_e_observer;
     const char *acceptance_status;
 
     levnpno=E->lmesh.NPNO[lev];
@@ -2954,6 +3429,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     restart=E->control.ala_pcg_restart_interval;
     if(restart<1 || restart>64)
         myerror(E,"ALA FGMRES restart interval must be between 1 and 64");
+    memset(&stage_e_observer,0,sizeof(stage_e_observer));
     max_basis=restart+1;
     vb=(double ***)calloc(max_basis,sizeof(double **));
     zb=(double ***)calloc(restart,sizeof(double **));
@@ -3083,6 +3559,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 E->control.ala_unaugmented_momentum_tolerance);
         fflush(E->fp);
     }
+    strict_ala_stage_e_begin(E,&stage_e_observer,r,lev,*steps_max);
+    strict_ala_stage_e_sample(E,&stage_e_observer,r,0,cancellation_l2,
+        momentum_relative,initial_rnorm,initial_rnorm,0);
 
     while(count<*steps_max && !converged) {
         for(j=0;j<65;j++) {
@@ -3350,6 +3829,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 arnoldi_breakdown=1;
                 h[j+1][j]=0.0;
             }
+            for(i=0;i<=j+1;i++) h_stage_e_column[i]=h[i][j];
+            strict_ala_stage_e_log_hessenberg(E,&stage_e_observer,
+                count/restart+1,j,h_stage_e_column,beta);
             for(i=0;i<j;i++) {
                 sum=cs[i]*h[i][j]+sn[i]*h[i+1][j];
                 h[i+1][j]=-sn[i]*h[i][j]+cs[i]*h[i+1][j];
@@ -3466,6 +3948,14 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                     cancellation_l2<=audit_best_cancellation,
                     (converged || arnoldi_breakdown || count==*steps_max));
             }
+            if(stage_e_observer.enabled)
+                strict_ala_stage_e_sample(E,&stage_e_observer,explicit_r,
+                    count,cancellation_l2,stage_momentum_relative,
+                    residual_est*initial_rnorm,explicit_norm,
+                    (count%restart)==0);
+            if((count%restart)==0)
+                strict_ala_stage_e_restart_pre(E,&stage_e_observer,
+                    explicit_r,residual_est*initial_rnorm);
             if(converged || arnoldi_breakdown)
                 break;
             for(i=0;i<used;i++)
@@ -3474,6 +3964,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=levnpno;e++)
                 r[m][e]=explicit_r[m][e];
+        strict_ala_stage_e_restart_post(E,&stage_e_observer,r,count,
+                                        explicit_norm);
         strict_ala_momentum_decomposition_audit(
             E,V,P,tmpF,tmpU,lev,"restart",count,
             &momentum_rms,&momentum_relative);
@@ -3542,6 +4034,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
              * a clean case result, but never advance the physical model with
              * an unaccepted pressure/velocity pair. */
             MPI_Barrier(E->parallel.world);
+            strict_ala_stage_e_finalize(E,&stage_e_observer);
             MPI_Finalize();
             exit(EXIT_SUCCESS);
         }
@@ -3580,6 +4073,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
+    strict_ala_stage_e_finalize(E,&stage_e_observer);
     *steps_max=count;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         free((void *)w[m]);
@@ -8247,7 +8741,7 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
                                                double *relative)
 {
     int m, i, neq, gneq;
-    long long k_application_count;
+    long long k_application_count,stage_e_k_application_count;
     double force_norm, residual_norm;
     void assemble_unaugmented_del2_u();
     void assemble_forces();
@@ -8258,6 +8752,8 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
     neq = E->lmesh.neq;
     gneq = E->mesh.neq;
     k_application_count=E->control.ala_stage_abc_k_application_count;
+    stage_e_k_application_count=
+        E->control.ala_stage_e_k_operator_applications;
     /* Rebuild the force so its strict-ALA C^T P contribution matches the
      * current pressure iterate, exactly as in the post-solve audit. */
     assemble_forces(E,0);
@@ -8275,6 +8771,8 @@ static void strict_ala_momentum_residual_audit(struct All_variables *E,
     *rms = residual_norm / sqrt(max((double)gneq,1.0));
     *relative = residual_norm / max(force_norm,1.0e-32);
     E->control.ala_stage_abc_k_application_count=k_application_count;
+    E->control.ala_stage_e_k_operator_applications=
+        stage_e_k_application_count;
 }
 
 
@@ -8294,7 +8792,7 @@ static void strict_ala_momentum_decomposition_audit(
     int iteration, double *raw_rms, double *raw_relative)
 {
     int m,i,neq,gneq;
-    long long k_application_count;
+    long long k_application_count,stage_e_k_application_count;
     double force_norm,raw_norm,augmented_norm,penalty_norm;
     double predicted_penalty_norm,split_defect_norm,split_defect;
     double raw_penalty_dot,raw_penalty_cosine,predicted_augmented_norm;
@@ -8309,6 +8807,8 @@ static void strict_ala_momentum_decomposition_audit(
     neq=E->lmesh.neq;
     gneq=E->mesh.neq;
     k_application_count=E->control.ala_stage_abc_k_application_count;
+    stage_e_k_application_count=
+        E->control.ala_stage_e_k_operator_applications;
     assemble_forces(E,0);
     force_norm=sqrt(max(global_vdot(E,E->F,E->F,lev),0.0));
 
@@ -8376,6 +8876,8 @@ static void strict_ala_momentum_decomposition_audit(
         fflush(E->fp);
     }
     E->control.ala_stage_abc_k_application_count=k_application_count;
+    E->control.ala_stage_e_k_operator_applications=
+        stage_e_k_application_count;
 }
 
 

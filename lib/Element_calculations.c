@@ -511,6 +511,9 @@ void e_assemble_del2_u(E,u,Au,level,strip_bcs)
   const int nel=E->lmesh.NEL[level];
   const int neq=E->lmesh.NEQ[level];
 
+  if(E->control.ala_stage_e_diagnostic)
+    E->control.ala_stage_e_k_operator_applications++;
+
   for (m=1;m<=E->sphere.caps_per_proc;m++)   {
     for(i=0;i<neq;i++)
       Au[m][i] = 0.0;
@@ -587,6 +590,9 @@ void n_assemble_del2_u(E,u,Au,level,strip_bcs)
     const int nno=E->lmesh.NNO[level];
     const int dims=E->mesh.nsd;
     const int max_eqn = dims*14;
+
+  if(E->control.ala_stage_e_diagnostic)
+    E->control.ala_stage_e_k_operator_applications++;
 
 
   for (m=1;m<=E->sphere.caps_per_proc;m++)  {

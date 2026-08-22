@@ -519,11 +519,14 @@ struct CONTROL {
     int ala_schur_diagnostic_viscosity_mode;
     int ala_stage_abc_adjoint_diagnostic;
     int ala_stage_abc_production_logging;
+    int ala_stage_e_diagnostic;
     long long ala_stage_abc_inner_call_count;
     long long ala_stage_abc_inner_cycle_count;
     long long ala_stage_abc_schur_action_count;
     long long ala_stage_abc_preconditioner_count;
     long long ala_stage_abc_k_application_count;
+    long long ala_stage_e_k_operator_applications;
+    long long ala_stage_e_velocity_smoother_sweeps;
     double ala_stage_abc_inner_seconds;
     double ala_stage_abc_fgmres_start;
     double ala_stage_abc_bpi_seconds;
