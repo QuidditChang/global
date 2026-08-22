@@ -1204,7 +1204,8 @@ class StrictALAClosureOracle:
             "selected_runtime_assignment": "E->refstate.ala_beta[nz] = beta;" in material,
             "continuity_uses_selected_beta": "E->refstate.ala_beta[fine_nz] * dr" in element,
             "transpose_uses_same_element_matrix": (
-                "+ E->elt_c[lev][m][e].c[p][0]" in element
+                "ALA_COMBINED_PRESSURE_COEFFICIENT(" in element
+                and "E->elt_c[lev][m][e].c[p][0]" in element
             ),
         }
         compiled_sources = {

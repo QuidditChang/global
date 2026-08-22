@@ -314,7 +314,7 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
       fseek(inner_fp,0,SEEK_END);
       write_header=(ftell(inner_fp)==0);
       if(write_header)
-        fprintf(inner_fp,"case,call_id,outer_iteration,role,rhs_norm,requested_relative_tolerance,target_absolute,achieved_absolute,achieved_relative,cycles,max_cycles,seconds,status\n");
+        fprintf(inner_fp,"case,call_id,outer_iteration,role,rhs_rms,requested_relative_tolerance,target_absolute,achieved_absolute,achieved_relative,cycles,max_cycles,seconds,status\n");
       fprintf(inner_fp,
               "%s,%lld,%d,%s,%.17e,%.17e,%.17e,%.17e,%.17e,%d,%d,%.17e,%s\n",
               getenv("STRICT_ALA_CASE") ? getenv("STRICT_ALA_CASE") : "UNKNOWN",

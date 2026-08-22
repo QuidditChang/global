@@ -111,6 +111,14 @@ extern "C" {
 typedef float higher_precision;  /* matrix coeffs etc */
 typedef double higher_precision1; /* intermediate calculations for finding above coeffs */
 
+/* g and c are stored in higher_precision, but the strict-ALA continuity
+ * operator applies them as two independently promoted double coefficients.
+ * Every combined B=(D+C) transpose, augmentation, and preconditioner path
+ * must use the same promotion order.  Adding the two float values first
+ * introduces an extra single-precision rounding and breaks B/B^T identity. */
+#define ALA_COMBINED_PRESSURE_COEFFICIENT(g,c) \
+    ((double)(g) + (double)(c))
+
 
 /* Common structures */
 

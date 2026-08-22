@@ -561,8 +561,9 @@ void build_ala_element_vanka_factors(struct All_variables *E)
                        E->BI[level][m][eq]<=0.0)
                         myerror(E,"ALA element-Vanka assembled diagonal is invalid");
                     gradient[i]=fixed[i] ? 0.0 :
-                        E->elt_del[level][m][e].g[i][0]
-                       +E->elt_c[level][m][e].c[i][0];
+                        ALA_COMBINED_PRESSURE_COEFFICIENT(
+                            E->elt_del[level][m][e].g[i][0],
+                            E->elt_c[level][m][e].c[i][0]);
                     global_diag=1.0/E->BI[level][m][eq];
                     if(!fixed[i]) {
                         external=global_diag-matrix[i*n+i];

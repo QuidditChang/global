@@ -116,7 +116,7 @@ void assemble_forces(E,penalty)
  * assemble_forces() without touching E->F, so production diagnostics can
  * inspect the original momentum equation without mutating solver state. */
 void assemble_forces_into(struct All_variables *E, int penalty,
-                          double **target)
+                          double **pressure, double **target)
 {
   double elt_f[24];
   int m,a,e,i,a1,a2,a3,p,node;
@@ -135,6 +135,13 @@ void assemble_forces_into(struct All_variables *E, int penalty,
     for(a=0;a<neq;a++) target[m][a]=0.0;
     for(e=1;e<=nel;e++) {
       get_elt_f(E,e,elt_f,1,m);
+      /* get_elt_f() follows the legacy E->P contract.  The observer receives
+       * its candidate pressure explicitly, so correct the C^T term without
+       * mutating E->P, E->F, or any Krylov recurrence. */
+      if(E->control.ala_pressure_buoyancy && pressure!=E->P)
+        for(a=0;a<dims*ends;a++)
+          elt_f[a] -= E->elt_c[lev][m][e].c[a][0]
+                      *(pressure[m][e]-E->P[m][e]);
       for(a=1;a<=ends;a++) {
         node=E->ien[m][e].node[a];
         p=(a-1)*dims;
@@ -1032,12 +1039,15 @@ static void assemble_grad_rho_p_local_terms(struct All_variables *E,
         j1 = E->ID[lev][m][b].doff[1];
         j2 = E->ID[lev][m][b].doff[2];
         j3 = E->ID[lev][m][b].doff[3];
-        gradP[m][j1] += (E->elt_del[lev][m][e].g[p][0]
-                         + E->elt_c[lev][m][e].c[p][0]) * P[m][e];
-        gradP[m][j2] += (E->elt_del[lev][m][e].g[p+1][0]
-                         + E->elt_c[lev][m][e].c[p+1][0]) * P[m][e];
-        gradP[m][j3] += (E->elt_del[lev][m][e].g[p+2][0]
-                         + E->elt_c[lev][m][e].c[p+2][0]) * P[m][e];
+        gradP[m][j1] += ALA_COMBINED_PRESSURE_COEFFICIENT(
+                            E->elt_del[lev][m][e].g[p][0],
+                            E->elt_c[lev][m][e].c[p][0]) * P[m][e];
+        gradP[m][j2] += ALA_COMBINED_PRESSURE_COEFFICIENT(
+                            E->elt_del[lev][m][e].g[p+1][0],
+                            E->elt_c[lev][m][e].c[p+1][0]) * P[m][e];
+        gradP[m][j3] += ALA_COMBINED_PRESSURE_COEFFICIENT(
+                            E->elt_del[lev][m][e].g[p+2][0],
+                            E->elt_c[lev][m][e].c[p+2][0]) * P[m][e];
       }
     }
   }
@@ -1704,13 +1714,15 @@ void get_ala_aug_k(struct All_variables *E, int el,
     for(a=1;a<=ends;a++)
         for(da=0;da<dims;da++) {
             ia=(a-1)*dims+da;
-            ga=E->elt_del[level][m][el].g[ia][0]
-              +E->elt_c[level][m][el].c[ia][0];
+            ga=ALA_COMBINED_PRESSURE_COEFFICIENT(
+                E->elt_del[level][m][el].g[ia][0],
+                E->elt_c[level][m][el].c[ia][0]);
             for(b=1;b<=ends;b++)
                 for(db=0;db<dims;db++) {
                     ib=(b-1)*dims+db;
-                    gb=E->elt_del[level][m][el].g[ib][0]
-                      +E->elt_c[level][m][el].c[ib][0];
+                    gb=ALA_COMBINED_PRESSURE_COEFFICIENT(
+                        E->elt_del[level][m][el].g[ib][0],
+                        E->elt_c[level][m][el].c[ib][0]);
                     elt_k[ia*n+ib] += scale*ga*gb;
                 }
         }
@@ -1740,8 +1752,9 @@ void assemble_ala_augmented_u(struct All_variables *E, double **u,
                 for(d=0;d<dims;d++) {
                     ia=(a-1)*dims+d;
                     eq=E->ID[level][m][node].doff[d+1];
-                    gu += (E->elt_del[level][m][e].g[ia][0]
-                          +E->elt_c[level][m][e].c[ia][0])*u[m][eq];
+                    gu += ALA_COMBINED_PRESSURE_COEFFICIENT(
+                              E->elt_del[level][m][e].g[ia][0],
+                              E->elt_c[level][m][e].c[ia][0])*u[m][eq];
                 }
             }
             volume=E->ECO[level][m][e].area;
@@ -1753,8 +1766,9 @@ void assemble_ala_augmented_u(struct All_variables *E, double **u,
                 for(d=0;d<dims;d++) {
                     ia=(a-1)*dims+d;
                     eq=E->ID[level][m][node].doff[d+1];
-                    Au[m][eq] += scale*(E->elt_del[level][m][e].g[ia][0]
-                                      +E->elt_c[level][m][e].c[ia][0]);
+                    Au[m][eq] += scale*ALA_COMBINED_PRESSURE_COEFFICIENT(
+                                      E->elt_del[level][m][e].g[ia][0],
+                                      E->elt_c[level][m][e].c[ia][0]);
                 }
             }
         }
