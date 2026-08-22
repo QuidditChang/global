@@ -259,6 +259,9 @@ void read_initial_settings(struct All_variables *E)
   void set_mg_defaults();
   float tmp;
   int m=E->parallel.me;
+  int stage_e_cfg_value;
+  const char *stage_e_required;
+  const char *stage_e_case;
 
   /* first the problem type (defines subsequent behaviour) */
 
@@ -591,6 +594,33 @@ void read_initial_settings(struct All_variables *E)
                 &(E->control.ala_stage_abc_production_logging),"off",m);
   input_boolean("ala_stage_e_diagnostic",
                 &(E->control.ala_stage_e_diagnostic),"off",m);
+  /* Pyre inventories in an already-built launcher can silently omit a newly
+     added optional property while still accepting the source cfg.  Stage-E
+     jobs therefore carry an explicit, observation-only requirement from the
+     LSF environment into the C layer.  This is not a solver fallback: it can
+     only enable telemetry, and emits a mandatory runtime handshake. */
+  stage_e_cfg_value=E->control.ala_stage_e_diagnostic;
+  stage_e_required=getenv("STRICT_ALA_STAGE_E_REQUIRED");
+  if(stage_e_required!=NULL) {
+      if(strcmp(stage_e_required,"1")!=0)
+          myerror(E,"STRICT_ALA_STAGE_E_REQUIRED must be exactly 1");
+      E->control.ala_stage_e_diagnostic=1;
+      stage_e_case=getenv("STRICT_ALA_CASE");
+      if(E->parallel.me==0) {
+          fprintf(E->fp,"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=%s "
+                  "required=1 cfg_value=%d effective=1 source=%s\n",
+                  stage_e_case ? stage_e_case : "UNKNOWN",stage_e_cfg_value,
+                  stage_e_cfg_value ? "cfg_and_environment"
+                                    : "required_environment_override");
+          fprintf(stderr,"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=%s "
+                  "required=1 cfg_value=%d effective=1 source=%s\n",
+                  stage_e_case ? stage_e_case : "UNKNOWN",stage_e_cfg_value,
+                  stage_e_cfg_value ? "cfg_and_environment"
+                                    : "required_environment_override");
+          fflush(E->fp);
+          fflush(stderr);
+      }
+  }
   input_int("ala_coupled_shallow_vanka_layers",
             &(E->control.ala_coupled_shallow_vanka_layers),"0",m);
   input_int("ala_coupled_shallow_vanka_core_layers",

@@ -527,8 +527,16 @@ def analyze(args):
 
 
 def _case_complete(log_text, case):
-    return (f"STRICT_ALA_STAGE_E_COMPLETE case={case}" in log_text and
+    return (f"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case={case}" in log_text and
+            f"STRICT_ALA_STAGE_E_COMPLETE case={case}" in log_text and
             f"STRICT_ALA_STAGE_C_CASE_COMPLETE case={case}" in log_text)
+
+
+def _activation_source(log_text, case):
+    match = re.search(
+        rf"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case={re.escape(case)} .*?"
+        r"source=([A-Za-z_]+)", log_text)
+    return match.group(1) if match else None
 
 
 def validate_case_structure(data, case):
@@ -626,6 +634,8 @@ def audit(args):
     logs = [Path(path).read_text(errors="replace") for path in args.case_log]
     e0_complete = len(logs) == 2 and _case_complete(logs[0], "E0")
     e1_complete = len(logs) == 2 and _case_complete(logs[1], "E1")
+    e0_activation = _activation_source(logs[0], "E0") if len(logs) == 2 else None
+    e1_activation = _activation_source(logs[1], "E1") if len(logs) == 2 else None
     fatal_tokens = ("STRICT_ALA_STAGE_C_HIDDEN_FALLBACK", "Fatal error",
                     "MPI_Abort", "MPI failure")
     nonfinite = re.compile(
@@ -665,6 +675,9 @@ def audit(args):
             summary.get("projection_reconciliation_pass")),
         "E0_complete": e0_complete,
         "E1_complete": e1_complete,
+        "runtime_config_handshake_pass": bool(e0_activation and e1_activation),
+        "E0_stage_E_activation_source": e0_activation,
+        "E1_stage_E_activation_source": e1_activation,
         "E0_tail_classification": classification["case_E0"]["tail_classification"],
         "E1_tail_classification": classification["case_E1"]["tail_classification"],
         "E0_restart_verdict": classification["case_E0"]["restart_verdict"],

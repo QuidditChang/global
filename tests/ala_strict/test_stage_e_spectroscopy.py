@@ -11,6 +11,7 @@ TOOL = ROOT / "tools" / "analyze_strict_ala_stage_E.py"
 SOURCE = ROOT / "lib" / "Stokes_flow_Incomp.c"
 ELEMENT = ROOT / "lib" / "Element_calculations.c"
 GENERAL = ROOT / "lib" / "General_matrix_functions.c"
+INSTRUCTIONS = ROOT / "lib" / "Instructions.c"
 
 spec = importlib.util.spec_from_file_location("stage_e", TOOL)
 stage_e = importlib.util.module_from_spec(spec)
@@ -137,6 +138,7 @@ class InstrumentationContractTests(unittest.TestCase):
         cls.source = SOURCE.read_text()
         cls.element = ELEMENT.read_text()
         cls.general = GENERAL.read_text()
+        cls.instructions = INSTRUCTIONS.read_text()
 
     def function_body(self, name, next_name):
         return self.source.split(name, 1)[1].split(next_name, 1)[0]
@@ -193,6 +195,11 @@ class InstrumentationContractTests(unittest.TestCase):
         self.assertIn("strict_ala_stage_e_restart_post", self.source)
         self.assertIn("strict_ala_stage_e_log_hessenberg", self.source)
         self.assertIn("cycle_start_residual_norm", self.source)
+
+    def test_stage_e_requirement_reaches_c_layer(self):
+        self.assertIn('getenv("STRICT_ALA_STAGE_E_REQUIRED")',
+                      self.instructions)
+        self.assertIn("STRICT_ALA_STAGE_E_CONFIG_ACTIVE", self.instructions)
 
 
 class FailClosedSchemaTests(unittest.TestCase):
@@ -262,6 +269,14 @@ class FailClosedSchemaTests(unittest.TestCase):
         data = self.complete_case()
         data["work"][60]["K_gamma_operator_applications"] = "0"
         self.assertFalse(stage_e.validate_case_structure(data, "E0"))
+
+    def test_runtime_activation_source_is_machine_readable(self):
+        log = ("STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=E0 required=1 "
+               "cfg_value=0 effective=1 "
+               "source=required_environment_override\n")
+        self.assertEqual(stage_e._activation_source(log, "E0"),
+                         "required_environment_override")
+        self.assertIsNone(stage_e._activation_source(log, "E1"))
 
 
 if __name__ == "__main__":
