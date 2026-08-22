@@ -50,46 +50,121 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
                                double **V, double **P, double **F,
                                double imp, int *steps_max);
 static void apply_leng_zhong_pressure_preconditioner(
-    struct All_variables *E, double **r, double **z, double **work, int lev)
+    struct All_variables *E, double **r, double **z, double **work, int lev,
+    int iteration)
 {
-    int m,j,col,k,e,elz,ncolumns,npno;
+    int m,j,col,k,e,b,i,n,elz,ncolumns,npno;
+    int elx,ely,width,stride,capacity,blocks;
+    double rhs[LZ_HORIZONTAL_PATCH_MAX_WIDTH*
+               LZ_HORIZONTAL_PATCH_MAX_WIDTH];
+    double solution[LZ_HORIZONTAL_PATCH_MAX_WIDTH*
+                    LZ_HORIZONTAL_PATCH_MAX_WIDTH];
+    double sum,scale,weight,*L;
+    double base_energy,block_energy,blended_energy;
+    double global_pdot();
 
     npno=E->lmesh.NPNO[lev];
     if(!E->control.ala_leng_zhong_radial_line_preconditioner) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(j=1;j<=npno;j++)
                 z[m][j]=E->LZ_BPI[lev][m][j]*r[m][j];
-        return;
     }
+    else {
+        elz=E->lmesh.ELZ[lev];
+        ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(col=0;col<ncolumns;col++) {
+                if(!E->ALA_BPI_line_valid[lev][m][col+1]) {
+                    for(k=0;k<elz;k++) {
+                        e=col*elz+k+1;
+                        z[m][e]=E->LZ_BPI[lev][m][e]*r[m][e];
+                    }
+                    continue;
+                }
 
-    elz=E->lmesh.ELZ[lev];
-    ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(col=0;col<ncolumns;col++) {
-            if(!E->ALA_BPI_line_valid[lev][m][col+1]) {
+                e=col*elz+1;
+                work[m][e]=r[m][e];
+                for(k=1;k<elz;k++) {
+                    e=col*elz+k+1;
+                    work[m][e]=r[m][e]
+                        -E->ALA_BPI_line_lower[lev][m][e]*work[m][e-1];
+                }
                 for(k=0;k<elz;k++) {
                     e=col*elz+k+1;
-                    z[m][e]=E->LZ_BPI[lev][m][e]*r[m][e];
+                    z[m][e]=work[m][e]/E->ALA_BPI_line_diag[lev][m][e];
                 }
-                continue;
+                for(k=elz-2;k>=0;k--) {
+                    e=col*elz+k+1;
+                    z[m][e]-=E->ALA_BPI_line_lower[lev][m][e+1]
+                        *z[m][e+1];
+                }
             }
+    }
 
-            e=col*elz+1;
-            work[m][e]=r[m][e];
-            for(k=1;k<elz;k++) {
-                e=col*elz+k+1;
-                work[m][e]=r[m][e]
-                    -E->ALA_BPI_line_lower[lev][m][e]*work[m][e-1];
+    if(!E->control.ala_leng_zhong_horizontal_patch_preconditioner)
+        return;
+
+    base_energy=global_pdot(E,r,z,lev);
+    elx=E->lmesh.ELX[lev];
+    ely=E->lmesh.ELY[lev];
+    elz=E->lmesh.ELZ[lev];
+    width=E->control.ala_leng_zhong_horizontal_patch_width;
+    stride=E->control.ala_leng_zhong_horizontal_patch_stride;
+    capacity=width*width;
+    blocks=((elx+stride-1)/stride)*((ely+stride-1)/stride)*elz;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(e=1;e<=npno;e++)
+            work[m][e]=0.0;
+        for(b=0;b<blocks;b++) {
+            n=E->LZ_horizontal_patch_size[lev][m][b];
+            if(n==0)
+                continue;
+            L=E->LZ_horizontal_patch_chol[lev][m]
+                +(size_t)b*capacity*capacity;
+            for(i=0;i<n;i++) {
+                e=E->LZ_horizontal_patch_elements[lev][m][b*capacity+i];
+                scale=1.0/sqrt((double)
+                    E->LZ_horizontal_patch_multiplicity[lev][m][e]);
+                rhs[i]=r[m][e]*scale;
             }
-            for(k=0;k<elz;k++) {
-                e=col*elz+k+1;
-                z[m][e]=work[m][e]/E->ALA_BPI_line_diag[lev][m][e];
+            for(i=0;i<n;i++) {
+                sum=rhs[i];
+                for(j=0;j<i;j++)
+                    sum -= L[i*capacity+j]*solution[j];
+                solution[i]=sum/L[i*capacity+i];
             }
-            for(k=elz-2;k>=0;k--) {
-                e=col*elz+k+1;
-                z[m][e]-=E->ALA_BPI_line_lower[lev][m][e+1]*z[m][e+1];
+            for(i=n-1;i>=0;i--) {
+                sum=solution[i];
+                for(j=i+1;j<n;j++)
+                    sum -= L[j*capacity+i]*solution[j];
+                solution[i]=sum/L[i*capacity+i];
+            }
+            for(i=0;i<n;i++) {
+                e=E->LZ_horizontal_patch_elements[lev][m][b*capacity+i];
+                scale=1.0/sqrt((double)
+                    E->LZ_horizontal_patch_multiplicity[lev][m][e]);
+                work[m][e] += solution[i]*scale;
             }
         }
+    }
+    block_energy=global_pdot(E,r,work,lev);
+    weight=E->control.ala_leng_zhong_horizontal_patch_weight;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=npno;e++)
+            if(E->LZ_horizontal_patch_multiplicity[lev][m][e]>0)
+                z[m][e]=(1.0-weight)*z[m][e]+weight*work[m][e];
+    blended_energy=global_pdot(E,r,z,lev);
+    if((!isfinite(block_energy) || block_energy<=0.0 ||
+        !isfinite(blended_energy) || blended_energy<=0.0))
+        myerror(E,"Leng_Zhong horizontal-patch action is not positive");
+    if(iteration==0 && E->parallel.me==0) {
+        fprintf(E->fp,"LENG_ZHONG_HORIZONTAL_PATCH_ENERGY "
+                "diagonal=%e block=%e block_to_diagonal=%e "
+                "blended=%e weight=%e\n",base_energy,block_energy,
+                block_energy/max(base_energy,1.0e-300),blended_energy,
+                weight);
+        fflush(E->fp);
+    }
 }
 
 
@@ -8079,8 +8154,12 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
                             : (E->control.ala_leng_zhong_stage4
                                ? "LENG_ZHONG_STAGE4"
                                : "LENG_ZHONG_STAGE3"),
-                        E->control.ala_leng_zhong_radial_line_preconditioner
-                            ? "radial_line" : "diagonal",
+                        E->control.
+                            ala_leng_zhong_horizontal_patch_preconditioner
+                            ? "horizontal_patch"
+                            : (E->control.
+                                ala_leng_zhong_radial_line_preconditioner
+                               ? "radial_line" : "diagonal"),
                         E->control.ala_leng_zhong_stage4 ? "on(lagged)"
                                                         : "off",
                         E->control.augmented_Lagr,
@@ -8288,7 +8367,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
          * and is overwritten by the recurrence below. */
         if(E->control.ala_leng_zhong_2008)
             apply_leng_zhong_pressure_preconditioner(
-                E,r1,z1,r2,lev);
+                E,r1,z1,r2,lev,count);
         else
             for(m=1; m<=E->sphere.caps_per_proc; m++)
                 for(j=1; j<=npno; j++)

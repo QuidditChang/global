@@ -61,6 +61,7 @@ extern "C" {
 #define max(A,B) (((A) > (B)) ? (A) : (B))
 #define min(A,B) (((A) < (B)) ? (A) : (B))
 #define SWAP(a,b) {temp=(a);(a)=(b);(b)=temp;}
+#define LZ_HORIZONTAL_PATCH_MAX_WIDTH 8
 
 #endif
 
@@ -478,6 +479,11 @@ struct CONTROL {
     int ala_leng_zhong_residual_replacement_interval;
     double ala_leng_zhong_residual_drift_tolerance;
     int ala_leng_zhong_radial_line_preconditioner;
+    int ala_leng_zhong_horizontal_patch_preconditioner;
+    int ala_leng_zhong_horizontal_patch_width;
+    int ala_leng_zhong_horizontal_patch_stride;
+    double ala_leng_zhong_horizontal_patch_weight;
+    double ala_leng_zhong_horizontal_patch_regularization;
     double ala_leng_zhong_stage5_continuity_tolerance;
     double ala_leng_zhong_stage5_momentum_tolerance;
     double ala_leng_zhong_stage5_initial_guess_scale;
@@ -926,6 +932,10 @@ struct All_variables {
 
     double *BI[MAX_LEVELS][NCS],*BPI[MAX_LEVELS][NCS];
     double *LZ_BPI[MAX_LEVELS][NCS];
+    unsigned char *LZ_horizontal_patch_size[MAX_LEVELS][NCS];
+    unsigned short *LZ_horizontal_patch_multiplicity[MAX_LEVELS][NCS];
+    int *LZ_horizontal_patch_elements[MAX_LEVELS][NCS];
+    double *LZ_horizontal_patch_chol[MAX_LEVELS][NCS];
     double *ALA_velocity_BI[MAX_LEVELS][NCS];
     double *ALA_vanka_overlap_BI[MAX_LEVELS][NCS];
     higher_precision *ALA_vanka_chol[MAX_LEVELS][NCS];

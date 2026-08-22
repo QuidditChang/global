@@ -1171,6 +1171,7 @@ void construct_stiffness_B_matrix(E)
   void build_diagonal_of_leng_zhong_Ahat();
   void build_radial_line_Ahat_preconditioner();
   void build_leng_zhong_radial_line_preconditioner();
+  void build_leng_zhong_horizontal_patch_preconditioner();
   void project_viscosity();
   void construct_node_maps();
   void construct_node_ks();
@@ -1243,6 +1244,8 @@ void construct_stiffness_B_matrix(E)
     build_diagonal_of_leng_zhong_Ahat(E);
   if(E->control.ala_leng_zhong_radial_line_preconditioner)
     build_leng_zhong_radial_line_preconditioner(E);
+  if(E->control.ala_leng_zhong_horizontal_patch_preconditioner)
+    build_leng_zhong_horizontal_patch_preconditioner(E);
   if(E->control.ala_radial_line_preconditioner)
     build_radial_line_Ahat_preconditioner(E);
 

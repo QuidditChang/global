@@ -532,6 +532,19 @@ void read_initial_settings(struct All_variables *E)
   input_boolean("ala_leng_zhong_radial_line_preconditioner",
                 &(E->control.ala_leng_zhong_radial_line_preconditioner),
                 "off",m);
+  input_boolean("ala_leng_zhong_horizontal_patch_preconditioner",
+                &(E->control.ala_leng_zhong_horizontal_patch_preconditioner),
+                "off",m);
+  input_int("ala_leng_zhong_horizontal_patch_width",
+            &(E->control.ala_leng_zhong_horizontal_patch_width),"4",m);
+  input_int("ala_leng_zhong_horizontal_patch_stride",
+            &(E->control.ala_leng_zhong_horizontal_patch_stride),"2",m);
+  input_double("ala_leng_zhong_horizontal_patch_weight",
+               &(E->control.ala_leng_zhong_horizontal_patch_weight),
+               "0.5",m);
+  input_double("ala_leng_zhong_horizontal_patch_regularization",
+               &(E->control.ala_leng_zhong_horizontal_patch_regularization),
+               "1.0e-8",m);
   input_double("ala_leng_zhong_stage5_continuity_tolerance",
                &(E->control.ala_leng_zhong_stage5_continuity_tolerance),
                "1.0e-3",m);
@@ -809,6 +822,25 @@ void read_initial_settings(struct All_variables *E)
       !E->control.precondition))
       myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
               "the Leng selector and precond=on");
+  if(E->control.ala_leng_zhong_horizontal_patch_preconditioner &&
+     (!E->control.ala_leng_zhong_2008 || !E->control.precondition))
+      myerror(E, "ala_leng_zhong_horizontal_patch_preconditioner requires "
+              "the Leng selector and precond=on");
+  if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+     E->control.ala_leng_zhong_horizontal_patch_preconditioner)
+      myerror(E, "Leng_Zhong radial-line and horizontal-patch "
+              "preconditioners are mutually exclusive");
+  if(E->control.ala_leng_zhong_horizontal_patch_width < 2 ||
+     E->control.ala_leng_zhong_horizontal_patch_width >
+       LZ_HORIZONTAL_PATCH_MAX_WIDTH ||
+     E->control.ala_leng_zhong_horizontal_patch_stride < 1 ||
+     E->control.ala_leng_zhong_horizontal_patch_stride >
+       E->control.ala_leng_zhong_horizontal_patch_width ||
+     E->control.ala_leng_zhong_horizontal_patch_weight <= 0.0 ||
+     E->control.ala_leng_zhong_horizontal_patch_weight > 1.0 ||
+     E->control.ala_leng_zhong_horizontal_patch_regularization < 0.0)
+      myerror(E, "Invalid Leng_Zhong horizontal-patch geometry, weight, "
+              "or regularization");
   if(E->control.ala_leng_zhong_stage5 &&
      (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
       E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
@@ -1214,6 +1246,10 @@ void read_initial_settings(struct All_variables *E)
      strcmp(E->control.uzawa,"cg") != 0)
       myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
               "uzawa=cg");
+  if(E->control.ala_leng_zhong_horizontal_patch_preconditioner &&
+     strcmp(E->control.uzawa,"cg") != 0)
+      myerror(E, "ala_leng_zhong_horizontal_patch_preconditioner requires "
+              "uzawa=cg");
   if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
       strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&
      strcmp(E->control.uzawa,"ala_cg") != 0)
@@ -1417,6 +1453,7 @@ void allocate_common_vars(E)
     void set_up_nonmg_aliases();
     int m,n,snel,nsf,elx,ely,nox,noy,noz,nno,nel,npno;
     int k,i,j,d,l,nno_l,npno_l,nozl,nnov_l,nxyz;
+    int patch_capacity,patch_blocks,patch_width,patch_stride;
 
     m=0;
     n=1;
@@ -1565,6 +1602,31 @@ void allocate_common_vars(E)
     E->EVI[i][j] = (float *) malloc((nel+1)*vpoints[E->mesh.nsd]*sizeof(float));
     E->BPI[i][j] = (double *) malloc((npno+1)*sizeof(double));
     E->LZ_BPI[i][j] = (double *) malloc((npno+1)*sizeof(double));
+    E->LZ_horizontal_patch_size[i][j] = NULL;
+    E->LZ_horizontal_patch_multiplicity[i][j] = NULL;
+    E->LZ_horizontal_patch_elements[i][j] = NULL;
+    E->LZ_horizontal_patch_chol[i][j] = NULL;
+    if(E->control.ala_leng_zhong_horizontal_patch_preconditioner) {
+      patch_width=E->control.ala_leng_zhong_horizontal_patch_width;
+      patch_stride=E->control.ala_leng_zhong_horizontal_patch_stride;
+      patch_capacity=patch_width*patch_width;
+      patch_blocks=((elx+patch_stride-1)/patch_stride)
+          *((ely+patch_stride-1)/patch_stride)*E->lmesh.ELZ[i];
+      E->LZ_horizontal_patch_size[i][j]=(unsigned char *)calloc(
+          patch_blocks,sizeof(unsigned char));
+      E->LZ_horizontal_patch_multiplicity[i][j]
+          =(unsigned short *)calloc(npno+1,sizeof(unsigned short));
+      E->LZ_horizontal_patch_elements[i][j]=(int *)calloc(
+          (size_t)patch_blocks*patch_capacity,sizeof(int));
+      E->LZ_horizontal_patch_chol[i][j]=(double *)calloc(
+          (size_t)patch_blocks*patch_capacity*patch_capacity,
+          sizeof(double));
+      if(E->LZ_horizontal_patch_size[i][j]==NULL ||
+         E->LZ_horizontal_patch_multiplicity[i][j]==NULL ||
+         E->LZ_horizontal_patch_elements[i][j]==NULL ||
+         E->LZ_horizontal_patch_chol[i][j]==NULL)
+        myerror(E,"Unable to allocate Leng_Zhong horizontal-patch cache");
+    }
     E->ALA_BPI_line_diag[i][j] =
         (double *) malloc((npno+1)*sizeof(double));
     E->ALA_BPI_line_lower[i][j] =
@@ -1777,6 +1839,11 @@ void global_default_values(E)
     E->control.ala_leng_zhong_residual_replacement_interval = 0;
     E->control.ala_leng_zhong_residual_drift_tolerance = 0.1;
     E->control.ala_leng_zhong_radial_line_preconditioner = 0;
+    E->control.ala_leng_zhong_horizontal_patch_preconditioner = 0;
+    E->control.ala_leng_zhong_horizontal_patch_width = 4;
+    E->control.ala_leng_zhong_horizontal_patch_stride = 2;
+    E->control.ala_leng_zhong_horizontal_patch_weight = 0.5;
+    E->control.ala_leng_zhong_horizontal_patch_regularization = 1.0e-8;
     E->control.ala_leng_zhong_stage5_continuity_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_momentum_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_initial_guess_scale = 1.0;

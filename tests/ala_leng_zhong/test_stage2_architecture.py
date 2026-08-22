@@ -87,6 +87,16 @@ class Stage2ArchitectureTest(unittest.TestCase):
             instructions)
         self.assertIn(
             '"ala_leng_zhong_radial_line_preconditioner"', properties)
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_horizontal_patch_preconditioner\s*=\s*'
+            r'prop\.bool\(\s*"ala_leng_zhong_horizontal_patch_preconditioner",'
+            r'\s*default=False\)')
+        self.assertIn(
+            'input_boolean("ala_leng_zhong_horizontal_patch_preconditioner"',
+            instructions)
+        self.assertIn(
+            '"ala_leng_zhong_horizontal_patch_preconditioner"', properties)
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -221,6 +231,31 @@ class Stage2ArchitectureTest(unittest.TestCase):
             '       strcmp(E->control.uzawa,"cg") != 0)')
 
         self.assertLess(load, validation)
+        horizontal_validation = properties.index(
+            'if(E->control.ala_leng_zhong_horizontal_patch_preconditioner &&\n'
+            '       strcmp(E->control.uzawa,"cg") != 0)')
+        self.assertLess(load, horizontal_validation)
+
+    def test_leng_horizontal_patch_is_local_d_only_spd_blend(self):
+        element = read("lib/Element_calculations.c")
+        arrays = read("lib/Construct_arrays.c")
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        definitions = read("lib/global_defs.h")
+        builder = function_body(
+            element, "build_leng_zhong_horizontal_patch_preconditioner")
+        apply = function_body(
+            stokes, "apply_leng_zhong_pressure_preconditioner")
+
+        self.assertIn("LZ_horizontal_patch_chol", definitions)
+        self.assertIn("assemble_leng_zhong_Ahatp_jacobi_entry", builder)
+        self.assertNotIn("elt_c", builder)
+        self.assertIn("sqrt(pivot)", builder)
+        self.assertIn("LZ_horizontal_patch_multiplicity", builder)
+        self.assertIn("build_leng_zhong_horizontal_patch_preconditioner(E)",
+                      arrays)
+        self.assertIn("LZ_horizontal_patch_chol", apply)
+        self.assertIn("(1.0-weight)*z[m][e]+weight*work[m][e]", apply)
+        self.assertIn("LENG_ZHONG_HORIZONTAL_PATCH_ENERGY", apply)
 
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
@@ -286,7 +321,12 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "ala_leng_zhong_stage5": "on",
             "ala_leng_zhong_residual_replacement_interval": "0",
             "ala_leng_zhong_residual_drift_tolerance": "0.1",
-            "ala_leng_zhong_radial_line_preconditioner": "on",
+            "ala_leng_zhong_radial_line_preconditioner": "off",
+            "ala_leng_zhong_horizontal_patch_preconditioner": "on",
+            "ala_leng_zhong_horizontal_patch_width": "4",
+            "ala_leng_zhong_horizontal_patch_stride": "2",
+            "ala_leng_zhong_horizontal_patch_weight": "0.5",
+            "ala_leng_zhong_horizontal_patch_regularization": "1e-8",
             "ala_leng_zhong_stage5_continuity_tolerance": "1e-3",
             "ala_leng_zhong_stage5_momentum_tolerance": "1e-3",
             "ala_leng_zhong_stage5_initial_guess_scale": "1.0",
@@ -315,9 +355,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_lz_radial_line", lsf)
+        self.assertIn("stage5_lz_horizontal_patch", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
-        self.assertIn("stage5_lz_radial_line_AhatP%P_%T", cfg)
+        self.assertIn("stage5_lz_horizontal_patch_AhatP%P_%T", cfg)
         self.assertNotIn("runtime.cfg", lsf)
         self.assertNotIn("-i.bak", lsf)
 

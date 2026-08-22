@@ -120,6 +120,16 @@ class Incompressible(CitcomComponent):
             "ala_leng_zhong_residual_drift_tolerance", default=0.1)
         ala_leng_zhong_radial_line_preconditioner = prop.bool(
             "ala_leng_zhong_radial_line_preconditioner", default=False)
+        ala_leng_zhong_horizontal_patch_preconditioner = prop.bool(
+            "ala_leng_zhong_horizontal_patch_preconditioner", default=False)
+        ala_leng_zhong_horizontal_patch_width = prop.int(
+            "ala_leng_zhong_horizontal_patch_width", default=4)
+        ala_leng_zhong_horizontal_patch_stride = prop.int(
+            "ala_leng_zhong_horizontal_patch_stride", default=2)
+        ala_leng_zhong_horizontal_patch_weight = prop.float(
+            "ala_leng_zhong_horizontal_patch_weight", default=0.5)
+        ala_leng_zhong_horizontal_patch_regularization = prop.float(
+            "ala_leng_zhong_horizontal_patch_regularization", default=1.0e-8)
         ala_leng_zhong_stage5_continuity_tolerance = prop.float(
             "ala_leng_zhong_stage5_continuity_tolerance", default=1.0e-3)
         ala_leng_zhong_stage5_momentum_tolerance = prop.float(

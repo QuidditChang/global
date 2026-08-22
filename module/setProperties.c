@@ -1073,6 +1073,19 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    "ala_leng_zhong_radial_line_preconditioner",
                    E->control.ala_leng_zhong_radial_line_preconditioner,
                    fp);
+    getIntProperty(properties,
+                   "ala_leng_zhong_horizontal_patch_preconditioner",
+                   E->control.ala_leng_zhong_horizontal_patch_preconditioner,
+                   fp);
+    getIntProperty(properties, "ala_leng_zhong_horizontal_patch_width",
+                   E->control.ala_leng_zhong_horizontal_patch_width, fp);
+    getIntProperty(properties, "ala_leng_zhong_horizontal_patch_stride",
+                   E->control.ala_leng_zhong_horizontal_patch_stride, fp);
+    getDoubleProperty(properties, "ala_leng_zhong_horizontal_patch_weight",
+                      E->control.ala_leng_zhong_horizontal_patch_weight, fp);
+    getDoubleProperty(
+        properties, "ala_leng_zhong_horizontal_patch_regularization",
+        E->control.ala_leng_zhong_horizontal_patch_regularization, fp);
     getDoubleProperty(properties,
                       "ala_leng_zhong_stage5_continuity_tolerance",
                       E->control.ala_leng_zhong_stage5_continuity_tolerance,
@@ -1353,6 +1366,25 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         !E->control.precondition))
         myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
                 "the Leng selector and precond=on");
+    if(E->control.ala_leng_zhong_horizontal_patch_preconditioner &&
+       (!E->control.ala_leng_zhong_2008 || !E->control.precondition))
+        myerror(E, "ala_leng_zhong_horizontal_patch_preconditioner requires "
+                "the Leng selector and precond=on");
+    if(E->control.ala_leng_zhong_radial_line_preconditioner &&
+       E->control.ala_leng_zhong_horizontal_patch_preconditioner)
+        myerror(E, "Leng_Zhong radial-line and horizontal-patch "
+                "preconditioners are mutually exclusive");
+    if(E->control.ala_leng_zhong_horizontal_patch_width < 2 ||
+       E->control.ala_leng_zhong_horizontal_patch_width >
+         LZ_HORIZONTAL_PATCH_MAX_WIDTH ||
+       E->control.ala_leng_zhong_horizontal_patch_stride < 1 ||
+       E->control.ala_leng_zhong_horizontal_patch_stride >
+         E->control.ala_leng_zhong_horizontal_patch_width ||
+       E->control.ala_leng_zhong_horizontal_patch_weight <= 0.0 ||
+       E->control.ala_leng_zhong_horizontal_patch_weight > 1.0 ||
+       E->control.ala_leng_zhong_horizontal_patch_regularization < 0.0)
+        myerror(E, "Invalid Leng_Zhong horizontal-patch geometry, weight, "
+                "or regularization");
     if(E->control.ala_leng_zhong_stage5 &&
        (E->control.ala_leng_zhong_stage5_continuity_tolerance <= 0.0 ||
         E->control.ala_leng_zhong_stage5_momentum_tolerance <= 0.0 ||
@@ -1758,6 +1790,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     if(E->control.ala_leng_zhong_radial_line_preconditioner &&
        strcmp(E->control.uzawa,"cg") != 0)
         myerror(E, "ala_leng_zhong_radial_line_preconditioner requires "
+                "uzawa=cg");
+    if(E->control.ala_leng_zhong_horizontal_patch_preconditioner &&
+       strcmp(E->control.uzawa,"cg") != 0)
+        myerror(E, "ala_leng_zhong_horizontal_patch_preconditioner requires "
                 "uzawa=cg");
     if((strcmp(E->control.ala_outer_solver,"fgmres") == 0 ||
         strcmp(E->control.ala_outer_solver,"coupled_fgmres") == 0) &&

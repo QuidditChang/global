@@ -30,6 +30,7 @@
    to the point of redundancy. */
 
 #include <math.h>
+#include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
@@ -806,6 +807,158 @@ void build_leng_zhong_radial_line_preconditioner(E)
               "Leng_Zhong D-only radial-line preconditioner: "
               "pivot_range=(%e,%e) fallback_columns=%d/%d\n",
               global_min,global_max,global_fallback,global_columns);
+      fflush(E->fp);
+      fflush(stderr);
+    }
+}
+
+
+void build_leng_zhong_horizontal_patch_preconditioner(E)
+     struct All_variables *E;
+{
+    int m,ex,ey,ez,dx,dy,e,e1,e2,b,i,j,k,n,level;
+    int elx,ely,elz,width,stride,capacity,blocks,npno;
+    int local_valid,global_valid,local_fallback,global_fallback;
+    int local_uncovered,global_uncovered;
+    double matrix[LZ_HORIZONTAL_PATCH_MAX_WIDTH*
+                  LZ_HORIZONTAL_PATCH_MAX_WIDTH]
+                 [LZ_HORIZONTAL_PATCH_MAX_WIDTH*
+                  LZ_HORIZONTAL_PATCH_MAX_WIDTH];
+    double *L,sum,pivot,maxdiag,ratio;
+    double local_min_ratio,global_min_ratio;
+    const double pivot_tolerance=1.0e-12;
+
+    level=E->mesh.levmax;
+    elx=E->lmesh.ELX[level];
+    ely=E->lmesh.ELY[level];
+    elz=E->lmesh.ELZ[level];
+    npno=E->lmesh.NPNO[level];
+    width=E->control.ala_leng_zhong_horizontal_patch_width;
+    stride=E->control.ala_leng_zhong_horizontal_patch_stride;
+    capacity=width*width;
+    blocks=((elx+stride-1)/stride)*((ely+stride-1)/stride)*elz;
+    local_valid=0;
+    local_fallback=0;
+    local_min_ratio=1.0e300;
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+      memset(E->LZ_horizontal_patch_size[level][m],0,
+             blocks*sizeof(unsigned char));
+      memset(E->LZ_horizontal_patch_multiplicity[level][m],0,
+             (npno+1)*sizeof(unsigned short));
+      b=0;
+      for(ey=1;ey<=ely;ey+=stride)
+        for(ex=1;ex<=elx;ex+=stride)
+          for(ez=1;ez<=elz;ez++) {
+            n=0;
+            for(dy=0;dy<width && ey+dy<=ely;dy++)
+              for(dx=0;dx<width && ex+dx<=elx;dx++) {
+                e=ez+(ex+dx-1)*elz+(ey+dy-1)*elz*elx;
+                E->LZ_horizontal_patch_elements[level][m]
+                    [b*capacity+n]=e;
+                n++;
+              }
+            for(i=0;i<n;i++)
+              for(j=0;j<n;j++)
+                matrix[i][j]=0.0;
+            for(i=0;i<n;i++) {
+              e1=E->LZ_horizontal_patch_elements[level][m]
+                  [b*capacity+i];
+              for(j=0;j<=i;j++) {
+                e2=E->LZ_horizontal_patch_elements[level][m]
+                    [b*capacity+j];
+                matrix[i][j]=assemble_leng_zhong_Ahatp_jacobi_entry(
+                    E,e1,e2,level,m);
+                matrix[j][i]=matrix[i][j];
+              }
+            }
+            maxdiag=0.0;
+            for(i=0;i<n;i++) {
+              matrix[i][i] *= 1.0+E->control.
+                  ala_leng_zhong_horizontal_patch_regularization;
+              maxdiag=max(maxdiag,matrix[i][i]);
+            }
+            L=E->LZ_horizontal_patch_chol[level][m]
+                +(size_t)b*capacity*capacity;
+            memset(L,0,(size_t)capacity*capacity*sizeof(double));
+            ratio=1.0e300;
+            if(!isfinite(maxdiag) || maxdiag<=0.0)
+              n=0;
+            for(i=0;i<n;i++)
+              for(j=0;j<=i;j++) {
+                sum=matrix[i][j];
+                for(k=0;k<j;k++)
+                  sum -= L[i*capacity+k]*L[j*capacity+k];
+                if(i==j) {
+                  pivot=sum;
+                  if(!isfinite(pivot) ||
+                     pivot<=pivot_tolerance*maxdiag) {
+                    n=0;
+                    break;
+                  }
+                  ratio=min(ratio,pivot/maxdiag);
+                  L[i*capacity+j]=sqrt(pivot);
+                }
+                else
+                  L[i*capacity+j]=sum/L[j*capacity+j];
+              }
+            if(n==0) {
+              E->LZ_horizontal_patch_size[level][m][b]=0;
+              local_fallback++;
+            }
+            else {
+              E->LZ_horizontal_patch_size[level][m][b]
+                  =(unsigned char)n;
+              local_valid++;
+              local_min_ratio=min(local_min_ratio,ratio);
+            }
+            b++;
+          }
+      for(b=0;b<blocks;b++) {
+        n=E->LZ_horizontal_patch_size[level][m][b];
+        for(i=0;i<n;i++) {
+          e=E->LZ_horizontal_patch_elements[level][m][b*capacity+i];
+          E->LZ_horizontal_patch_multiplicity[level][m][e]++;
+        }
+      }
+    }
+
+    local_uncovered=0;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+      for(e=1;e<=npno;e++)
+        if(E->LZ_horizontal_patch_multiplicity[level][m][e]==0)
+          local_uncovered++;
+    MPI_Allreduce(&local_valid,&global_valid,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_fallback,&global_fallback,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_uncovered,&global_uncovered,1,MPI_INT,MPI_SUM,
+                  E->parallel.world);
+    MPI_Allreduce(&local_min_ratio,&global_min_ratio,1,MPI_DOUBLE,MPI_MIN,
+                  E->parallel.world);
+    if(global_valid==0)
+      myerror(E,"Leng_Zhong horizontal-patch built no valid blocks");
+    if(E->parallel.me==0) {
+      fprintf(E->fp,"Leng_Zhong D-only horizontal-patch preconditioner: "
+              "block=%dx%dx1 stride=%dx%dx1 weight=%e "
+              "regularization=%e valid_blocks=%d fallback_blocks=%d "
+              "uncovered_elements=%d min_pivot_ratio=%e "
+              "mpi_overlap=none operator=principal(D*Mv^-1*D^T)\n",
+              width,width,stride,stride,
+              E->control.ala_leng_zhong_horizontal_patch_weight,
+              E->control.ala_leng_zhong_horizontal_patch_regularization,
+              global_valid,global_fallback,global_uncovered,
+              global_min_ratio);
+      fprintf(stderr,"Leng_Zhong D-only horizontal-patch preconditioner: "
+              "block=%dx%dx1 stride=%dx%dx1 weight=%e "
+              "regularization=%e valid_blocks=%d fallback_blocks=%d "
+              "uncovered_elements=%d min_pivot_ratio=%e "
+              "mpi_overlap=none operator=principal(D*Mv^-1*D^T)\n",
+              width,width,stride,stride,
+              E->control.ala_leng_zhong_horizontal_patch_weight,
+              E->control.ala_leng_zhong_horizontal_patch_regularization,
+              global_valid,global_fallback,global_uncovered,
+              global_min_ratio);
       fflush(E->fp);
       fflush(stderr);
     }
