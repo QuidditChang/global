@@ -395,6 +395,7 @@ def emit_families(args):
 def analyze(args):
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    suffix = "_reanalyzed" if getattr(args, "reanalyzed", False) else ""
     data0 = load_case(args.e0_prefix)
     data1 = load_case(args.e1_prefix)
     case0 = analyze_case(data0)
@@ -412,16 +413,28 @@ def analyze(args):
     family_shift = float(np.max(np.abs(e1_vector - e0_vector)))
     composition_cosine = float(e0_vector @ e1_vector / max(
         np.linalg.norm(e0_vector) * np.linalg.norm(e1_vector), 1.0e-300))
-    changes = family_shift > MODE_COMPOSITION_CHANGE or composition_cosine < 0.95
+    representation_sufficient = min(
+        case0["represented_fraction"], case1["represented_fraction"]
+    ) >= MIN_REPRESENTED_FRACTION
+    changes = ((family_shift > MODE_COMPOSITION_CHANGE
+                or composition_cosine < 0.95)
+               if representation_sufficient else None)
     amplitude_ratio = case1["final_continuity"] / max(case0["final_continuity"], 1.0e-300)
-    if changes and abs(amplitude_ratio - 1.0) > 0.10:
+    if changes is None:
+        primary_effect = "UNRESOLVED"
+        composition_verdict = "UNRESOLVED_LOW_REPRESENTATION"
+    elif changes and abs(amplitude_ratio - 1.0) > 0.10:
         primary_effect = "MIXED"
+        composition_verdict = "MATERIAL_CHANGE"
     elif changes and family_shift > MODE_COMPOSITION_CHANGE:
         primary_effect = "MODE_REDISTRIBUTION"
+        composition_verdict = "MATERIAL_CHANGE"
     elif changes:
         primary_effect = "DIRECTION"
+        composition_verdict = "MATERIAL_CHANGE"
     else:
         primary_effect = "AMPLITUDE"
+        composition_verdict = "NO_MATERIAL_CHANGE_DETECTED"
 
     def public(case):
         return {
@@ -448,6 +461,8 @@ def analyze(args):
             "probe_fingerprint_maximum_absolute_difference":
                 fingerprint_difference,
             "schwarz_changes_mode_composition": changes,
+            "schwarz_mode_composition_verdict": composition_verdict,
+            "old_probe_representation_sufficient": representation_sufficient,
             "schwarz_primary_effect": primary_effect,
             "late_family_fraction_maximum_difference": family_shift,
             "late_family_composition_cosine": composition_cosine,
@@ -457,11 +472,13 @@ def analyze(args):
             "svd_rank_rule": "max(shape)*eps*max(smax,1)",
             "dominance_fraction": DOMINANCE_FRACTION,
             "minimum_represented_fraction": MIN_REPRESENTED_FRACTION,
+            "minimum_represented_fraction_status": "PROVISIONAL_DIAGNOSTIC",
             "projection_reconciliation": 1.0e-10,
             "stage_B_MPI_envelope": STAGE_B_MPI_ENVELOPE,
         },
     }
-    _write_json(output / "strict_ala_stage_E_classification.json", classification)
+    _write_json(output / f"strict_ala_stage_E_classification{suffix}.json",
+                classification)
 
     restart_verdicts = {case0["restart"]["verdict"], case1["restart"]["verdict"]}
     if "RESTART_SENSITIVITY_STRONG" in restart_verdicts:
@@ -484,9 +501,11 @@ def analyze(args):
                                 case1["represented_fraction"])
                             >= MIN_REPRESENTED_FRACTION,
     }
-    _write_json(output / "strict_ala_stage_E_next_action.json", next_action)
+    _write_json(output / f"strict_ala_stage_E_next_action{suffix}.json",
+                next_action)
 
-    with (output / "strict_ala_stage_E_projection.csv").open("w", newline="") as stream:
+    with (output / f"strict_ala_stage_E_projection{suffix}.csv").open(
+            "w", newline="") as stream:
         fields = ["case", "iteration", "represented_fraction",
                   "unexplained_fraction", "density_gauge_fraction"] + list(FAMILIES)
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -495,7 +514,8 @@ def analyze(args):
             for iteration, values in sorted(case["projections"].items()):
                 writer.writerow({"case": name, "iteration": iteration, **values})
 
-    with (output / "strict_ala_stage_E_ritz.csv").open("w", newline="") as stream:
+    with (output / f"strict_ala_stage_E_ritz{suffix}.csv").open(
+            "w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("case", "restart_cycle", "kind", "index", "real", "imag",
                          "cycle_start_residual_norm"))
@@ -521,7 +541,8 @@ def analyze(args):
             fingerprint_difference,
         "stage_B_MPI_envelope": STAGE_B_MPI_ENVELOPE,
     }
-    _write_json(output / "strict_ala_stage_E_analysis_summary.json", summary)
+    _write_json(output / f"strict_ala_stage_E_analysis_summary{suffix}.json",
+                summary)
     return 0 if all((summary["probe_gram_pass"],
                      summary["projection_reconciliation_pass"])) else 1
 
@@ -712,6 +733,8 @@ def parser():
     analyse.add_argument("--e0-prefix", required=True)
     analyse.add_argument("--e1-prefix", required=True)
     analyse.add_argument("--output-dir", required=True)
+    analyse.add_argument("--reanalyzed", action="store_true",
+                         help="write suffixed outputs without replacing the original analysis")
     analyse.set_defaults(function=analyze)
     final = sub.add_parser("audit")
     final.add_argument("--analysis-dir", required=True)

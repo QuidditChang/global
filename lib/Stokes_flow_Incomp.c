@@ -45,6 +45,7 @@ void assemble_grad_c_p(struct All_variables *,double **,double **,int);
 int solve_del2_u_bounded(struct All_variables *,double **,double **,double,
                          int,int,int);
 double CPU_time0(void);
+double global_pdot(struct All_variables *,double **,double **,int);
 
 void myerror(struct All_variables *,char *);
 double assemble_Ahatp_jacobi_entry(struct All_variables *,int,int,int,int);
@@ -115,6 +116,12 @@ struct ala_pressure_preconditioner_cache {
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
 };
+static void *strict_ala_stage_e2_begin(struct All_variables *,int);
+static void strict_ala_stage_e2_capture(struct All_variables *,void *,
+                                        double **,int);
+static void strict_ala_stage_e2_finalize(
+    struct All_variables *,void *,struct ala_pressure_preconditioner_cache *);
+static int ala_geneo_jacobi_eigensolve(double *,double *,double *,int);
 static void build_ala_shallow_patch_cache(struct All_variables *,
     struct ala_pressure_preconditioner_cache *,int);
 static void build_ala_two_level_cache(struct All_variables *,
@@ -524,6 +531,7 @@ struct strict_ala_stage_e_observer {
     double restart_pre_norm;
     double restart_pre_recursive;
     double overhead_seconds;
+    void *stage_e2;
 };
 
 static void strict_ala_stage_e_make_path(struct All_variables *E,
@@ -597,6 +605,7 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
     if(E->control.ala_pcg_restart_interval!=50 || pressure_limit!=60)
         myerror(E,"Stage-E freezes restart=50 and pressure iterations=60");
     observer->lev=lev;
+    observer->stage_e2=strict_ala_stage_e2_begin(E,lev);
     observer->initial_residual=ala_schur_alloc_pressure(E,lev);
     observer->previous_residual=ala_schur_alloc_pressure(E,lev);
     observer->restart_pre_residual=ala_schur_alloc_pressure(E,lev);
@@ -838,6 +847,7 @@ static void strict_ala_stage_e_sample(struct All_variables *E,
     }
     if(global[guard_index]!=0.0)
         myerror(E,"Stage-E observer modified its residual input");
+    strict_ala_stage_e2_capture(E,observer->stage_e2,residual,iteration);
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[observer->lev];e++)
             observer->previous_residual[m][e]=residual[m][e];
@@ -961,12 +971,14 @@ static void strict_ala_stage_e_log_hessenberg(struct All_variables *E,
 }
 
 static void strict_ala_stage_e_finalize(struct All_variables *E,
-    struct strict_ala_stage_e_observer *observer)
+    struct strict_ala_stage_e_observer *observer,
+    struct ala_pressure_preconditioner_cache *cache)
 {
     const char *case_name=getenv("STRICT_ALA_CASE");
     double CPU_time0();
     double start=CPU_time0();
     if(!observer->enabled) return;
+    strict_ala_stage_e2_finalize(E,observer->stage_e2,cache);
     observer->overhead_seconds+=CPU_time0()-start;
     if(E->parallel.me==0) {
         fprintf(E->fp,"STRICT_ALA_STAGE_E_COMPLETE case=%s overhead=%e "
@@ -4068,7 +4080,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
              * a clean case result, but never advance the physical model with
              * an unaccepted pressure/velocity pair. */
             MPI_Barrier(E->parallel.world);
-            strict_ala_stage_e_finalize(E,&stage_e_observer);
+            strict_ala_stage_e_finalize(E,&stage_e_observer,cache);
             MPI_Finalize();
             exit(EXIT_SUCCESS);
         }
@@ -4107,7 +4119,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
-    strict_ala_stage_e_finalize(E,&stage_e_observer);
+    strict_ala_stage_e_finalize(E,&stage_e_observer,cache);
     *steps_max=count;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
         free((void *)w[m]);
@@ -4330,6 +4342,8 @@ static void apply_ala_geneo_correction(struct All_variables *E,
     free((void *)global_rhs);
     free((void *)solution);
 }
+
+#include "Strict_ala_stage_e2.inc"
 
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,

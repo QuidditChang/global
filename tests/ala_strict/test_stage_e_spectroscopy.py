@@ -305,6 +305,12 @@ class FailClosedSchemaTests(unittest.TestCase):
                          "stage_E_case_contract")
         self.assertIsNone(stage_e._activation_source(log, "E1"))
 
+    def test_low_representation_cannot_claim_schwarz_mode_change(self):
+        self.assertIn("UNRESOLVED_LOW_REPRESENTATION", TOOL.read_text())
+        self.assertIn("representation_sufficient", TOOL.read_text())
+        self.assertIn('changes = ((family_shift > MODE_COMPOSITION_CHANGE',
+                      TOOL.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
