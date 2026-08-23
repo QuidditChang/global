@@ -170,6 +170,17 @@ class InstrumentationContractTests(unittest.TestCase):
         self.assertNotIn("\nresidual[m][e]=", body.replace(" ", ""))
         self.assertIn("residual_state_guard_pass", self.source)
 
+    def test_residual_guard_is_bitwise_snapshot_not_float_reduction(self):
+        body = self.function_body(
+            "static void strict_ala_stage_e_sample",
+            "static void strict_ala_stage_e_restart_pre")
+        self.assertIn("sample_guard_residual[m][e]=residual[m][e]", body)
+        self.assertIn("memcmp(&observer->sample_guard_residual[m][e]", body)
+        self.assertNotIn("residual2_after", body)
+        self.assertIn("ala_schur_free_field(E,observer->sample_guard_residual)",
+                      self.source)
+        self.assertIn("residual_guard=bitwise_snapshot", self.source)
+
     def test_krylov_ratio_and_difference_are_separate(self):
         self.assertIn("krylov_residual_ratio", self.source)
         self.assertIn("krylov_residual_rel_difference", self.source)

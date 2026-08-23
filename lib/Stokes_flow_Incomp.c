@@ -513,6 +513,7 @@ struct strict_ala_stage_e_observer {
     double **initial_residual;
     double **previous_residual;
     double **restart_pre_residual;
+    double **sample_guard_residual;
     double probe_norm[ALA_SCHUR_PROBE_COUNT];
     double probe_fingerprint[ALA_SCHUR_PROBE_COUNT];
     double last_correlation[ALA_SCHUR_PROBE_COUNT];
@@ -599,6 +600,7 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
     observer->initial_residual=ala_schur_alloc_pressure(E,lev);
     observer->previous_residual=ala_schur_alloc_pressure(E,lev);
     observer->restart_pre_residual=ala_schur_alloc_pressure(E,lev);
+    observer->sample_guard_residual=ala_schur_alloc_pressure(E,lev);
     for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
         local_norm[i]=0.0;
         local_fingerprint[i]=0.0;
@@ -700,7 +702,8 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
     if(E->parallel.me==0) {
         fprintf(E->fp,"STRICT_ALA_STAGE_E_BEGIN case=%s probes=19 "
                 "sampling=every_iteration restart=50 pressure_limit=60 "
-                "reduction=batched\n",case_name ? case_name : "UNKNOWN");
+                "reduction=batched residual_guard=bitwise_snapshot\n",
+                case_name ? case_name : "UNKNOWN");
         fflush(E->fp);
     }
     observer->overhead_seconds+=CPU_time0()-start;
@@ -714,7 +717,7 @@ static void strict_ala_stage_e_sample(struct All_variables *E,
     int i,m,e,b,guard_local=1;
     double raw[ALA_SCHUR_PROBE_COUNT];
     double local[ALA_STAGE_E_REDUCTION_SIZE],global[ALA_STAGE_E_REDUCTION_SIZE];
-    double residual2_after=0.0,residual_norm,previous_norm,rho,cosine;
+    double residual_norm,previous_norm,rho,cosine;
     double ratio,rel_difference,depth_fraction;
     double CPU_time0();
     double start=CPU_time0(),accounted;
@@ -731,6 +734,7 @@ static void strict_ala_stage_e_sample(struct All_variables *E,
     for(i=0;i<ALA_STAGE_E_REDUCTION_SIZE;i++) local[i]=0.0;
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[observer->lev];e++) {
+            observer->sample_guard_residual[m][e]=residual[m][e];
             for(i=0;i<ALA_SCHUR_PROBE_COUNT;i++) {
                 raw[i]=ala_schur_probe_raw_value(E,i,m,e,
                     observer->initial_residual,observer->lev)
@@ -751,8 +755,9 @@ static void strict_ala_stage_e_sample(struct All_variables *E,
         }
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[observer->lev];e++)
-            residual2_after+=residual[m][e]*residual[m][e];
-    if(residual2_after!=local[residual2_index]) guard_local=0;
+            if(memcmp(&observer->sample_guard_residual[m][e],
+                      &residual[m][e],sizeof(double))!=0)
+                guard_local=0;
     local[guard_index]=guard_local ? 0.0 : 1.0;
     MPI_Allreduce(local,global,ALA_STAGE_E_REDUCTION_SIZE,MPI_DOUBLE,MPI_SUM,
                   E->parallel.world);
@@ -992,6 +997,7 @@ static void strict_ala_stage_e_finalize(struct All_variables *E,
     ala_schur_free_field(E,observer->initial_residual);
     ala_schur_free_field(E,observer->previous_residual);
     ala_schur_free_field(E,observer->restart_pre_residual);
+    ala_schur_free_field(E,observer->sample_guard_residual);
     memset(observer,0,sizeof(*observer));
 }
 
