@@ -200,6 +200,22 @@ class InstrumentationContractTests(unittest.TestCase):
         self.assertIn('getenv("STRICT_ALA_STAGE_E_REQUIRED")',
                       self.instructions)
         self.assertIn("STRICT_ALA_STAGE_E_CONFIG_ACTIVE", self.instructions)
+        self.assertIn("strict_ala_stage_e_case_contract", self.instructions)
+        self.assertIn('strcmp(case_name,"E0")==0', self.instructions)
+        self.assertIn('strcmp(case_name,"E1")==0', self.instructions)
+        self.assertIn('strstr(data_dir,"/STRICT_STAGE_E_")',
+                      self.instructions)
+
+    def test_stage_e_case_cannot_silently_run_without_observer(self):
+        begin = self.function_body(
+            "static void strict_ala_stage_e_begin",
+            "static void strict_ala_stage_e_sample")
+        self.assertIn("source=fgmres_case_contract", begin)
+        self.assertIn("E->control.ala_stage_e_diagnostic=1", begin)
+        self.assertIn("Stage-E case reached FGMRES without active instrumentation",
+                      begin)
+        self.assertIn("Strict ALA Stage-E requires Stage-C production logging",
+                      begin)
 
 
 class FailClosedSchemaTests(unittest.TestCase):
@@ -271,11 +287,11 @@ class FailClosedSchemaTests(unittest.TestCase):
         self.assertFalse(stage_e.validate_case_structure(data, "E0"))
 
     def test_runtime_activation_source_is_machine_readable(self):
-        log = ("STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=E0 required=1 "
-               "cfg_value=0 effective=1 "
-               "source=required_environment_override\n")
+        log = ("STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=E0 required_env=0 "
+               "case_contract=1 cfg_value=0 effective=1 "
+               "source=stage_E_case_contract\n")
         self.assertEqual(stage_e._activation_source(log, "E0"),
-                         "required_environment_override")
+                         "stage_E_case_contract")
         self.assertIsNone(stage_e._activation_source(log, "E1"))
 
 

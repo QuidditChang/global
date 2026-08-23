@@ -549,6 +549,8 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
     int lev,int pressure_limit)
 {
     int i,j,m,e,bad=0,bad_global;
+    int case_contract;
+    int required_env;
     double raw[ALA_SCHUR_PROBE_COUNT],local_norm[ALA_SCHUR_PROBE_COUNT];
     double global_norm[ALA_SCHUR_PROBE_COUNT];
     double local_gram[ALA_SCHUR_PROBE_COUNT*ALA_SCHUR_PROBE_COUNT];
@@ -563,8 +565,34 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
     const char *case_name=getenv("STRICT_ALA_CASE");
 
     memset(observer,0,sizeof(*observer));
+    case_contract=(case_name!=NULL &&
+        (strcmp(case_name,"E0")==0 || strcmp(case_name,"E1")==0));
+    required_env=(getenv("STRICT_ALA_STAGE_E_REQUIRED")!=NULL);
+    /* This is the last activation boundary before the measured FGMRES loop.
+     * Keep it independent of the Pyre inventory/initialization path: older
+     * launchers have demonstrably propagated STRICT_ALA_CASE while dropping
+     * the optional Stage-E property and requirement flag. */
+    if(case_contract && !E->control.ala_stage_e_diagnostic) {
+        E->control.ala_stage_e_diagnostic=1;
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=%s "
+                    "required_env=%d case_contract=1 cfg_value=0 "
+                    "effective=1 source=fgmres_case_contract\n",
+                    case_name,required_env);
+            fprintf(stderr,"STRICT_ALA_STAGE_E_CONFIG_ACTIVE case=%s "
+                    "required_env=%d case_contract=1 cfg_value=0 "
+                    "effective=1 source=fgmres_case_contract\n",
+                    case_name,required_env);
+            fflush(E->fp);
+            fflush(stderr);
+        }
+    }
     observer->enabled=E->control.ala_stage_e_diagnostic;
+    if(case_contract && !observer->enabled)
+        myerror(E,"Stage-E case reached FGMRES without active instrumentation");
     if(!observer->enabled) return;
+    if(!E->control.ala_stage_abc_production_logging)
+        myerror(E,"Strict ALA Stage-E requires Stage-C production logging");
     if(E->control.ala_pcg_restart_interval!=50 || pressure_limit!=60)
         myerror(E,"Stage-E freezes restart=50 and pressure iterations=60");
     observer->lev=lev;
