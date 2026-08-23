@@ -97,6 +97,17 @@ class Stage2ArchitectureTest(unittest.TestCase):
             instructions)
         self.assertIn(
             '"ala_leng_zhong_horizontal_patch_preconditioner"', properties)
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_best_iterate_restore\s*=\s*prop\.bool\('
+            r'\s*"ala_leng_zhong_best_iterate_restore",\s*default=False\)')
+        self.assertRegex(
+            component,
+            r'ala_leng_zhong_stage5f_diagnostic\s*=\s*prop\.bool\('
+            r'\s*"ala_leng_zhong_stage5f_diagnostic",\s*default=False\)')
+        self.assertIn('input_boolean("ala_leng_zhong_stage5f_diagnostic"',
+                      instructions)
+        self.assertIn('"ala_leng_zhong_stage5f_diagnostic"', properties)
 
     def test_stage2_has_hard_exclusion_guards(self):
         for relative in ("lib/Instructions.c", "module/setProperties.c"):
@@ -268,6 +279,26 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("V[m][j]=best_V[m][j]", inner)
         self.assertIn("P[m][j]=best_P[m][j]", inner)
         self.assertIn("LENG_ZHONG_BEST_FROZEN_ITERATE", inner)
+        self.assertIn("ala_leng_zhong_best_iterate_restore", inner)
+
+    def test_stage5f_is_observation_only_pressure_spectroscopy(self):
+        stokes = read("lib/Stokes_flow_Incomp.c")
+        outer = function_body(stokes, "solve_Ahat_p_fhat_iterCG")
+        replay = function_body(stokes, "lz5f_replay_frozen_inner")
+        analyzer = read("tests/ala_leng_zhong/analyze_stage5f.py")
+
+        self.assertIn("LENG_STAGE5F_BEGIN", outer)
+        self.assertIn("leng_stage5F_outer.csv", outer)
+        self.assertIn("leng_stage5F_inner.csv", outer)
+        self.assertIn("leng_stage5F_gauge.csv", outer)
+        self.assertIn("frozen_caps=60,120,240", outer)
+        self.assertIn("num_of_loop!=95", outer)
+        self.assertIn("struct MONITOR post_monitor=E->monitor", replay)
+        self.assertIn("E->monitor=post_monitor", replay)
+        self.assertIn("E->u1[m][i]=post_u1[m][i]", replay)
+        self.assertIn("LENG_STAGE5F_REPLAY_EQUIVALENCE", replay)
+        self.assertIn("operator_transpose_inconsistent", analyzer)
+        self.assertIn("mpi_interface_concentration", analyzer)
 
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
         definitions = read("lib/global_defs.h")
@@ -299,7 +330,8 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("LENG_ZHONG_STAGE5_RESULT", outer)
         loop_end = outer.index("} /* end of while */")
         continuity = outer.index("assemble_div_rho_u(E,V,diff_p,lev)")
-        momentum_audit = outer.index("strict_ala_momentum_residual_audit")
+        momentum_audit = outer.index("strict_ala_momentum_residual_audit",
+                                     continuity)
         self.assertLess(loop_end, continuity)
         self.assertLess(continuity, momentum_audit)
         self.assertIn("strict_ala_continuity_metrics", outer)
@@ -331,6 +363,8 @@ class Stage2ArchitectureTest(unittest.TestCase):
             "ala_leng_zhong_stage3": "on",
             "ala_leng_zhong_stage4": "on",
             "ala_leng_zhong_stage5": "on",
+            "ala_leng_zhong_best_iterate_restore": "off",
+            "ala_leng_zhong_stage5f_diagnostic": "on",
             "ala_leng_zhong_residual_replacement_interval": "0",
             "ala_leng_zhong_residual_drift_tolerance": "0.1",
             "ala_leng_zhong_radial_line_preconditioner": "off",
@@ -367,9 +401,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5_lz_best_iterate", lsf)
+        self.assertIn("stage5F_pressure_spectroscopy", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
-        self.assertIn("stage5_lz_best_iterate_AhatP%P_%T", cfg)
+        self.assertIn("stage5F_pressure_spectroscopy_AhatP%P_%T", cfg)
         self.assertNotIn("runtime.cfg", lsf)
         self.assertNotIn("-i.bak", lsf)
 

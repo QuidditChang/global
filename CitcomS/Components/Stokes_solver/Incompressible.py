@@ -130,6 +130,10 @@ class Incompressible(CitcomComponent):
             "ala_leng_zhong_horizontal_patch_weight", default=0.5)
         ala_leng_zhong_horizontal_patch_regularization = prop.float(
             "ala_leng_zhong_horizontal_patch_regularization", default=1.0e-8)
+        ala_leng_zhong_best_iterate_restore = prop.bool(
+            "ala_leng_zhong_best_iterate_restore", default=False)
+        ala_leng_zhong_stage5f_diagnostic = prop.bool(
+            "ala_leng_zhong_stage5f_diagnostic", default=False)
         ala_leng_zhong_stage5_continuity_tolerance = prop.float(
             "ala_leng_zhong_stage5_continuity_tolerance", default=1.0e-3)
         ala_leng_zhong_stage5_momentum_tolerance = prop.float(

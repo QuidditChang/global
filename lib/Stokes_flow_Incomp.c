@@ -171,6 +171,65 @@ static void apply_leng_zhong_pressure_preconditioner(
 static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                                   double **V, double **P, double **F,
                                   double imp, int *steps_max);
+static FILE *lz5f_inner_csv=NULL;
+static int lz5f_inner_active=0;
+static int lz5f_inner_outer=0;
+static int lz5f_inner_cap=0;
+static const char *lz5f_inner_kind="off";
+static const char *lz5f_inner_preconditioner="off";
+
+static double lz5f_physical_continuity(
+    struct All_variables *E,double **residual,double **c_term,int lev,
+    double *mass_norm)
+{
+    int m,e,nel;
+    double volume,d,c,scale,local[2],global[2];
+    local[0]=local[1]=0.0;
+    nel=E->lmesh.NEL[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=nel;e++) {
+            volume=E->eco[m][e].area;
+            if(volume<=0.0) continue;
+            c=c_term[m][e];
+            d=residual[m][e]-c;
+            scale=fabs(d)+fabs(c);
+            local[0] += residual[m][e]*residual[m][e]/volume;
+            local[1] += scale*scale/volume;
+        }
+    MPI_Allreduce(local,global,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    *mass_norm=sqrt(max(global[0],0.0));
+    return sqrt(global[0]/max(global[1],1.0e-300));
+}
+
+static void lz5f_write_inner_row(struct All_variables *E,double **residual,
+    double **c_term,int lev,int iteration,double recursive,double alpha,
+    double beta,double curvature,double start_time)
+{
+    int m,e;
+    double local_sum=0.0,global_sum,norm2,const_norm,perp_norm;
+    double mass_norm,physical,compatibility;
+    double global_pdot();
+    if(!lz5f_inner_active) return;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) local_sum+=residual[m][e];
+    MPI_Allreduce(&local_sum,&global_sum,1,MPI_DOUBLE,MPI_SUM,
+                  E->parallel.world);
+    norm2=max(global_pdot(E,residual,residual,lev),0.0);
+    const_norm=fabs(global_sum)/sqrt(max((double)E->mesh.npno,1.0));
+    perp_norm=sqrt(max(norm2-const_norm*const_norm,0.0));
+    compatibility=const_norm/sqrt(max(norm2,1.0e-300));
+    physical=lz5f_physical_continuity(E,residual,c_term,lev,&mass_norm);
+    if(E->parallel.me==0 && lz5f_inner_csv!=NULL) {
+        fprintf(lz5f_inner_csv,
+            "%d,%s,%s,%d,%d,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,"
+            "%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e\n",
+            lz5f_inner_outer,lz5f_inner_kind,lz5f_inner_preconditioner,
+            lz5f_inner_cap,iteration,recursive,sqrt(norm2),mass_norm,
+            physical,const_norm,perp_norm,compatibility,alpha,beta,curvature,
+            MPI_Wtime()-start_time);
+        fflush(lz5f_inner_csv);
+    }
+}
 static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                                     double **V, double **P, double **F,
                                     double imp, int *steps_max);
@@ -8148,7 +8207,8 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
                 fprintf(E->fp, "%s operator=G^T_K^-1_G "
                         "velocity_operator=K_unaugmented bpi=D_only_%s C=on "
                         "W=%s aug_lagr=%d gamma=%e replacement_interval=%d "
-                        "drift_tolerance=%e\n",
+                        "drift_tolerance=%e best_iterate_restore=%s "
+                        "stage5f_diagnostic=%s\n",
                         E->control.ala_leng_zhong_stage5
                             ? "LENG_ZHONG_STAGE5"
                             : (E->control.ala_leng_zhong_stage4
@@ -8166,7 +8226,11 @@ static float solve_Ahat_p_fhat(struct All_variables *E,
                         E->control.ala_augmented_lagrangian_gamma,
                         E->control.
                             ala_leng_zhong_residual_replacement_interval,
-                        E->control.ala_leng_zhong_residual_drift_tolerance);
+                        E->control.ala_leng_zhong_residual_drift_tolerance,
+                        E->control.ala_leng_zhong_best_iterate_restore
+                            ? "on" : "off",
+                        E->control.ala_leng_zhong_stage5f_diagnostic
+                            ? "on" : "off");
                 fflush(E->fp);
             }
             residual = solve_Ahat_p_fhat_iterCG(E, V, P, F, imp, steps_max);
@@ -8228,6 +8292,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     double best_frozen_norm, best_frozen_relative;
     double recursive_norm, explicit_difference_norm, residual_drift;
     double d_c_old_cosine;
+    double stage5f_start;
     const char *leng_result_name;
 
     double global_vdot(), global_pdot();
@@ -8267,7 +8332,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         c_rhs[m] = (double *)malloc((npno+1)*sizeof(double));
         best_V[m] = NULL;
         best_P[m] = NULL;
-        if(E->control.ala_leng_zhong_stage3) {
+        if(E->control.ala_leng_zhong_stage3 &&
+           E->control.ala_leng_zhong_best_iterate_restore) {
             best_V[m] = (double *)malloc(neq*sizeof(double));
             best_P[m] = (double *)malloc((npno+1)*sizeof(double));
             if(best_V[m]==NULL || best_P[m]==NULL)
@@ -8276,9 +8342,11 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     }
 
     time0 = CPU_time0();
+    stage5f_start = MPI_Wtime();
     count = 0;
     restart_direction = 1;
     replacement_count = 0;
+    delta = 0.0;
     best_iteration = 0;
     best_iterate_restored = 0;
 
@@ -8342,12 +8410,13 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         frozen_reduction=1.0;
         best_frozen_norm=frozen_norm;
         best_frozen_relative=frozen_relative;
-        for(m=1;m<=E->sphere.caps_per_proc;m++) {
-            for(j=0;j<neq;j++)
-                best_V[m][j]=V[m][j];
-            for(j=1;j<=npno;j++)
-                best_P[m][j]=P[m][j];
-        }
+        if(E->control.ala_leng_zhong_best_iterate_restore)
+            for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                for(j=0;j<neq;j++)
+                    best_V[m][j]=V[m][j];
+                for(j=1;j<=npno;j++)
+                    best_P[m][j]=P[m][j];
+            }
     }
 
     residual = incompressibility_residual(E, V, r1);
@@ -8375,6 +8444,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                 residual_drift,0,E->control.tole_comp);
         fflush(E->fp);
     }
+    if(E->control.ala_leng_zhong_stage3)
+        lz5f_write_inner_row(E,r1,c_rhs,lev,0,0.0,0.0,0.0,0.0,
+                             stage5f_start);
 
 
     r0dotz0 = 0;
@@ -8510,7 +8582,8 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
             frozen_norm=sqrt(max(global_pdot(E,F,F,lev),0.0));
             frozen_relative=frozen_norm/max(d_norm+c_old_norm,1.0e-300);
             frozen_reduction=frozen_norm/initial_frozen_norm;
-            if(frozen_relative < best_frozen_relative) {
+            if(E->control.ala_leng_zhong_best_iterate_restore &&
+               frozen_relative < best_frozen_relative) {
                 best_frozen_norm=frozen_norm;
                 best_frozen_relative=frozen_relative;
                 best_iteration=count+1;
@@ -8578,6 +8651,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
                     E->control.tole_comp);
             fflush(E->fp);
         }
+        if(E->control.ala_leng_zhong_stage3)
+            lz5f_write_inner_row(E,F,c_rhs,lev,count,recursive_norm,alpha,
+                                 delta,curvature,stage5f_start);
 
 
         /* shift array pointers */
@@ -8599,7 +8675,9 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     /* A finite CG budget can pass the minimum of the explicitly assembled
      * frozen continuity equation and then deteriorate.  Retain the best
      * physical iterate without changing the D-only Krylov recurrence. */
-    if(E->control.ala_leng_zhong_stage3 && best_iteration<count) {
+    if(E->control.ala_leng_zhong_stage3 &&
+       E->control.ala_leng_zhong_best_iterate_restore &&
+       best_iteration<count) {
         best_iterate_restored=1;
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             for(j=0;j<neq;j++)
@@ -8709,6 +8787,92 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
     }
 
     return(residual);
+}
+
+static void lz5f_replay_frozen_inner(struct All_variables *E,int outer,
+    double **initial_V,double **initial_P,double **initial_F,
+    double **production_V,double **production_P,double **pre_u1,
+    struct MONITOR pre_monitor,double imp)
+{
+    int m,i,k,cycles,saved_patch;
+    int caps[3]={60,120,240};
+    double vdiff2,pdiff2,vbase2,pbase2;
+    double global_vdot(),global_pdot();
+    struct MONITOR post_monitor=E->monitor;
+    double **post_u1=ala_schur_alloc_velocity(E,E->mesh.levmax);
+    double **v=ala_schur_alloc_velocity(E,E->mesh.levmax);
+    double **p=ala_schur_alloc_pressure(E,E->mesh.levmax);
+    double **f=ala_schur_alloc_velocity(E,E->mesh.levmax);
+    const int lev=E->mesh.levmax;
+    const int neq=E->lmesh.NEQ[lev];
+    const int npno=E->lmesh.NPNO[lev];
+
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<=neq;i++) post_u1[m][i]=E->u1[m][i];
+    saved_patch=E->control.ala_leng_zhong_horizontal_patch_preconditioner;
+    for(k=0;k<3;k++) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(i=0;i<neq;i++) {
+                v[m][i]=initial_V[m][i];
+                f[m][i]=initial_F[m][i];
+                E->u1[m][i]=pre_u1[m][i];
+            }
+            for(i=1;i<=npno;i++) p[m][i]=initial_P[m][i];
+        }
+        E->monitor=pre_monitor;
+        E->control.ala_leng_zhong_horizontal_patch_preconditioner=saved_patch;
+        lz5f_inner_active=1;
+        lz5f_inner_outer=outer;
+        lz5f_inner_cap=caps[k];
+        lz5f_inner_kind="frozen_replay";
+        lz5f_inner_preconditioner="horizontal_patch";
+        cycles=caps[k];
+        solve_Ahat_p_fhat_CG(E,v,p,f,imp,&cycles);
+        if(caps[k]==60) {
+            for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                for(i=0;i<neq;i++) f[m][i]=v[m][i]-production_V[m][i];
+                for(i=1;i<=npno;i++) p[m][i]-=production_P[m][i];
+            }
+            vdiff2=global_vdot(E,f,f,lev);
+            pdiff2=global_pdot(E,p,p,lev);
+            vbase2=global_vdot(E,production_V,production_V,lev);
+            pbase2=global_pdot(E,production_P,production_P,lev);
+            if(E->parallel.me==0) {
+                fprintf(E->fp,"LENG_STAGE5F_REPLAY_EQUIVALENCE outer=%d "
+                    "velocity_relative=%e pressure_relative=%e\n",outer,
+                    sqrt(vdiff2/max(vbase2,1.0e-300)),
+                    sqrt(pdiff2/max(pbase2,1.0e-300)));
+                fflush(E->fp);
+            }
+        }
+    }
+    if(outer>=95) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            for(i=0;i<neq;i++) {
+                v[m][i]=initial_V[m][i];
+                f[m][i]=initial_F[m][i];
+                E->u1[m][i]=pre_u1[m][i];
+            }
+            for(i=1;i<=npno;i++) p[m][i]=initial_P[m][i];
+        }
+        E->monitor=pre_monitor;
+        E->control.ala_leng_zhong_horizontal_patch_preconditioner=0;
+        lz5f_inner_outer=outer;
+        lz5f_inner_cap=240;
+        lz5f_inner_kind="frozen_guard";
+        lz5f_inner_preconditioner="diagonal";
+        cycles=240;
+        solve_Ahat_p_fhat_CG(E,v,p,f,imp,&cycles);
+    }
+    lz5f_inner_active=0;
+    E->control.ala_leng_zhong_horizontal_patch_preconditioner=saved_patch;
+    E->monitor=post_monitor;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<=neq;i++) E->u1[m][i]=post_u1[m][i];
+    ala_schur_free_field(E,post_u1);
+    ala_schur_free_field(E,v);
+    ala_schur_free_field(E,p);
+    ala_schur_free_field(E,f);
 }
 
 /* Solve strict ALA pressure correction using preconditioned conjugate
@@ -10231,12 +10395,215 @@ static float solve_Ahat_p_fhat_BiCG(struct All_variables *E,
  * conjugate gradient (CG) iterations with an outer iteration
  */
 
+static double lz5f_weighted_dot(struct All_variables *E,double **a,
+                                double **b,int lev)
+{
+    int m,e;
+    double volume,local=0.0,global;
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NEL[lev];e++) {
+            volume=E->eco[m][e].area;
+            if(volume>0.0) local += a[m][e]*b[m][e]/volume;
+        }
+    MPI_Allreduce(&local,&global,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    return global;
+}
+
+static void lz5f_build_gauges(struct All_variables *E,double **qconst,
+                              double **qrho,int lev)
+{
+    int m,e,ez,elz;
+    double nconst,nrho,cross;
+    double global_pdot();
+    elz=E->lmesh.ELZ[lev];
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+            ez=(e-1)%elz+1;
+            qconst[m][e]=1.0;
+            qrho[m][e]=0.5*(E->refstate.rho[ez]+E->refstate.rho[ez+1]);
+        }
+    nconst=sqrt(global_pdot(E,qconst,qconst,lev));
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) qconst[m][e]/=nconst;
+    cross=global_pdot(E,qconst,qrho,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++)
+            qrho[m][e]-=cross*qconst[m][e];
+    nrho=sqrt(global_pdot(E,qrho,qrho,lev));
+    if(!isfinite(nrho) || nrho<=1.0e-30)
+        myerror(E,"Degenerate Leng Stage 5F density gauge probe");
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[lev];e++) qrho[m][e]/=nrho;
+}
+
+static void lz5f_gauge_audit(struct All_variables *E,FILE *csv,
+    double **qconst,double **qrho,int lev,double imp)
+{
+    int m,i,e,valid;
+    double g_const,w_const,full_const,w_rho,full_rho,sd_const;
+    double left,right,defect;
+    double global_vdot(),global_pdot();
+    struct MONITOR saved=E->monitor;
+    double **g=ala_schur_alloc_velocity(E,lev);
+    double **w=ala_schur_alloc_velocity(E,lev);
+    double **full=ala_schur_alloc_velocity(E,lev);
+    double **u=ala_schur_alloc_velocity(E,lev);
+    double **random_u=ala_schur_alloc_velocity(E,lev);
+    double **cu=ala_schur_alloc_pressure(E,lev);
+    double **sd=ala_schur_alloc_pressure(E,lev);
+    double **random_p=ala_schur_alloc_pressure(E,lev);
+    void assemble_grad_p(),assemble_grad_c_p(),assemble_div_u();
+    void assemble_c_u(),strip_bcs_from_residual();
+    int solve_del2_u();
+
+    assemble_grad_p(E,qconst,g,lev);
+    assemble_grad_c_p(E,qconst,w,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) full[m][i]=g[m][i]+w[m][i];
+    g_const=sqrt(max(global_vdot(E,g,g,lev),0.0));
+    w_const=sqrt(max(global_vdot(E,w,w,lev),0.0));
+    full_const=sqrt(max(global_vdot(E,full,full,lev),0.0));
+    if(g_const>1.0e-30) {
+        valid=solve_del2_u(E,u,g,imp,lev);
+        if(!valid) myerror(E,"Stage 5F constant Schur action K solve failed");
+        assemble_div_u(E,u,sd,lev);
+        sd_const=sqrt(max(global_pdot(E,sd,sd,lev),0.0));
+    }
+    else sd_const=0.0;
+    assemble_grad_p(E,qrho,g,lev);
+    assemble_grad_c_p(E,qrho,w,lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<E->lmesh.NEQ[lev];i++) full[m][i]=g[m][i]+w[m][i];
+    w_rho=sqrt(max(global_vdot(E,w,w,lev),0.0));
+    full_rho=sqrt(max(global_vdot(E,full,full,lev),0.0));
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<E->lmesh.NEQ[lev];i++)
+            random_u[m][i]=sin(0.173*(i+1)+0.319*(E->parallel.me+1));
+        for(e=1;e<=E->lmesh.NPNO[lev];e++)
+            random_p[m][e]=sin(0.271*(e+1)+0.137*(E->parallel.me+1));
+    }
+    strip_bcs_from_residual(E,random_u,lev);
+    assemble_c_u(E,random_u,cu,lev);
+    assemble_grad_c_p(E,random_p,w,lev);
+    left=global_vdot(E,random_u,w,lev);
+    right=global_pdot(E,random_p,cu,lev);
+    defect=fabs(left-right)/max(fabs(left)+fabs(right),1.0e-300);
+    E->monitor=saved;
+    if(E->parallel.me==0 && csv!=NULL) {
+        fprintf(csv,"G_const,S_D_const,W_const,GplusW_const,W_rho_perp,"
+                    "GplusW_rho_perp,transpose_left,transpose_right,"
+                    "transpose_defect\n");
+        fprintf(csv,"%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,"
+                    "%+.16e,%+.16e,%+.16e\n",g_const,sd_const,w_const,
+                    full_const,w_rho,full_rho,left,right,defect);
+        fflush(csv);
+    }
+    ala_schur_free_field(E,g); ala_schur_free_field(E,w);
+    ala_schur_free_field(E,full); ala_schur_free_field(E,u);
+    ala_schur_free_field(E,random_u); ala_schur_free_field(E,cu);
+    ala_schur_free_field(E,sd); ala_schur_free_field(E,random_p);
+}
+
+static void lz5f_outer_row(struct All_variables *E,FILE *csv,int outer,
+    double epsilon_v,double epsilon_p,double **r,double **c,double **prev1,
+    double **prev2,int history,double **P,double **qconst,double **qrho,
+    int inner_iterations,double inner_residual,double momentum_relative,
+    int lev)
+{
+    int m,e,ex,ey,ez,horizontal,radial;
+    double rn,r1,r2,dot1,dot2,ratio1=0.0,ratio2=0.0,cos1=0.0,cos2=0.0;
+    double lambda=0.0,return2=0.0,mass,physical,return_local=0.0;
+    double d,cval,volume,local[12]={0,0,0,0,0,0,0,0,0,0,0,0};
+    double global[12],interface_energy,interface_weight,interface_count;
+    double pconst,prho;
+    double global_pdot();
+    rn=sqrt(max(lz5f_weighted_dot(E,r,r,lev),0.0));
+    if(history>=1) {
+        r1=sqrt(max(lz5f_weighted_dot(E,prev1,prev1,lev),0.0));
+        dot1=lz5f_weighted_dot(E,prev1,r,lev);
+        ratio1=rn/max(r1,1.0e-300);
+        cos1=dot1/max(rn*r1,1.0e-300);
+        lambda=dot1/max(r1*r1,1.0e-300);
+    }
+    if(history>=2) {
+        r2=sqrt(max(lz5f_weighted_dot(E,prev2,prev2,lev),0.0));
+        dot2=lz5f_weighted_dot(E,prev2,r,lev);
+        ratio2=rn/max(r2,1.0e-300);
+        cos2=dot2/max(rn*r2,1.0e-300);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+                volume=E->eco[m][e].area;
+                d=r[m][e]-prev2[m][e];
+                if(volume>0.0) return_local+=d*d/volume;
+            }
+        MPI_Allreduce(&return_local,&return2,1,MPI_DOUBLE,MPI_SUM,
+                      E->parallel.world);
+        return2=sqrt(max(return2,0.0))/max(r2,1.0e-300);
+    }
+    physical=lz5f_physical_continuity(E,r,c,lev,&mass);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(ey=1;ey<=E->lmesh.ELY[lev];ey++)
+            for(ex=1;ex<=E->lmesh.ELX[lev];ex++)
+                for(ez=1;ez<=E->lmesh.ELZ[lev];ez++) {
+                    e=ez+(ex-1)*E->lmesh.ELZ[lev]
+                      +(ey-1)*E->lmesh.ELZ[lev]*E->lmesh.ELX[lev];
+                    volume=E->eco[m][e].area;
+                    if(volume<=0.0) continue;
+                    d=r[m][e]-c[m][e]; cval=c[m][e];
+                    local[9]+=d*d/volume; local[10]+=cval*cval/volume;
+                    local[11]+=1.0;
+                    horizontal=(E->parallel.nprocx>1 &&
+                                (ex==1 || ex==E->lmesh.ELX[lev])) ||
+                               (E->parallel.nprocy>1 &&
+                                (ey==1 || ey==E->lmesh.ELY[lev]));
+                    radial=E->parallel.nprocz>1 &&
+                           (ez==1 || ez==E->lmesh.ELZ[lev]);
+                    /* Use exclusive classes so their energies sum to the
+                     * global residual. Corners belong to the radial class. */
+                    if(radial) { local[3]+=r[m][e]*r[m][e]/volume;
+                                 local[4]+=1.0/volume; local[5]+=1.0; }
+                    else if(horizontal) {
+                        local[0]+=r[m][e]*r[m][e]/volume;
+                        local[1]+=1.0/volume; local[2]+=1.0;
+                    }
+                    else { local[6]+=r[m][e]*r[m][e]/volume;
+                           local[7]+=1.0/volume; local[8]+=1.0; }
+                }
+    MPI_Allreduce(local,global,12,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    interface_energy=global[0]+global[3];
+    interface_weight=global[1]+global[4];
+    interface_count=global[2]+global[5];
+    pconst=global_pdot(E,P,qconst,lev);
+    prho=global_pdot(E,P,qrho,lev);
+    if(E->parallel.me==0 && csv!=NULL) {
+        fprintf(csv,"%d,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,"
+            "%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%d,%+.16e,"
+            "%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,"
+            "%+.16e,%+.16e,%+.16e,%+.16e\n",
+            outer,epsilon_v,epsilon_p,physical,mass,momentum_relative,
+            sqrt(max(global[9],0.0)),sqrt(max(global[10],0.0)),ratio1,cos1,
+            ratio2,cos2,lambda,inner_iterations,inner_residual,return2,
+            pconst,prho,interface_energy,global[6],
+            interface_energy/max(interface_energy+global[6],1e-300),
+            (interface_energy/max(interface_weight,1e-300)) /
+                (global[6]/max(global[7],1e-300)),
+            global[0],global[3],
+            (global[0]/max(global[1],1e-300)) /
+                (global[6]/max(global[7],1e-300)),
+            (global[3]/max(global[4],1e-300)) /
+                (global[6]/max(global[7],1e-300)),
+            interface_count+global[8]);
+        fflush(csv);
+    }
+}
+
 static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
                                       double **V, double **P, double **F,
                                       double imp, int *steps_max)
 {
     int m, i;
     int cycles, num_of_loop;
+    int lz5f_history,lz5f_snapshot;
     int outer_converged, equations_converged;
     double residual, continuity_mass_norm, continuity_relative;
     double momentum_rms, momentum_relative;
@@ -10244,6 +10611,12 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     double local_pressure[2], global_pressure[2];
     double relative_err_v, relative_err_p;
     double *old_v[NCS], *old_p[NCS],*diff_v[NCS],*diff_p[NCS];
+    double **lz5f_full=NULL,**lz5f_c=NULL,**lz5f_prev1=NULL,**lz5f_prev2=NULL;
+    double **lz5f_qconst=NULL,**lz5f_qrho=NULL,**lz5f_force=NULL;
+    double **lz5f_pre_u1=NULL,**lz5f_production_v=NULL,**lz5f_production_p=NULL;
+    struct MONITOR lz5f_pre_monitor;
+    FILE *lz5f_outer_csv=NULL,*lz5f_gauge_csv=NULL;
+    char lz5f_name[512];
 
     const int npno = E->lmesh.npno;
     const int neq = E->lmesh.neq;
@@ -10252,6 +10625,7 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     double global_vdot(),global_pdot();
     void assemble_forces();
     void assemble_div_rho_u();
+    void assemble_c_u();
     void velocities_conform_bcs();
 
     if(E->control.ala_leng_zhong_stage5 &&
@@ -10276,6 +10650,54 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     	diff_p[m] = (double *)malloc((npno+1)*sizeof(double));
     }
 
+    lz5f_history=0;
+    if(E->control.ala_leng_zhong_stage5f_diagnostic) {
+        lz5f_full=ala_schur_alloc_pressure(E,lev);
+        lz5f_c=ala_schur_alloc_pressure(E,lev);
+        lz5f_prev1=ala_schur_alloc_pressure(E,lev);
+        lz5f_prev2=ala_schur_alloc_pressure(E,lev);
+        lz5f_qconst=ala_schur_alloc_pressure(E,lev);
+        lz5f_qrho=ala_schur_alloc_pressure(E,lev);
+        lz5f_force=ala_schur_alloc_velocity(E,lev);
+        lz5f_pre_u1=ala_schur_alloc_velocity(E,lev);
+        lz5f_production_v=ala_schur_alloc_velocity(E,lev);
+        lz5f_production_p=ala_schur_alloc_pressure(E,lev);
+        lz5f_build_gauges(E,lz5f_qconst,lz5f_qrho,lev);
+        if(E->parallel.me==0) {
+            snprintf(lz5f_name,sizeof(lz5f_name),"%s.leng_stage5F_outer.csv",
+                     E->control.data_file);
+            lz5f_outer_csv=fopen(lz5f_name,"w");
+            snprintf(lz5f_name,sizeof(lz5f_name),"%s.leng_stage5F_inner.csv",
+                     E->control.data_file);
+            lz5f_inner_csv=fopen(lz5f_name,"w");
+            snprintf(lz5f_name,sizeof(lz5f_name),"%s.leng_stage5F_gauge.csv",
+                     E->control.data_file);
+            lz5f_gauge_csv=fopen(lz5f_name,"w");
+            if(lz5f_outer_csv==NULL || lz5f_inner_csv==NULL ||
+               lz5f_gauge_csv==NULL)
+                myerror(E,"Unable to open Leng Stage 5F diagnostic CSV");
+            fprintf(lz5f_outer_csv,"outer,epsilon_V,epsilon_P,R_cont,"
+                "continuity_mass,R_mom,D_norm,C_norm,norm_ratio_1,cosine_1,"
+                "norm_ratio_2,cosine_2,lambda_hat,inner_iterations,"
+                "inner_residual,two_cycle_return,P_const,P_rho_perp,"
+                "interface_energy,interior_energy,interface_fraction,"
+                "C_MPI,horizontal_cap_energy,radial_energy,C_horizontal,"
+                "C_radial,element_count\n");
+            fprintf(lz5f_inner_csv,"outer,kind,preconditioner,cap,iteration,"
+                "recursive_residual,explicit_residual,physical_mass,R_inner,"
+                "constant_norm,orthogonal_norm,compatibility_relative,alpha,"
+                "beta,curvature,wall_seconds\n");
+        }
+        lz5f_gauge_audit(E,lz5f_gauge_csv,lz5f_qconst,lz5f_qrho,lev,imp);
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"LENG_STAGE5F_BEGIN best_iterate_restore=off "
+                "production_cap=%d frozen_caps=60,120,240 "
+                "snapshots=1,50,95 mpi_metric=stage5_volume_weighted\n",
+                E->control.p_iterations);
+            fflush(E->fp);
+        }
+    }
+
     cycles = E->control.p_iterations;
 
     residual = 1.0;
@@ -10297,9 +10719,26 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         if(E->control.ala_leng_zhong_stage4)
             assemble_forces(E,0);
 
+        if(E->control.ala_leng_zhong_stage5f_diagnostic) {
+            lz5f_pre_monitor=E->monitor;
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=0;i<neq;i++) {
+                    lz5f_force[m][i]=F[m][i];
+                    lz5f_pre_u1[m][i]=E->u1[m][i];
+                }
+            lz5f_inner_active=1;
+            lz5f_inner_outer=num_of_loop+1;
+            lz5f_inner_cap=E->control.p_iterations;
+            lz5f_inner_kind="production";
+            lz5f_inner_preconditioner=E->control.
+                ala_leng_zhong_horizontal_patch_preconditioner
+                ? "horizontal_patch" : "diagonal";
+        }
+
         /* The inner solver writes its used count back through steps_max. */
         cycles = E->control.p_iterations;
         residual = solve_Ahat_p_fhat_CG(E,V,P,F,E->control.accuracy,&cycles);
+        lz5f_inner_active=0;
 
         for (m=1;m<=E->sphere.caps_per_proc;m++)
             for(i=0;i<neq;i++) diff_v[m][i] = V[m][i] - old_v[m][i];
@@ -10314,6 +10753,34 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
                                (1.0e-32 + global_pdot(E,P,P,lev)) );
 
         num_of_loop++;
+
+        if(E->control.ala_leng_zhong_stage5f_diagnostic) {
+            for(m=1;m<=E->sphere.caps_per_proc;m++) {
+                for(i=0;i<neq;i++) lz5f_production_v[m][i]=V[m][i];
+                for(i=1;i<=npno;i++) lz5f_production_p[m][i]=P[m][i];
+            }
+            assemble_div_rho_u(E,V,lz5f_full,lev);
+            assemble_c_u(E,V,lz5f_c,lev);
+            strict_ala_momentum_residual_audit(E,V,P,diff_v,diff_p,lev,
+                                               &momentum_rms,
+                                               &momentum_relative);
+            lz5f_outer_row(E,lz5f_outer_csv,num_of_loop,relative_err_v,
+                relative_err_p,lz5f_full,lz5f_c,lz5f_prev1,lz5f_prev2,
+                lz5f_history,P,lz5f_qconst,lz5f_qrho,cycles,residual,
+                momentum_relative,lev);
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=1;i<=npno;i++) {
+                    lz5f_prev2[m][i]=lz5f_prev1[m][i];
+                    lz5f_prev1[m][i]=lz5f_full[m][i];
+                }
+            lz5f_history=min(lz5f_history+1,2);
+            lz5f_snapshot=(num_of_loop==1 || num_of_loop==50 ||
+                            num_of_loop==95);
+            if(lz5f_snapshot)
+                lz5f_replay_frozen_inner(E,num_of_loop,old_v,old_p,
+                    lz5f_force,lz5f_production_v,lz5f_production_p,
+                    lz5f_pre_u1,lz5f_pre_monitor,E->control.accuracy);
+        }
 
         if(E->parallel.me == 0) {
             fprintf(stderr, "%s loop=%d "
@@ -10331,6 +10798,14 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         }
 
     } /* end of while */
+
+    /* Always include the terminal frozen problem, even when the outer loop
+     * terminates before the planned 50/95 checkpoints. */
+    if(E->control.ala_leng_zhong_stage5f_diagnostic &&
+       num_of_loop!=1 && num_of_loop!=50 && num_of_loop!=95)
+        lz5f_replay_frozen_inner(E,num_of_loop,old_v,old_p,lz5f_force,
+            lz5f_production_v,lz5f_production_p,lz5f_pre_u1,
+            lz5f_pre_monitor,E->control.accuracy);
 
     if(E->control.ala_leng_zhong_stage5) {
         assemble_div_rho_u(E,V,diff_p,lev);
@@ -10401,6 +10876,22 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     	free((void *) old_p[m]);
 	free((void *) diff_v[m]);
 	free((void *) diff_p[m]);
+    }
+
+    if(E->control.ala_leng_zhong_stage5f_diagnostic) {
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"LENG_STAGE5F_COMPLETE outer_loops=%d\n",num_of_loop);
+            fflush(E->fp);
+            fclose(lz5f_outer_csv); fclose(lz5f_inner_csv);
+            fclose(lz5f_gauge_csv);
+        }
+        lz5f_inner_csv=NULL;
+        ala_schur_free_field(E,lz5f_full); ala_schur_free_field(E,lz5f_c);
+        ala_schur_free_field(E,lz5f_prev1); ala_schur_free_field(E,lz5f_prev2);
+        ala_schur_free_field(E,lz5f_qconst); ala_schur_free_field(E,lz5f_qrho);
+        ala_schur_free_field(E,lz5f_force); ala_schur_free_field(E,lz5f_pre_u1);
+        ala_schur_free_field(E,lz5f_production_v);
+        ala_schur_free_field(E,lz5f_production_p);
     }
 
     return(residual);

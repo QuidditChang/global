@@ -545,6 +545,10 @@ void read_initial_settings(struct All_variables *E)
   input_double("ala_leng_zhong_horizontal_patch_regularization",
                &(E->control.ala_leng_zhong_horizontal_patch_regularization),
                "1.0e-8",m);
+  input_boolean("ala_leng_zhong_best_iterate_restore",
+                &(E->control.ala_leng_zhong_best_iterate_restore),"off",m);
+  input_boolean("ala_leng_zhong_stage5f_diagnostic",
+                &(E->control.ala_leng_zhong_stage5f_diagnostic),"off",m);
   input_double("ala_leng_zhong_stage5_continuity_tolerance",
                &(E->control.ala_leng_zhong_stage5_continuity_tolerance),
                "1.0e-3",m);
@@ -848,6 +852,13 @@ void read_initial_settings(struct All_variables *E)
       E->control.ala_leng_zhong_stage5_initial_guess_scale > 1.0))
       myerror(E, "Leng_Zhong Stage 5 requires positive equation "
               "tolerances and initial_guess_scale in [0,1]");
+  if(E->control.ala_leng_zhong_best_iterate_restore &&
+     !E->control.ala_leng_zhong_stage3)
+      myerror(E,"ala_leng_zhong_best_iterate_restore requires Stage 3+");
+  if(E->control.ala_leng_zhong_stage5f_diagnostic &&
+     (!E->control.ala_leng_zhong_stage5 ||
+      E->control.ala_leng_zhong_best_iterate_restore))
+      myerror(E,"Stage 5F requires Stage 5 and best-iterate restore off");
   if(E->control.ala_leng_zhong_stage3 &&
      !E->control.ala_leng_zhong_stage4 &&
      E->control.ala_pressure_buoyancy)
@@ -1844,6 +1855,8 @@ void global_default_values(E)
     E->control.ala_leng_zhong_horizontal_patch_stride = 2;
     E->control.ala_leng_zhong_horizontal_patch_weight = 0.5;
     E->control.ala_leng_zhong_horizontal_patch_regularization = 1.0e-8;
+    E->control.ala_leng_zhong_best_iterate_restore = 0;
+    E->control.ala_leng_zhong_stage5f_diagnostic = 0;
     E->control.ala_leng_zhong_stage5_continuity_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_momentum_tolerance = 1.0e-3;
     E->control.ala_leng_zhong_stage5_initial_guess_scale = 1.0;

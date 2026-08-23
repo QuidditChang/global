@@ -484,6 +484,8 @@ struct CONTROL {
     int ala_leng_zhong_horizontal_patch_stride;
     double ala_leng_zhong_horizontal_patch_weight;
     double ala_leng_zhong_horizontal_patch_regularization;
+    int ala_leng_zhong_best_iterate_restore;
+    int ala_leng_zhong_stage5f_diagnostic;
     double ala_leng_zhong_stage5_continuity_tolerance;
     double ala_leng_zhong_stage5_momentum_tolerance;
     double ala_leng_zhong_stage5_initial_guess_scale;

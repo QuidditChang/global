@@ -1086,6 +1086,10 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     getDoubleProperty(
         properties, "ala_leng_zhong_horizontal_patch_regularization",
         E->control.ala_leng_zhong_horizontal_patch_regularization, fp);
+    getIntProperty(properties, "ala_leng_zhong_best_iterate_restore",
+                   E->control.ala_leng_zhong_best_iterate_restore, fp);
+    getIntProperty(properties, "ala_leng_zhong_stage5f_diagnostic",
+                   E->control.ala_leng_zhong_stage5f_diagnostic, fp);
     getDoubleProperty(properties,
                       "ala_leng_zhong_stage5_continuity_tolerance",
                       E->control.ala_leng_zhong_stage5_continuity_tolerance,
@@ -1392,6 +1396,13 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
         E->control.ala_leng_zhong_stage5_initial_guess_scale > 1.0))
         myerror(E, "Leng_Zhong Stage 5 requires positive equation "
                 "tolerances and initial_guess_scale in [0,1]");
+    if(E->control.ala_leng_zhong_best_iterate_restore &&
+       !E->control.ala_leng_zhong_stage3)
+        myerror(E,"ala_leng_zhong_best_iterate_restore requires Stage 3+");
+    if(E->control.ala_leng_zhong_stage5f_diagnostic &&
+       (!E->control.ala_leng_zhong_stage5 ||
+        E->control.ala_leng_zhong_best_iterate_restore))
+        myerror(E,"Stage 5F requires Stage 5 and best-iterate restore off");
     if(E->control.ala_leng_zhong_stage3 &&
        !E->control.ala_leng_zhong_stage4 &&
        E->control.ala_pressure_buoyancy)
