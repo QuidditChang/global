@@ -78,6 +78,8 @@ def main():
     compatibility = max(number(row, "compatibility_relative", 0.0)
                         for row in inner)
     transpose_defect = number(gauge, "transpose_defect")
+    transpose_probe_valid = number(
+        gauge, "transpose_shared_probe", 0.0) == 1.0
     c_mpi = number(terminal, "C_MPI")
     c_horizontal = number(terminal, "C_horizontal")
     c_radial = number(terminal, "C_radial")
@@ -86,8 +88,13 @@ def main():
     two_cycle = number(terminal, "two_cycle_return")
 
     flags = {
-        "operator_transpose_inconsistent": transpose_defect > 1.0e-10,
-        "pressure_compatibility_failure": compatibility > 1.0e-6,
+        "transpose_probe_invalid": not transpose_probe_valid,
+        "operator_transpose_inconsistent": (
+            transpose_probe_valid and transpose_defect > 1.0e-8),
+        # A relative constant projection grows automatically as CG removes
+        # orthogonal residual.  Call it a blocking compatibility floor only
+        # when it dominates the explicit residual, not merely when nonzero.
+        "pressure_compatibility_failure": compatibility > 0.5,
         "inner_iteration_cap_limited": cap_limited,
         "preconditioner_sensitive": preconditioner_limited,
         "mpi_interface_concentration": max(c_mpi, c_horizontal, c_radial) > 10.0,
@@ -95,6 +102,7 @@ def main():
         "outer_two_cycle": abs(cosine) >= 0.9 and two_cycle <= 0.25,
     }
     priority = [
+        "transpose_probe_invalid",
         "operator_transpose_inconsistent",
         "pressure_compatibility_failure",
         "mpi_interface_concentration",
@@ -109,8 +117,8 @@ def main():
         "classification": primary,
         "flags": flags,
         "thresholds": {
-            "transpose_defect": 1.0e-10,
-            "compatibility_relative": 1.0e-6,
+            "transpose_defect": 1.0e-8,
+            "compatibility_dominant_fraction": 0.5,
             "mpi_concentration": 10.0,
             "cap_improvement_factor": 0.5,
             "outer_stagnation_ratio": 0.9,

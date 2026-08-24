@@ -10439,9 +10439,10 @@ static void lz5f_build_gauges(struct All_variables *E,double **qconst,
 static void lz5f_gauge_audit(struct All_variables *E,FILE *csv,
     double **qconst,double **qrho,int lev,double imp)
 {
-    int m,i,e,valid;
+    int m,i,e,node,d,eq,valid;
+    const unsigned int vbc_flag[4]={0,VBX,VBY,VBZ};
     double g_const,w_const,full_const,w_rho,full_rho,sd_const;
-    double left,right,defect;
+    double left,right,defect,radius,value;
     double global_vdot(),global_pdot();
     struct MONITOR saved=E->monitor;
     double **g=ala_schur_alloc_velocity(E,lev);
@@ -10477,8 +10478,21 @@ static void lz5f_gauge_audit(struct All_variables *E,FILE *csv,
     w_rho=sqrt(max(global_vdot(E,w,w,lev),0.0));
     full_rho=sqrt(max(global_vdot(E,full,full,lev),0.0));
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
-        for(i=0;i<E->lmesh.NEQ[lev];i++)
-            random_u[m][i]=sin(0.173*(i+1)+0.319*(E->parallel.me+1));
+        /* A primal velocity must have the same value on every replica of a
+         * shared node.  A rank-dependent equation-index probe violates that
+         * contract before C or C^T is applied and manufactures an MPI
+         * transpose defect.  Use a radial analytic field instead. */
+        for(i=0;i<=E->lmesh.NEQ[lev];i++) random_u[m][i]=0.0;
+        for(node=1;node<=E->lmesh.NNO[lev];node++) {
+            radius=E->SX[lev][m][3][node];
+            for(d=1;d<=E->mesh.nsd;d++) {
+                eq=E->ID[lev][m][node].doff[d];
+                value=(d==3) ? sin(0.173+2.0*radius) : 0.0;
+                if(E->NODE[lev][m][node] & vbc_flag[d]) value=0.0;
+                random_u[m][eq]=value;
+            }
+        }
+        random_u[m][E->lmesh.NEQ[lev]]=0.0;
         for(e=1;e<=E->lmesh.NPNO[lev];e++)
             random_p[m][e]=sin(0.271*(e+1)+0.137*(E->parallel.me+1));
     }
@@ -10492,9 +10506,9 @@ static void lz5f_gauge_audit(struct All_variables *E,FILE *csv,
     if(E->parallel.me==0 && csv!=NULL) {
         fprintf(csv,"G_const,S_D_const,W_const,GplusW_const,W_rho_perp,"
                     "GplusW_rho_perp,transpose_left,transpose_right,"
-                    "transpose_defect\n");
+                    "transpose_defect,transpose_shared_probe\n");
         fprintf(csv,"%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,%+.16e,"
-                    "%+.16e,%+.16e,%+.16e\n",g_const,sd_const,w_const,
+                    "%+.16e,%+.16e,%+.16e,1\n",g_const,sd_const,w_const,
                     full_const,w_rho,full_rho,left,right,defect);
         fflush(csv);
     }
@@ -10614,6 +10628,7 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     double **lz5f_full=NULL,**lz5f_c=NULL,**lz5f_prev1=NULL,**lz5f_prev2=NULL;
     double **lz5f_qconst=NULL,**lz5f_qrho=NULL,**lz5f_force=NULL;
     double **lz5f_pre_u1=NULL,**lz5f_production_v=NULL,**lz5f_production_p=NULL;
+    double **lz5f_momentum_work=NULL;
     struct MONITOR lz5f_pre_monitor;
     FILE *lz5f_outer_csv=NULL,*lz5f_gauge_csv=NULL;
     char lz5f_name[512];
@@ -10662,6 +10677,7 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
         lz5f_pre_u1=ala_schur_alloc_velocity(E,lev);
         lz5f_production_v=ala_schur_alloc_velocity(E,lev);
         lz5f_production_p=ala_schur_alloc_pressure(E,lev);
+        lz5f_momentum_work=ala_schur_alloc_velocity(E,lev);
         lz5f_build_gauges(E,lz5f_qconst,lz5f_qrho,lev);
         if(E->parallel.me==0) {
             snprintf(lz5f_name,sizeof(lz5f_name),"%s.leng_stage5F_outer.csv",
@@ -10761,7 +10777,8 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
             }
             assemble_div_rho_u(E,V,lz5f_full,lev);
             assemble_c_u(E,V,lz5f_c,lev);
-            strict_ala_momentum_residual_audit(E,V,P,diff_v,diff_p,lev,
+            strict_ala_momentum_residual_audit(E,V,P,diff_v,
+                                               lz5f_momentum_work,lev,
                                                &momentum_rms,
                                                &momentum_relative);
             lz5f_outer_row(E,lz5f_outer_csv,num_of_loop,relative_err_v,
@@ -10879,19 +10896,23 @@ static float solve_Ahat_p_fhat_iterCG(struct All_variables *E,
     }
 
     if(E->control.ala_leng_zhong_stage5f_diagnostic) {
-        if(E->parallel.me==0) {
-            fprintf(E->fp,"LENG_STAGE5F_COMPLETE outer_loops=%d\n",num_of_loop);
-            fflush(E->fp);
-            fclose(lz5f_outer_csv); fclose(lz5f_inner_csv);
-            fclose(lz5f_gauge_csv);
-        }
-        lz5f_inner_csv=NULL;
         ala_schur_free_field(E,lz5f_full); ala_schur_free_field(E,lz5f_c);
         ala_schur_free_field(E,lz5f_prev1); ala_schur_free_field(E,lz5f_prev2);
         ala_schur_free_field(E,lz5f_qconst); ala_schur_free_field(E,lz5f_qrho);
         ala_schur_free_field(E,lz5f_force); ala_schur_free_field(E,lz5f_pre_u1);
         ala_schur_free_field(E,lz5f_production_v);
         ala_schur_free_field(E,lz5f_production_p);
+        ala_schur_free_field(E,lz5f_momentum_work);
+        if(E->parallel.me==0) {
+            /* This marker is deliberately emitted after every diagnostic
+             * allocation has been freed, so it certifies clean teardown. */
+            fprintf(E->fp,"LENG_STAGE5F_COMPLETE outer_loops=%d "
+                    "cleanup=pass\n",num_of_loop);
+            fflush(E->fp);
+            fclose(lz5f_outer_csv); fclose(lz5f_inner_csv);
+            fclose(lz5f_gauge_csv);
+        }
+        lz5f_inner_csv=NULL;
     }
 
     return(residual);

@@ -297,7 +297,20 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("E->monitor=post_monitor", replay)
         self.assertIn("E->u1[m][i]=post_u1[m][i]", replay)
         self.assertIn("LENG_STAGE5F_REPLAY_EQUIVALENCE", replay)
+        self.assertIn("lz5f_momentum_work=ala_schur_alloc_velocity", outer)
+        self.assertIn("diff_v,\n                                               "
+                      "lz5f_momentum_work", outer)
+        self.assertIn("E->SX[lev][m][3][node]", stokes)
+        gauge = function_body(stokes, "lz5f_gauge_audit")
+        self.assertNotIn(
+            "random_u[m][i]=sin(0.173*(i+1)+0.319*(E->parallel.me+1))",
+            gauge)
+        self.assertIn("transpose_shared_probe", gauge)
+        cleanup = outer.index("LENG_STAGE5F_COMPLETE")
+        free_work = outer.index("ala_schur_free_field(E,lz5f_momentum_work)")
+        self.assertLess(free_work, cleanup)
         self.assertIn("operator_transpose_inconsistent", analyzer)
+        self.assertIn("transpose_probe_invalid", analyzer)
         self.assertIn("mpi_interface_concentration", analyzer)
 
     def test_stage4_lags_pressure_buoyancy_outside_inner_action(self):
@@ -401,9 +414,9 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5F_pressure_spectroscopy", lsf)
+        self.assertIn("stage5F_pressure_spectroscopy_fixed", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
-        self.assertIn("stage5F_pressure_spectroscopy_AhatP%P_%T", cfg)
+        self.assertIn("stage5F_pressure_spectroscopy_fixed_AhatP%P_%T", cfg)
         self.assertNotIn("runtime.cfg", lsf)
         self.assertNotIn("-i.bak", lsf)
 
