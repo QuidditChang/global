@@ -347,13 +347,15 @@ def classify(data, modes, stage_e):
                       stage_e["case_E1"]["density_gauge_fraction"])
 
     if dimensionality == "BROAD_SUBSPACE":
-        next_path = "BROADER_MULTILEVEL_TREATMENT_REVIEW"
+        next_path = "MULTILEVEL_PRESSURE_PATH"
     elif mpi_verdict != "MPI_INTERFACE_NOT_SUPPORTED":
-        next_path = "ALTERNATE_LAYOUT_MPI_OVERLAP_CONFIRMATION"
-    elif scale_verdict in ("GLOBAL_VERY_LONG", "LONG_INTERMEDIATE"):
-        next_path = "GLOBAL_COARSE_OR_LOW_RANK_REVIEW"
-    elif scale_verdict == "PATCH_LOCAL":
-        next_path = "LOCAL_SCHWARZ_REDESIGN_REVIEW"
+        next_path = "MPI_OVERLAP_PATH"
+    elif scale_verdict == "GLOBAL_VERY_LONG":
+        next_path = "GLOBAL_COARSE_PATH"
+    elif scale_verdict == "LONG_INTERMEDIATE":
+        next_path = "TARGETED_LOW_RANK_PATH"
+    elif scale_verdict in ("PATCH_LOCAL", "HIGH_FREQUENCY"):
+        next_path = "LOCAL_SCHWARZ_PATH"
     else:
         next_path = "UNRESOLVED"
     return {
@@ -376,6 +378,8 @@ def classify(data, modes, stage_e):
         "maximum_density_gauge_fraction_from_valid_stage_E": density_max,
         "density_gauge_remains_non_dominant": density_max < 1e-3,
         "next_authorized_path": next_path,
+        "forensic_path_authorized": next_path == "LOCAL_SCHWARZ_PATH",
+        "production_schwarz_modification_authorized": False,
         "automatic_solver_change_authorized": False,
     }
 

@@ -116,11 +116,17 @@ struct ala_pressure_preconditioner_cache {
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
 };
+/* -1 is the immutable production path.  Nonnegative values are used only by
+ * the opt-in F1a observer to expose one exact Schwarz transformation at a
+ * time; they never alter a production solve. */
+static int strict_ala_f1a_patch_stage = -1;
 static void *strict_ala_stage_e2_begin(struct All_variables *,int);
 static void strict_ala_stage_e2_capture(struct All_variables *,void *,
                                         double **,int);
 static void strict_ala_stage_e2_finalize(
     struct All_variables *,void *,struct ala_pressure_preconditioner_cache *);
+static int strict_ala_stage_f1a_run(
+    struct All_variables *,struct ala_pressure_preconditioner_cache *,int);
 static int ala_geneo_jacobi_eigensolve(double *,double *,double *,int);
 static void build_ala_shallow_patch_cache(struct All_variables *,
     struct ala_pressure_preconditioner_cache *,int);
@@ -4344,6 +4350,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
 }
 
 #include "Strict_ala_stage_e2.inc"
+#include "Strict_ala_stage_f1a.inc"
 
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
@@ -8030,9 +8037,14 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
     double *ghost_work[NCS][ALA_PATCH_MPI_FACES];
     double **patch_r,depth_km,band_scale,band_sqrt;
 
+    const int f1a_stage=strict_ala_f1a_patch_stage;
     npno=E->lmesh.NPNO[lev];
     patch_r=r;
-    if(E->control.ala_radial_line_preconditioner) {
+    if(f1a_stage>=0) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++) z[m][j]=0.0;
+    }
+    else if(E->control.ala_radial_line_preconditioner) {
         elz=E->lmesh.ELZ[lev];
         ncolumns=E->lmesh.ELX[lev]*E->lmesh.ELY[lev];
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -8071,13 +8083,15 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
      * the velocity solve and optional additive pressure corrections.  This
      * lets the current-rheology block-triangular path correct an over-strong
      * pressure action without altering K, G, or the physical residual. */
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(j=1;j<=npno;j++)
-            z[m][j] *= E->control.ala_pressure_bpi_weight;
+    if(f1a_stage<0)
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(j=1;j<=npno;j++)
+                z[m][j] *= E->control.ala_pressure_bpi_weight;
 
     if(E->control.ala_shallow_patch_preconditioner) {
         weight=E->control.ala_shallow_patch_weight;
-        if(fabs(E->control.ala_shallow_patch_mid_action_scale-1.0)>
+        if((f1a_stage>=1) ||
+           fabs(E->control.ala_shallow_patch_mid_action_scale-1.0)>
                1.0e-12 ||
            fabs(E->control.ala_shallow_patch_transition_action_scale-1.0)>
                1.0e-12) {
@@ -8102,8 +8116,11 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     else
                         band_scale=E->control.
                             ala_shallow_patch_transition_action_scale;
-                    cache->pressure_transition_weighted_r[m][e]=
-                        sqrt(band_scale)*r[m][e];
+                    if(f1a_stage==0)
+                        cache->pressure_transition_weighted_r[m][e]=r[m][e];
+                    else
+                        cache->pressure_transition_weighted_r[m][e]=
+                            sqrt(band_scale)*r[m][e];
                 }
             }
             patch_r=cache->pressure_transition_weighted_r;
@@ -8152,8 +8169,11 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     *cache->patch_capacity;
                 for(i=0;i<n;i++) {
                     e=cache->elements[m][b*cache->patch_capacity+i];
-                    constant_mode[i]=1.0
-                        /sqrt((double)cache->multiplicity[m][e]);
+                    if(f1a_stage>=0 && f1a_stage<2)
+                        constant_mode[i]=1.0;
+                    else
+                        constant_mode[i]=1.0
+                            /sqrt((double)cache->multiplicity[m][e]);
                     rhs[i]=patch_r[m][e]*constant_mode[i];
                 }
                 if(strcmp(E->control.ala_shallow_patch_velocity_solver,
@@ -8193,7 +8213,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 for(i=0;i<n;i++) {
                     e=cache->elements[m][b*cache->patch_capacity+i];
                     work[m][e] += solution[i]
-                        /sqrt((double)cache->multiplicity[m][e]);
+                        *((f1a_stage>=0 && f1a_stage<2) ? 1.0
+                          : 1.0/sqrt((double)cache->multiplicity[m][e]));
                 }
             }
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -8211,17 +8232,19 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     if(ref>0) {
                         if(cache->multiplicity[m][ref]==0)
                             myerror(E,"ALA local partition weight is zero");
-                        constant_mode[i]=1.0
-                            /sqrt((double)cache->multiplicity[m][ref]);
+                        constant_mode[i]=(f1a_stage>=0 && f1a_stage<2)
+                            ? 1.0
+                            : 1.0/sqrt((double)cache->multiplicity[m][ref]);
                         rhs[i]=patch_r[m][ref]*constant_mode[i];
                     }
                     else {
                         ghost_index=-ref-1;
                         if(cache->halo_multiplicity[m][face][ghost_index]==0)
                             myerror(E,"ALA ghost partition weight is zero");
-                        constant_mode[i]=1.0
-                            /sqrt((double)cache->halo_multiplicity[m][face]
-                                                [ghost_index]);
+                        constant_mode[i]=(f1a_stage>=0 && f1a_stage<2)
+                            ? 1.0
+                            : 1.0/sqrt((double)cache->halo_multiplicity[m][face]
+                                                  [ghost_index]);
                         rhs[i]=ghost_r[m][face][ghost_index]
                             *constant_mode[i];
                     }
@@ -8265,12 +8288,14 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                         [b*cache->interface_capacity+i];
                     if(ref>0)
                         work[m][ref] += solution[i]
-                            /sqrt((double)cache->multiplicity[m][ref]);
+                            *((f1a_stage>=0 && f1a_stage<2) ? 1.0
+                              : 1.0/sqrt((double)cache->multiplicity[m][ref]));
                     else {
                         ghost_index=-ref-1;
                         ghost_work[m][face][ghost_index] += solution[i]
-                            /sqrt((double)cache->halo_multiplicity[m][face]
-                                                [ghost_index]);
+                            *((f1a_stage>=0 && f1a_stage<2) ? 1.0
+                              : 1.0/sqrt((double)cache->halo_multiplicity[m][face]
+                                                    [ghost_index]));
                     }
                 }
             }
@@ -8292,10 +8317,13 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                     else
                         band_scale=E->control.
                             ala_shallow_patch_transition_action_scale;
-                    band_sqrt=sqrt(band_scale);
+                    band_sqrt=(f1a_stage>=0 && f1a_stage<3)
+                        ? 1.0 : sqrt(band_scale);
                     work[m][e] *= band_sqrt;
                     local_patch_energy[1] += r[m][e]*work[m][e];
-                    if(strcmp(E->control.ala_shallow_patch_velocity_solver,
+                    if(f1a_stage>=0)
+                        z[m][e] = (f1a_stage==3 ? weight : 1.0)*work[m][e];
+                    else if(strcmp(E->control.ala_shallow_patch_velocity_solver,
                               "element_vanka")==0)
                         z[m][e] += weight*work[m][e];
                     else
@@ -8324,6 +8352,8 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                 free((void *)ghost_r[m][face]);
                 free((void *)ghost_work[m][face]);
             }
+        if(f1a_stage>=0)
+            return;
     }
 
     if(E->control.ala_geneo_preconditioner)
@@ -9874,6 +9904,21 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
        E->control.ala_shallow_patch_preconditioner)
         audit_ala_shallow_patch_preconditioner(
             E,&preconditioner_cache,lev);
+    if(getenv("STRICT_ALA_STAGE_F1A_REQUIRED")!=NULL) {
+        if(coupled_self_contained_preconditioner)
+            myerror(E,"Stage-F1a requires the pressure-map preconditioner path");
+        if(!strict_ala_stage_f1a_run(E,&preconditioner_cache,lev))
+            myerror(E,"Stage-F1a runtime gate did not execute");
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            free((void *)F[m]); free((void *)r[m]); free((void *)z[m]);
+            free((void *)p[m]); free((void *)q[m]);
+            free((void *)explicit_r[m]); free((void *)div_u[m]);
+            free((void *)preconditioner_work[m]);
+        }
+        free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
+        *steps_max=0;
+        return 0.0;
+    }
     if(coupled_self_contained_preconditioner)
         preconditioner_mode=E->control.ala_coupled_multilevel_vcycle
             ? "coupled_multilevel_vcycle" : "coupled_element_vanka";

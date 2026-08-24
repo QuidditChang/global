@@ -75,6 +75,27 @@ class IntegrityAndOperatorTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_high_frequency_authorizes_only_local_forensics(self):
+        self.assertIn('scale_verdict in ("PATCH_LOCAL", "HIGH_FREQUENCY")',
+                      TOOL.read_text())
+        self.assertIn('next_path = "LOCAL_SCHWARZ_PATH"', TOOL.read_text())
+        self.assertIn('"forensic_path_authorized": next_path == "LOCAL_SCHWARZ_PATH"',
+                      TOOL.read_text())
+        self.assertIn('"production_schwarz_modification_authorized": False',
+                      TOOL.read_text())
+
+    def test_next_action_enums_are_closed(self):
+        source = TOOL.read_text()
+        expected = {"LOCAL_SCHWARZ_PATH", "MPI_OVERLAP_PATH",
+                    "GLOBAL_COARSE_PATH", "TARGETED_LOW_RANK_PATH",
+                    "MULTILEVEL_PRESSURE_PATH", "UNRESOLVED"}
+        for value in expected:
+            self.assertIn(f'"{value}"', source)
+        for obsolete in ("LOCAL_SCHWARZ_REDESIGN_REVIEW",
+                         "ALTERNATE_LAYOUT_MPI_OVERLAP_CONFIRMATION",
+                         "BROADER_MULTILEVEL_TREATMENT_REVIEW"):
+            self.assertNotIn(obsolete, source)
+
     def test_schedule_and_case_balancing_are_frozen(self):
         self.assertEqual(len(stage_e2.SCHEDULE), 19)
         source = (ROOT / "lib" / "Strict_ala_stage_e2.inc").read_text()
