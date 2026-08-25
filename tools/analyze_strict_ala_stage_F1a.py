@@ -62,6 +62,19 @@ STRUCTURE_COLUMNS = ("supported_DOFs", "multiplicity_min", "multiplicity_max",
                      "partition_formula", "valid")
 SUPPORT_COLUMNS = ("POD_mode", "q_energy_in_support_fraction",
                    "eB_energy_in_support_fraction", "valid")
+F1A_REQUIRED_OFF = ("ala_radial_line_preconditioner", "ala_two_level_preconditioner",
+                    "ala_pressure_multigrid", "ala_pressure_multigrid_galerkin",
+                    "ala_global_coarse_preconditioner", "ala_geneo_preconditioner")
+F1A_REQUIRED_VALUES = {
+    "ala_pressure_bpi_weight": "1.0",
+    "ala_augmented_lagrangian_gamma": "10.0",
+    "ala_outer_solver": "fgmres",
+    "ala_pcg_restart_interval": "50",
+    "ala_shallow_patch_velocity_solver": "element_vanka",
+    "nprocx": "4", "nprocy": "4", "nprocz": "2",
+    "nodex": "129", "nodey": "129", "nodez": "65",
+    "levels": "5", "steps": "1", "piterations": "60",
+}
 
 
 def finite(value, name):
@@ -90,6 +103,39 @@ def read_csv(path, columns, allow_empty=False):
     if not rows and not allow_empty:
         raise ValueError(f"no data rows in {path.name}")
     return rows
+
+
+def cfg_values(path):
+    values = {}
+    for line in Path(path).read_text().splitlines():
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*(?:=\s*|\s+)(\S.*?)\s*$", line)
+        if match and not match.group(1).startswith("#"):
+            values[match.group(1)] = match.group(2)
+    return values
+
+
+def check_cfg_contract(c0, c1, diff_path):
+    baseline, configured = cfg_values(c0), cfg_values(c1)
+    keys = sorted(set(baseline) | set(configured))
+    differences = [(key, baseline.get(key), configured.get(key)) for key in keys
+                   if baseline.get(key) != configured.get(key)]
+    Path(diff_path).write_text("\n".join(
+        "%s: %s -> %s" % difference for difference in differences) + "\n")
+    errors = []
+    if differences != [("ala_shallow_patch_preconditioner", "off", "on")]:
+        errors.append("unexpected scientific diff %r" % (differences,))
+    for key in F1A_REQUIRED_OFF:
+        if baseline.get(key) != "off" or configured.get(key) != "off":
+            errors.append("%s must remain off" % key)
+    for key, expected in F1A_REQUIRED_VALUES.items():
+        if baseline.get(key) != expected or configured.get(key) != expected:
+            errors.append("%s must equal %s" % (key, expected))
+    for key in ("ala_stage_abc_adjoint_diagnostic", "ala_stage_abc_production_logging"):
+        if baseline.get(key, "off") != "off" or configured.get(key, "off") != "off":
+            errors.append("%s must be absent or off for F1a" % key)
+    if errors:
+        raise ValueError("F1a cfg contract failed: " + "; ".join(errors))
+    return 0
 
 
 def thresholds():
@@ -484,6 +530,8 @@ def main():
     freeze = sub.add_parser("freeze-contract"); freeze.add_argument("--output-dir", required=True)
     run = sub.add_parser("analyze"); run.add_argument("--input-dir", required=True); run.add_argument("--output-dir", required=True)
     run.add_argument("--e2-true-mode", required=True); run.add_argument("--e2-reanalysis", required=True)
+    cfg = sub.add_parser("check-cfg"); cfg.add_argument("--c0", required=True)
+    cfg.add_argument("--c1", required=True); cfg.add_argument("--diff", required=True)
     check = sub.add_parser("audit")
     check.add_argument("--decision", required=True); check.add_argument("--manifest", required=True)
     check.add_argument("--binary-pre", required=True); check.add_argument("--binary-post", required=True)
@@ -496,6 +544,8 @@ def main():
     if args.command == "freeze-contract": freeze_contract(args.output_dir)
     elif args.command == "analyze":
         analyze(args.input_dir, args.output_dir, args.e2_true_mode, args.e2_reanalysis)
+    elif args.command == "check-cfg":
+        check_cfg_contract(args.c0, args.c1, args.diff)
     else:
         raise SystemExit(audit(args))
 

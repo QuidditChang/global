@@ -1,6 +1,7 @@
 import importlib.util
 import csv
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,6 +81,23 @@ class AdditiveTests(unittest.TestCase):
 
 
 class StaticContractTests(unittest.TestCase):
+    def test_f1a_cfg_contract_accepts_only_configured_schwarz_difference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = ROOT.parents[1] / "runs" / "cmbhf_ALA_strict.cfg"
+            c0, c1, diff = root / "c0.cfg", root / "c1.cfg", root / "diff.txt"
+            text = base.read_text()
+            c0.write_text(text.replace("ala_shallow_patch_preconditioner   = on",
+                                       "ala_shallow_patch_preconditioner   = off"))
+            shutil.copyfile(base, c1)
+            self.assertEqual(f1a.check_cfg_contract(c0, c1, diff), 0)
+            self.assertEqual(diff.read_text(),
+                             "ala_shallow_patch_preconditioner: off -> on\n")
+            c1.write_text(c1.read_text().replace("ala_pcg_restart_interval       = 50",
+                                                 "ala_pcg_restart_interval       = 49"))
+            with self.assertRaises(ValueError):
+                f1a.check_cfg_contract(c0, c1, diff)
+
     def test_nonlocal_sources_encode_mode_independently_of_row_order(self):
         self.assertEqual(f1a.nonlocal_mode("1000007_mode_12"), 12)
         with self.assertRaises(ValueError):
