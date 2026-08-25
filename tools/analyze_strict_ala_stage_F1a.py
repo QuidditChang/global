@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from pathlib import Path
 
 PROVISIONAL = "PROVISIONAL_DIAGNOSTIC"
@@ -68,6 +69,13 @@ def finite(value, name):
     if not math.isfinite(number):
         raise ValueError(f"non-finite {name}")
     return number
+
+
+def nonlocal_mode(identifier):
+    match = re.search(r"_mode_([1-9][0-9]*)$", identifier)
+    if match is None:
+        raise ValueError("nonlocality row does not identify its POD mode")
+    return int(match.group(1))
 
 
 def read_csv(path, columns, allow_empty=False):
@@ -306,11 +314,22 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
     tight = read_csv(root / "strict_ala_stage_F1a_tight_solves.csv", TIGHT_COLUMNS)
     if len(tight) > MAX_TIGHT_SOLVES or len({r["call_id"] for r in tight}) != len(tight):
         raise ValueError("tight solve budget or unique-key violation")
-    if any(r["converged"] != "1" or not math.isfinite(float(r["achieved_relative_residual"]))
-           for r in tight):
-        raise ValueError("failed tight solve")
+    for row in tight:
+        for column in TIGHT_COLUMNS[3:9]:
+            finite(row[column], column)
+        requested = float(row["requested_relative_tolerance"])
+        rhs_norm = float(row["rhs_norm"])
+        target = float(row["target_residual"])
+        achieved = float(row["achieved_relative_residual"])
+        if (row["converged"] != "1" or requested <= 0.0 or rhs_norm < 0.0 or
+                target < 0.0 or achieved < 0.0 or
+                achieved > max(2.0 * requested, 1.0e-15) or
+                int(row["cycles"]) < 0 or
+                int(row["cycles"]) > int(row["max_cycles"])):
+            raise ValueError("failed tight solve contract")
     patches = read_csv(root / "strict_ala_stage_F1a_patch_selection.csv", PATCH_COLUMNS)
-    if len(patches) > MAX_PATCHES:
+    if (len(patches) > MAX_PATCHES or len({(r["patch_ID"], r["POD_mode"],
+            r["selection_rule"]) for r in patches}) != len(patches)):
         raise ValueError("representative patch budget exceeded")
     local = read_csv(root / "strict_ala_stage_F1a_local_operator.csv", LOCAL_COLUMNS)
     nonlocal_rows = read_csv(root / "strict_ala_stage_F1a_nonlocality.csv", NONLOCAL_COLUMNS)
@@ -318,6 +337,19 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
         raise ValueError("bin-summed true-Schur budget exceeded")
     if any(row["valid"] != "1" for row in local + nonlocal_rows):
         raise ValueError("invalid representative patch action")
+    if len({(r["patch_or_bin_ID"], r["POD_mode"]) for r in local}) != len(local):
+        raise ValueError("duplicate local operator key")
+    if len({r["source_vector_or_bin"] for r in nonlocal_rows}) != len(nonlocal_rows):
+        raise ValueError("duplicate nonlocality key")
+    for row in local:
+        for column in LOCAL_COLUMNS[2:-3]:
+            finite(row[column], column)
+    nonlocal_modes = {}
+    for row in nonlocal_rows:
+        for column in NONLOCAL_COLUMNS[1:-1]:
+            finite(row[column], column)
+        nonlocal_modes[row["source_vector_or_bin"]] = nonlocal_mode(
+            row["source_vector_or_bin"])
     selected_modes = sorted({int(row["POD_mode"]) for row in rows})
     projected = read_csv(root / "strict_ala_stage_F1a_projected_matrices.csv", PROJECTED_COLUMNS)
     expected_projected = 6 * len(selected_modes) * len(selected_modes)
@@ -330,21 +362,34 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
             int(structure[0]["invalid_multiplicity"]) != 0:
         raise ValueError("patch/multiplicity structural audit failed")
     support = read_csv(root / "strict_ala_stage_F1a_support.csv", SUPPORT_COLUMNS)
-    if len(support) != len(selected_modes) or any(r["valid"] != "1" for r in support):
+    if (len(support) != len(selected_modes) or
+            {int(r["POD_mode"]) for r in support} != set(selected_modes) or
+            any(r["valid"] != "1" for r in support)):
         raise ValueError("support audit incomplete")
+    for row in support:
+        for column in SUPPORT_COLUMNS[1:-1]:
+            value = finite(row[column], column)
+            if value < 0.0 or value > 1.0 + 1.0e-12:
+                raise ValueError("support fraction outside [0,1]")
     result = classify_telescoping(rows)
     if result["dominant_damage_stage"] == "RAW_LOCAL" and \
             result["primary_defect_class"] == "UNRESOLVED":
         mode_weights = {int(row["POD_mode"]): float(row["POD_energy_weight"])
                         for row in rows if row["stage"] == "BPI"}
         weight_total = sum(mode_weights.values())
-        solve_failure = sum(mode_weights[int(row["POD_mode"])] for row in local
-            if finite(row["local_solve_relative_residual"], "local solve") > LOCAL_SOLVE)
-        operator_failure = sum(mode_weights[int(row["POD_mode"])] for row in local
+        solve_modes = {int(row["POD_mode"]) for row in local
+            if finite(row["local_solve_relative_residual"], "local solve") > LOCAL_SOLVE}
+        operator_modes = {int(row["POD_mode"]) for row in local
             if finite(row["local_action_error"], "local action") >= LOCAL_ACTION or
-               finite(row["local_action_cosine"], "local cosine") <= 0.0)
-        nonlocal_failure = sum(mode_weights[index + 1] for index, row in enumerate(nonlocal_rows)
-            if finite(row["outside_patch_plus_one_fraction"], "nonlocality") >= NONLOCAL)
+               finite(row["local_action_cosine"], "local cosine") <= 0.0}
+        nonlocal_failure_modes = {nonlocal_modes[row["source_vector_or_bin"]]
+            for row in nonlocal_rows
+            if finite(row["outside_patch_plus_one_fraction"], "nonlocality") >= NONLOCAL}
+        if not (solve_modes | operator_modes | nonlocal_failure_modes) <= set(mode_weights):
+            raise ValueError("secondary evidence references an unknown POD mode")
+        solve_failure = sum(mode_weights[mode] for mode in solve_modes)
+        operator_failure = sum(mode_weights[mode] for mode in operator_modes)
+        nonlocal_failure = sum(mode_weights[mode] for mode in nonlocal_failure_modes)
         solve_fraction = solve_failure / max(weight_total, SCALE_FLOOR)
         operator_fraction = operator_failure / max(weight_total, SCALE_FLOOR)
         nonlocal_fraction = nonlocal_failure / max(weight_total, SCALE_FLOOR)
@@ -393,17 +438,40 @@ def audit(args):
                       for a, b in ((args.binary_pre, args.binary_post),
                                    (args.input_pre, args.input_post),
                                    (args.source_pre, args.source_post)))
-    marker_pass = "STRICT_ALA_STAGE_F1A_COMPLETE" in Path(args.model_log).read_text(errors="replace")
+    snapshots_pass = Path(args.snapshot_pre).read_bytes() == Path(args.snapshot_post).read_bytes()
+    model_log = Path(args.model_log).read_text(errors="replace")
+    marker_pass = model_log.count("STRICT_ALA_STAGE_F1A_COMPLETE") == 1
+    lower_log = model_log.lower()
+    logs_clean = not any((re.search(r"(?<![a-z])(?:nan|inf)(?![a-z])", lower_log),
+                          "fatal error" in lower_log, "mpi_abort" in lower_log,
+                          "traceback" in lower_log,
+                          re.search(r"(?:fallback_blocks|velocity_block_fallbacks)=[1-9][0-9]*",
+                                    lower_log)))
     provenance_pass = bool(manifest.get("provenance_complete") and
         manifest.get("source", {}).get("branch") == "cmbhf_ALA_strict" and
         manifest.get("source", {}).get("branch_verified") and
         not manifest.get("source", {}).get("scientific_dirty"))
-    valid = bool(decision.get("experiment_valid") and hashes_pass and marker_pass
+    e2_audit = json.loads(Path(args.e2_audit).read_text())
+    e2_pass = bool(e2_audit.get("experiment_valid") is True and
+                   e2_audit.get("numerical_validation_pass") is True and
+                   e2_audit.get("observation_only_trajectory_pass") is True and
+                   e2_audit.get("next_authorized_path") == "LOCAL_SCHWARZ_PATH")
+    authorization_closed = bool(
+        decision.get("automatic_solver_change_authorized") is False and
+        decision.get("production_schwarz_modification_authorized") is False and
+        decision.get("next_authorized_task") in
+            ("F1B_LOCAL_CANDIDATE", "MORE_F1A_DIAGNOSTICS"))
+    valid = bool(decision.get("experiment_valid") and hashes_pass and snapshots_pass and
+                 marker_pass and logs_clean and e2_pass
                  and provenance_pass and decision.get("automatic_solver_change_authorized") is False
-                 and decision.get("production_schwarz_modification_authorized") is False)
+                 and authorization_closed)
     result = dict(decision)
     result.update({"schema": "strict-ala-stage-F1a-final-audit-v1",
                    "experiment_valid": valid, "hashes_unchanged": hashes_pass,
+                   "E2_snapshots_unchanged": snapshots_pass,
+                   "valid_E2_authorization_pass": e2_pass,
+                   "case_log_clean": logs_clean,
+                   "authorization_closed": authorization_closed,
                    "completion_marker_pass": marker_pass,
                    "provenance_pass": provenance_pass})
     write_json(args.output, result)
@@ -421,6 +489,8 @@ def main():
     check.add_argument("--binary-pre", required=True); check.add_argument("--binary-post", required=True)
     check.add_argument("--input-pre", required=True); check.add_argument("--input-post", required=True)
     check.add_argument("--source-pre", required=True); check.add_argument("--source-post", required=True)
+    check.add_argument("--snapshot-pre", required=True); check.add_argument("--snapshot-post", required=True)
+    check.add_argument("--e2-audit", required=True)
     check.add_argument("--model-log", required=True); check.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.command == "freeze-contract": freeze_contract(args.output_dir)

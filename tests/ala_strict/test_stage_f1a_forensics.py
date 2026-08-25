@@ -80,6 +80,11 @@ class AdditiveTests(unittest.TestCase):
 
 
 class StaticContractTests(unittest.TestCase):
+    def test_nonlocal_sources_encode_mode_independently_of_row_order(self):
+        self.assertEqual(f1a.nonlocal_mode("1000007_mode_12"), 12)
+        with self.assertRaises(ValueError):
+            f1a.nonlocal_mode("1000007")
+
     def test_e2_observer_has_exactly_one_owner_free(self):
         source = (ROOT / "lib" / "Strict_ala_stage_e2.inc").read_text()
         body = source.split("static void ala_e2_free_observer", 1)[1].split(
@@ -97,6 +102,15 @@ class StaticContractTests(unittest.TestCase):
         self.assertEqual(f1a.MAX_PATCHES, 128)
         self.assertEqual(f1a.MAX_TIGHT_SOLVES, 40)
         self.assertFalse(f1a.thresholds().get("automatic_solver_change_authorized", False))
+
+    def test_hpc_launcher_selects_only_valid_closed_e2_evidence(self):
+        launcher = (ROOT.parents[1] / "runs" /
+                    "cmbhf_ALA_strict_stage_F1a.lsf").read_text()
+        self.assertIn("select_e2_root", launcher)
+        self.assertIn("verify_closure_inputs", launcher)
+        self.assertIn("current_binary.sha256", launcher)
+        self.assertIn("E2_snapshots.post.sha256", launcher)
+        self.assertNotIn("STRICT_STAGE_E2_12110470", launcher)
 
     def test_operator_and_inverse_are_distinct_fields(self):
         self.assertIn("local_solve_relative_residual", f1a.LOCAL_COLUMNS)
@@ -127,7 +141,8 @@ class StaticContractTests(unittest.TestCase):
                   [{column: ("1" if column in ("patch_or_bin_ID", "POD_mode", "valid") else "0")
                     for column in f1a.LOCAL_COLUMNS}])
             write("strict_ala_stage_F1a_nonlocality.csv", f1a.NONLOCAL_COLUMNS,
-                  [{column: ("1" if column in ("source_vector_or_bin", "valid") else "0")
+                  [{column: ("1000001_mode_1" if column == "source_vector_or_bin" else
+                             "1" if column == "valid" else "0")
                     for column in f1a.NONLOCAL_COLUMNS}])
             projected = [{"matrix": matrix, "row_mode": str(i), "column_mode": str(j),
                           "value": "0"} for matrix in ("M_B", "M_S", "M_cfg", "H_B", "H_S", "H_cfg")
