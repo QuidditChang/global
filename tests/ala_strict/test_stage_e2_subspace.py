@@ -88,7 +88,8 @@ class ContractTests(unittest.TestCase):
         source = TOOL.read_text()
         expected = {"LOCAL_SCHWARZ_PATH", "MPI_OVERLAP_PATH",
                     "GLOBAL_COARSE_PATH", "TARGETED_LOW_RANK_PATH",
-                    "MULTILEVEL_PRESSURE_PATH", "UNRESOLVED"}
+                    "MULTILEVEL_PRESSURE_PATH", "PRECONDITIONER_REDESIGN_PATH",
+                    "UNRESOLVED"}
         for value in expected:
             self.assertIn(f'"{value}"', source)
         for obsolete in ("LOCAL_SCHWARZ_REDESIGN_REVIEW",
@@ -116,7 +117,8 @@ class ContractTests(unittest.TestCase):
         data = {key: [] for key in stage_e2.SCHEMAS}
         data["snapshots_manifest"] = [
             {"case": case, "iteration": str(iteration), "residual_norm": "1",
-             "global_checksum": "0123456789abcdef", "storage_identifier": "x",
+             "global_checksum": "0123456789abcdef",
+             "storage_identifier": "snap/E.rank%06d.bin",
              "ranks": "384", "local_npno": "8"} for case, iteration in labels]
         for ci, ii in labels:
             for cj, ij in labels:
@@ -136,16 +138,17 @@ class ContractTests(unittest.TestCase):
                     "cumulative_fraction": str(mode / count), "N50": str((count + 1)//2),
                     "N80": str(math.ceil(.8 * count)), "N90": str(math.ceil(.9 * count)),
                     "N95": str(math.ceil(.95 * count)), "weighting": "test"})
-        for case, iteration in labels:
+        for label_index, (case, iteration) in enumerate(labels):
             for mode in (1, 2):
                 data["joint_pod_coefficients"].append({"case": case,
                     "iteration": str(iteration), "pod_mode": str(mode),
-                    "coefficient": str(1 / (iteration + mode + 1)),
+                    "coefficient": "1" if label_index == mode - 1 else "0",
                     "contraction": "1", "sign_change": "0"})
         data["subspace_angles"] = [{"energy_level": "80", "subspace_dimension": "1",
             "angle_index": "1", "angle_degrees": "5", "cosine": ".996",
             "threshold_status": stage_e2.PROVISIONAL}]
-        objects = [("JOINT", "pod_mode", str(mode)) for mode in (1, 2)]
+        objects = [(case, "pod_mode", str(mode))
+                   for case in ("E0", "E1", "JOINT") for mode in (1, 2)]
         for case, kind, identifier in objects:
             for depth in ("0_200", "200_410", "410_660", "660_1000", "1000_cmb"):
                 for band in ("GLOBAL_VERY_LONG", "LONG_INTERMEDIATE",
@@ -167,8 +170,12 @@ class ContractTests(unittest.TestCase):
                     "cosine": "1", "alpha_opt": "1", "Pq_norm": "1",
                     "SPq_norm": "1", "qTPq": "1", "qTSPq": "1",
                     "positive_qTPq": "1", "positive_qTSPq": "1",
-                    "tight_solve_achieved": "1e-10", "map_semantics": "test"})
+                    "tight_solve_achieved": "1e-10",
+                    "map_semantics": ("configured_minus_BPI_exact_component"
+                        if mapping == "PURE_SCHWARZ" else "complete_map")})
         modes = stage_e2.validate(data)
+        validation = stage_e2.numerical_validation(data, modes)
+        self.assertEqual(validation["status"], "PASS")
         prior = {"case_E0": {"restart_verdict": "RESIDUAL_TAIL_PREEXISTS_RESTART",
                               "density_gauge_fraction": 1e-6},
                  "case_E1": {"restart_verdict": "RESIDUAL_TAIL_PREEXISTS_RESTART",
@@ -176,6 +183,9 @@ class ContractTests(unittest.TestCase):
         result = stage_e2.classify(data, modes, prior)
         self.assertFalse(result["automatic_solver_change_authorized"])
         self.assertTrue(result["density_gauge_remains_non_dominant"])
+        self.assertIn("case_E0", result)
+        self.assertIn("case_E1", result)
+        self.assertIn("thresholds", result)
 
 
 if __name__ == "__main__":
