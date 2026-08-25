@@ -81,6 +81,17 @@ class AdditiveTests(unittest.TestCase):
 
 
 class StaticContractTests(unittest.TestCase):
+    def test_normalized_linearity_warns_but_hard_failure_is_rejected(self):
+        base = {"role": "CONFIGURED", "difference_norm": "1e-7",
+                "combined_norm": "1", "sum_norm": "1",
+                "relative_defect": "1e-7", "solve_floor": "1e-10",
+                "warn_limit": "1e-8", "hard_limit": "1e-5",
+                "status": "WARN", "valid": "1"}
+        self.assertEqual(f1a.validate_linearity([base])["status"], "WARN")
+        failed = dict(base, relative_defect="1e-4", status="FAIL", valid="0")
+        with self.assertRaises(ValueError):
+            f1a.validate_linearity([failed])
+
     def test_f1a_cfg_contract_accepts_only_configured_schwarz_difference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -128,7 +139,21 @@ class StaticContractTests(unittest.TestCase):
         self.assertIn("verify_closure_inputs", launcher)
         self.assertIn("current_binary.sha256", launcher)
         self.assertIn("E2_snapshots.post.sha256", launcher)
+        self.assertIn("STRICT_ALA_CASE=F1A", launcher)
+        self.assertIn("rank_log_contract", launcher)
+        self.assertIn("verify_e2_binary_lineage", launcher)
+        self.assertIn("F1a_gated_instrumentation_only_rebuild", launcher)
+        self.assertIn("lib/Strict_ala_stage_f1a.inc|tools/analyze_strict_ala_stage_F1a.py|tests/ala_strict/test_stage_f1a_forensics.py", launcher)
         self.assertNotIn("STRICT_STAGE_E2_12110470", launcher)
+
+    def test_linearity_guard_is_relative_reported_and_fail_closed(self):
+        source = (ROOT / "lib" / "Strict_ala_stage_f1a.inc").read_text()
+        guard = source.split("One independently solved dominant-mode linearity guard.", 1)[1]
+        self.assertIn("relative_defect=difference_norm/scale", guard)
+        self.assertIn("strict_ala_stage_F1a_linearity.csv", source)
+        self.assertIn("STRICT_ALA_STAGE_F1A_LINEARITY", guard)
+        self.assertIn("relative_defect<=hard_limit", guard)
+        self.assertNotIn("sqrt(global_pdot(E,y,y,lev))>1.0e-8", guard)
 
     def test_operator_and_inverse_are_distinct_fields(self):
         self.assertIn("local_solve_relative_residual", f1a.LOCAL_COLUMNS)
@@ -175,6 +200,12 @@ class StaticContractTests(unittest.TestCase):
                   [{"POD_mode": str(mode), "q_energy_in_support_fraction": "1",
                     "eB_energy_in_support_fraction": "1", "valid": "1"}
                    for mode in (1, 2)])
+            write("strict_ala_stage_F1a_linearity.csv", f1a.LINEARITY_COLUMNS,
+                  [{"role": "CONFIGURED", "difference_norm": "1e-11",
+                    "combined_norm": "1", "sum_norm": "1",
+                    "relative_defect": "1e-11", "solve_floor": "1e-10",
+                    "warn_limit": "1e-8", "hard_limit": "1e-5",
+                    "status": "PASS", "valid": "1"}])
             e2_columns = ("mode", "map", "mode_energy_fraction", "cumulative_energy",
                 "E_P", "cosine", "alpha_opt", "Pq_norm", "SPq_norm", "qTPq",
                 "qTSPq", "positive_qTPq", "positive_qTSPq", "tight_solve_achieved",

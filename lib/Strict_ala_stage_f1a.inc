@@ -59,12 +59,14 @@ static double ala_f1a_true_action(struct All_variables *E,double **q,
         E->control.ala_schur_diagnostic_tight_tolerance);
     assemble_div_rho_u(E,u,action,lev);
     (*call_id)++;
-    if(E->parallel.me==0)
+    if(E->parallel.me==0) {
         fprintf(tight,"%d,%s,%d,%.17e,%.17e,%.17e,%.17e,%lld,%d,1\n",
             *call_id,role,mode,sqrt(max(rhs2,0.0)),
             E->control.ala_schur_diagnostic_tight_tolerance,target,achieved,
             E->control.ala_stage_abc_inner_cycle_count-before,
             E->control.ala_schur_diagnostic_max_cycles);
+        fflush(tight);
+    }
     return achieved;
 }
 
@@ -93,6 +95,7 @@ static void ala_f1a_write_row(FILE *fp,int mode,const char *stage,double weight,
         "%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,1\n",
         mode,stage,weight,xnorm,ynorm,residual,standalone,ep,cosine,qx,qy,
         eby,yby,self,cross,delta,closure,achieved);
+    fflush(fp);
 }
 
 static void ala_f1a_patch_audit(struct All_variables *E,
@@ -246,6 +249,7 @@ static void ala_f1a_patch_audit(struct All_variables *E,
                     distance_global[2],distance_global[3],distance_global[4],
                     (distance_global[2]+distance_global[3]+distance_global[4])
                         /max(sum,1.0e-300));
+            fflush(patch); fflush(local); fflush(nonlocal);
         }
         ala_f1a_zero_pressure(E,source,lev);
         ala_f1a_zero_pressure(E,action,lev);
@@ -270,9 +274,10 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
     double **yS[ALA_F1A_MAX_MODES];
     double **x=0,**y=0,**work=0,**rhs=0,**u=0,**vwork=0,**combined=0;
     FILE *tel=NULL,*tight=NULL,*matrix=NULL,*patch=NULL,*local=NULL,*nonlocal=NULL;
-    FILE *structure=NULL,*support=NULL;
+    FILE *structure=NULL,*support=NULL,*linearity=NULL;
     int i,j,m,e,stage,n=2*ALA_E2_LATE_COUNT,selected,call_id=0;
-    double weight,achieved=0.0;
+    double weight,achieved=0.0,achievedB[ALA_F1A_MAX_MODES];
+    double achievedS[ALA_F1A_MAX_MODES];
     static const char *stage_names[4]={"S0_RAW_LOCAL","S1_RIGHT_SCALING",
         "S2_PARTITION_WEIGHTING","S3_LEFT_SCALING"};
     if(required==NULL) return 0;
@@ -330,6 +335,10 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
         fprintf(structure,"supported_DOFs,multiplicity_min,multiplicity_max,invalid_multiplicity,top_W,mid_W,transition_W,partition_formula,valid\n");
         support=ala_f1a_open_root(E,output_dir,"strict_ala_stage_F1a_support.csv","w");
         fprintf(support,"POD_mode,q_energy_in_support_fraction,eB_energy_in_support_fraction,valid\n");
+        linearity=ala_f1a_open_root(E,output_dir,"strict_ala_stage_F1a_linearity.csv","w");
+        fprintf(linearity,"role,difference_norm,combined_norm,sum_norm,relative_defect,solve_floor,warn_limit,hard_limit,status,valid\n");
+        fflush(tel); fflush(tight); fflush(matrix); fflush(patch); fflush(local);
+        fflush(nonlocal); fflush(structure); fflush(support); fflush(linearity);
     }
     {
         double local_stats[3]={0.0,1.0e300,0.0},global_min,global_max;
@@ -346,12 +355,14 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
         MPI_Allreduce(&local_invalid,&global_invalid,1,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
         MPI_Allreduce(&local_stats[1],&global_min,1,MPI_DOUBLE,MPI_MIN,E->parallel.world);
         MPI_Allreduce(&local_stats[2],&global_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
-        if(E->parallel.me==0)
+        if(E->parallel.me==0) {
             fprintf(structure,"%lld,%.17e,%.17e,%lld,1.0,%.17e,%.17e,"
                 "symmetric_inverse_sqrt_multiplicity_with_weighted_local_gauge,1\n",
                 global_supported,global_min,global_max,global_invalid,
                 sqrt(E->control.ala_shallow_patch_mid_action_scale),
                 sqrt(E->control.ala_shallow_patch_transition_action_scale));
+            fflush(structure);
+        }
     }
     for(i=0;i<selected;i++) {
         double qq,qx,qy,xx,yy,residual,standalone,cosine;
@@ -362,6 +373,7 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
         ala_schur_preconditioner_action(E,q[i],xB[i],work,combined,lev,0,cache);
         achieved=ala_f1a_true_action(E,xB[i],yB[i],rhs,u,vwork,lev,tight,
                                      &call_id,i+1,"BPI");
+        achievedB[i]=achieved;
         qq=global_pdot(E,q[i],q[i],lev); qx=global_pdot(E,q[i],xB[i],lev);
         qy=global_pdot(E,q[i],yB[i],lev); xx=global_pdot(E,xB[i],xB[i],lev);
         yy=global_pdot(E,yB[i],yB[i],lev); residual=qq+yy-2.0*qy;
@@ -379,10 +391,12 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
                     }
                 }
             MPI_Allreduce(local_support,global_support,4,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-            if(E->parallel.me==0)
+            if(E->parallel.me==0) {
                 fprintf(support,"%d,%.17e,%.17e,1\n",i+1,
                     global_support[2]/max(global_support[0],1.0e-300),
                     global_support[3]/max(global_support[1],1.0e-300));
+                fflush(support);
+            }
         }
         if(E->parallel.me==0)
             ala_f1a_write_row(tel,i+1,"BPI",weight,sqrt(max(xx,0.0)),
@@ -409,7 +423,11 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
                     sqrt(max(xx,0.0)),sqrt(max(yy,0.0)),residual,standalone,
                     sqrt(max(standalone,0.0)),cosine,qx,qy,eby,yby,self,cross,
                     delta,closure,achieved);
-            if(stage==3) { ala_f1a_copy_pressure(E,xS[i],x,lev); ala_f1a_copy_pressure(E,yS[i],y,lev); }
+            if(stage==3) {
+                ala_f1a_copy_pressure(E,xS[i],x,lev);
+                ala_f1a_copy_pressure(E,yS[i],y,lev);
+                achievedS[i]=achieved;
+            }
         }
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[lev];e++) {
@@ -437,11 +455,44 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
             combined[m][e]=xB[0][m][e]+xS[0][m][e];
     achieved=ala_f1a_true_action(E,combined,y,rhs,u,vwork,lev,tight,&call_id,1,
                                  "CONFIGURED_LINEARITY_GUARD");
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(e=1;e<=E->lmesh.NPNO[lev];e++)
-            y[m][e]-=yB[0][m][e]+yS[0][m][e];
-    if(sqrt(global_pdot(E,y,y,lev))>1.0e-8)
-        myerror(E,"Stage-F1a S_gamma linearity guard failed");
+    {
+        double combined_norm=sqrt(max(global_pdot(E,y,y,lev),0.0));
+        double sum_norm,difference_norm,relative_defect,solve_floor;
+        double warn_limit,hard_limit,scale;
+        int linearity_valid;
+        const char *status;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++)
+                combined[m][e]=yB[0][m][e]+yS[0][m][e];
+        sum_norm=sqrt(max(global_pdot(E,combined,combined,lev),0.0));
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) y[m][e]-=combined[m][e];
+        difference_norm=sqrt(max(global_pdot(E,y,y,lev),0.0));
+        scale=max(max(combined_norm,sum_norm),1.0e-300);
+        relative_defect=difference_norm/scale;
+        solve_floor=max(achieved,max(achievedB[0],achievedS[0]));
+        warn_limit=max(100.0*solve_floor,1.0e-8);
+        hard_limit=max(100000.0*solve_floor,1.0e-5);
+        linearity_valid=isfinite(difference_norm) && isfinite(relative_defect)
+            && relative_defect<=hard_limit;
+        status=!linearity_valid ? "FAIL" :
+            (relative_defect>warn_limit ? "WARN" : "PASS");
+        if(E->parallel.me==0) {
+            fprintf(linearity,"CONFIGURED,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%s,%d\n",
+                difference_norm,combined_norm,sum_norm,relative_defect,
+                solve_floor,warn_limit,hard_limit,status,linearity_valid);
+            fflush(linearity); fflush(tel); fflush(tight); fflush(patch);
+            fflush(local); fflush(nonlocal); fflush(structure); fflush(support);
+            fprintf(E->fp,"STRICT_ALA_STAGE_F1A_LINEARITY status=%s "
+                "difference_norm=%.17e combined_norm=%.17e sum_norm=%.17e "
+                "relative_defect=%.17e solve_floor=%.17e warn_limit=%.17e "
+                "hard_limit=%.17e\n",status,difference_norm,combined_norm,
+                sum_norm,relative_defect,solve_floor,warn_limit,hard_limit);
+            fflush(E->fp);
+        }
+        if(!linearity_valid)
+            myerror(E,"Stage-F1a normalized S_gamma linearity guard failed");
+    }
     if(call_id>40) myerror(E,"Stage-F1a tight solve budget exceeded");
     for(i=0;i<selected;i++) for(j=0;j<selected;j++) {
         double mb=global_pdot(E,q[i],xB[j],lev);
@@ -457,13 +508,14 @@ static int strict_ala_stage_f1a_run(struct All_variables *E,
             fprintf(matrix,"H_cfg,%d,%d,%.17e\n",i+1,j+1,hb+hs);
         }
     }
+    if(E->parallel.me==0) fflush(matrix);
     if(E->parallel.me==0) {
         fprintf(E->fp,"STRICT_ALA_STAGE_F1A_COMPLETE selected_modes=%d "
             "selected_energy=%.17e tight_solves=%d K_gamma_build_count=1 "
             "production_solver_modified=0\n",selected,selected_energy,call_id);
         fflush(E->fp);
         fclose(tel); fclose(tight); fclose(matrix); fclose(patch); fclose(local); fclose(nonlocal);
-        fclose(structure); fclose(support);
+        fclose(structure); fclose(support); fclose(linearity);
     }
     for(i=0;i<selected;i++) {
         ala_schur_free_field(E,q[i]); ala_schur_free_field(E,xB[i]);

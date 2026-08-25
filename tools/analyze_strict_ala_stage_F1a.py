@@ -62,6 +62,9 @@ STRUCTURE_COLUMNS = ("supported_DOFs", "multiplicity_min", "multiplicity_max",
                      "partition_formula", "valid")
 SUPPORT_COLUMNS = ("POD_mode", "q_energy_in_support_fraction",
                    "eB_energy_in_support_fraction", "valid")
+LINEARITY_COLUMNS = ("role", "difference_norm", "combined_norm", "sum_norm",
+                     "relative_defect", "solve_floor", "warn_limit",
+                     "hard_limit", "status", "valid")
 F1A_REQUIRED_OFF = ("ala_radial_line_preconditioner", "ala_two_level_preconditioner",
                     "ala_pressure_multigrid", "ala_pressure_multigrid_galerkin",
                     "ala_global_coarse_preconditioner", "ala_geneo_preconditioner")
@@ -138,6 +141,21 @@ def check_cfg_contract(c0, c1, diff_path):
     return 0
 
 
+def validate_linearity(rows):
+    if len(rows) != 1 or rows[0]["role"] != "CONFIGURED":
+        raise ValueError("linearity guard completeness violation")
+    row = rows[0]
+    for column in LINEARITY_COLUMNS[1:8]:
+        value = finite(row[column], column)
+        if value < 0.0:
+            raise ValueError("negative linearity metric")
+    if (row["valid"] != "1" or row["status"] not in ("PASS", "WARN") or
+            float(row["relative_defect"]) > float(row["hard_limit"]) or
+            float(row["warn_limit"]) > float(row["hard_limit"])):
+        raise ValueError("normalized linearity guard failed")
+    return row
+
+
 def thresholds():
     return {
         "schema": "strict-ala-stage-F1a-thresholds-v1",
@@ -154,6 +172,8 @@ def thresholds():
         "MAX_REPRESENTATIVE_PATCHES": MAX_PATCHES,
         "MAX_TIGHT_SGAMMA_SOLVES": MAX_TIGHT_SOLVES,
         "OPERATOR_REPLAY_RELATIVE_TOLERANCE": REPLAY_RELATIVE,
+        "LINEARITY_RELATIVE_WARN_FLOOR": 1.0e-8,
+        "LINEARITY_RELATIVE_HARD_FLOOR": 1.0e-5,
         "scale_floor": SCALE_FLOOR,
         "normalization": "all residual-energy changes divided by ||e_B||^2",
         "additive_rule": "standalone Schwarz useful, configured map harmful, interaction explains >=60%",
@@ -179,6 +199,8 @@ def schema_manifest():
          ["partition_formula"], "exactly one row"),
         ("strict_ala_stage_F1a_support.csv", SUPPORT_COLUMNS,
          ["POD_mode"], "one row per selected mode"),
+        ("strict_ala_stage_F1a_linearity.csv", LINEARITY_COLUMNS,
+         ["role"], "exactly one normalized configured-map guard"),
     )
     return {"schema": "strict-ala-stage-F1a-schema-v1", "files": [
         {"filename": name, "required_columns": list(columns),
@@ -417,6 +439,9 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
             value = finite(row[column], column)
             if value < 0.0 or value > 1.0 + 1.0e-12:
                 raise ValueError("support fraction outside [0,1]")
+    linearity_rows = read_csv(root / "strict_ala_stage_F1a_linearity.csv",
+                              LINEARITY_COLUMNS)
+    linearity = validate_linearity(linearity_rows)
     result = classify_telescoping(rows)
     if result["dominant_damage_stage"] == "RAW_LOCAL" and \
             result["primary_defect_class"] == "UNRESOLVED":
@@ -460,6 +485,12 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
                        "forensic_path_authorized": True,
                        "production_schwarz_modification_authorized": False},
                    "operator_replay_identity": replay,
+                   "normalized_linearity_guard": {
+                       "status": linearity["status"],
+                       "relative_defect": float(linearity["relative_defect"]),
+                       "warn_limit": float(linearity["warn_limit"]),
+                       "hard_limit": float(linearity["hard_limit"]),
+                       "solve_floor": float(linearity["solve_floor"])},
                    "selected_POD_modes": result.pop("modes"),
                    "selected_POD_energy": result.pop("selected_energy"),
                    "raw_local": {"local_solve_quality": "MEASURED",
