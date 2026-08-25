@@ -360,28 +360,28 @@ class Stage2ArchitectureTest(unittest.TestCase):
         self.assertIn("r1[m][j]+r2[m][j]", inner)
         self.assertIn("r2[m][j]-c_rhs[m][j]", inner)
 
-    def test_stage5_run_files_enable_fixed_point_audit(self):
+    def test_run_files_define_sequential_stage2_to_stage5_recheck(self):
         cfg = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.cfg").read_text()
         lsf = (RUNS_ROOT / "cmbhf_ALA_Leng_Zhong_2008.lsf").read_text()
 
         required = {
-            "steps": "1",
+            "steps": "50",
             "tole_compressibility": "1e-06",
             "lith_age": "1",
             "lith_age_time": "1",
             "max_plate_age_Ma": "70",
-            "gruneisen": "1",
-            "compressible_formulation": "ala",
+            "gruneisen": "0",
+            "compressible_formulation": "tala",
             "ala_leng_zhong_2008": "on",
-            "ala_leng_zhong_stage3": "on",
-            "ala_leng_zhong_stage4": "on",
-            "ala_leng_zhong_stage5": "on",
+            "ala_leng_zhong_stage3": "off",
+            "ala_leng_zhong_stage4": "off",
+            "ala_leng_zhong_stage5": "off",
             "ala_leng_zhong_best_iterate_restore": "off",
-            "ala_leng_zhong_stage5f_diagnostic": "on",
+            "ala_leng_zhong_stage5f_diagnostic": "off",
             "ala_leng_zhong_residual_replacement_interval": "0",
             "ala_leng_zhong_residual_drift_tolerance": "0.1",
             "ala_leng_zhong_radial_line_preconditioner": "off",
-            "ala_leng_zhong_horizontal_patch_preconditioner": "on",
+            "ala_leng_zhong_horizontal_patch_preconditioner": "off",
             "ala_leng_zhong_horizontal_patch_width": "4",
             "ala_leng_zhong_horizontal_patch_stride": "2",
             "ala_leng_zhong_horizontal_patch_weight": "0.5",
@@ -411,14 +411,48 @@ class Stage2ArchitectureTest(unittest.TestCase):
             self.assertRegex(cfg, r"(?m)^%s\s*=\s*%s\s*$" %
                              (re.escape(key), re.escape(value)))
 
-        self.assertIn("#BSUB -J CMBHF_LZ08_S5", lsf)
+        self.assertIn("#BSUB -J CMBHF_LZ08_S2_S5", lsf)
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008.cfg", lsf)
         self.assertIn("builds/global/cmbhf_ALA_Leng_Zhong_2008", lsf)
-        self.assertIn("stage5F_pressure_spectroscopy_fixed", lsf)
+        self.assertIn("for stage in 2 3 4 5; do", lsf)
+        self.assertIn('configure_stage "${stage}"', lsf)
+        self.assertIn("set_cfg_value steps 50", lsf)
+        self.assertIn("set_cfg_value datafile \"${tag}\"", lsf)
+        self.assertIn("set_cfg_value logfile \"${tag}_AhatP%P_%T\"", lsf)
+        self.assertIn("set_cfg_value ala_leng_zhong_stage3 on", lsf)
+        self.assertIn("set_cfg_value ala_leng_zhong_stage4 on", lsf)
+        self.assertIn("set_cfg_value ala_leng_zhong_stage5 on", lsf)
+        self.assertIn("set_cfg_value ala_leng_zhong_stage5f_diagnostic off",
+                      lsf)
+        self.assertIn("set_cfg_value ala_leng_zhong_horizontal_patch_preconditioner off",
+                      lsf)
+        self.assertIn("set -euo pipefail", lsf)
+        expected_stage_switches = {
+            2: ("0", "tala", "off", "off", "off"),
+            3: ("1", "tala", "on", "off", "off"),
+            4: ("1", "ala", "on", "on", "off"),
+            5: ("1", "ala", "on", "on", "on"),
+        }
+        for stage, values in expected_stage_switches.items():
+            match = re.search(r"(?ms)^\s*%d\)\n(.*?)^\s*;;" % stage,
+                              lsf)
+            self.assertIsNotNone(match, "missing Stage %d case" % stage)
+            body = match.group(1)
+            expected = dict(zip((
+                "gruneisen", "compressible_formulation",
+                "ala_leng_zhong_stage3", "ala_leng_zhong_stage4",
+                "ala_leng_zhong_stage5"), values))
+            for key, value in expected.items():
+                self.assertRegex(
+                    body, r"(?m)^\s*set_cfg_value\s+%s\s+%s\s*$" %
+                    (re.escape(key), re.escape(value)))
         self.assertIn("cmbhf_ALA_Leng_Zhong_2008/DATA/%RANK", cfg)
-        self.assertIn("stage5F_pressure_spectroscopy_fixed_AhatP%P_%T", cfg)
+        self.assertIn("stage2_closed_refstate_AhatP%P_%T", cfg)
+        self.assertIn("stage2_closed_refstate", cfg)
         self.assertNotIn("runtime.cfg", lsf)
         self.assertNotIn("-i.bak", lsf)
+        self.assertNotRegex(lsf, r"(?m)^\s*cp\s")
+        self.assertEqual(lsf.count("/bin/pycitcoms --pyre-start"), 1)
 
     def test_small_spd_schur_pcg_oracle(self):
         # K=diag(2,3,5), G has two pressure columns, and S=G^T K^-1 G.
