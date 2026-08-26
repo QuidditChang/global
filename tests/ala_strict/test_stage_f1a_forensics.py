@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "analyze_strict_ala_stage_F1a.py"
@@ -92,6 +93,55 @@ class StaticContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             f1a.validate_linearity([failed])
 
+    def test_configured_replay_uses_validated_linearity_envelope_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archived = Path(directory) / "e2.csv"
+            columns = ("mode", "map", "mode_energy_fraction", "cumulative_energy",
+                "E_P", "cosine", "alpha_opt", "Pq_norm", "SPq_norm", "qTPq",
+                "qTSPq", "positive_qTPq", "positive_qTSPq", "tight_solve_achieved",
+                "map_semantics")
+            with archived.open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=columns); writer.writeheader()
+                for mode in (1, 2):
+                    for mapping in ("BPI", "CONFIGURED"):
+                        row = {column: "0" for column in columns}
+                        row.update({"mode": str(mode), "map": mapping,
+                                    "E_P": "1", "cosine": "1", "qTSPq": "1"})
+                        writer.writerow(row)
+            current = rows_from_energies([[1] * 6, [1] * 6], weights=[.5, .5])
+            for row in current:
+                row.update({"E_P": "1", "cosine": "1", "qTSPq": "1"})
+                if row["stage"] == "CONFIGURED": row["cosine"] = "1.00000002"
+            linearity = {"relative_defect": "3e-7", "hard_limit": "1e-5"}
+            replay = f1a.validate_operator_replay(current, archived, linearity)
+            configured = [row for row in replay if row["map"] == "CONFIGURED"]
+            self.assertTrue(all(row["effective_relative_tolerance"] == 3e-7
+                                for row in configured))
+            with self.assertRaises(ValueError):
+                f1a.validate_operator_replay(current, archived,
+                    {"relative_defect": "1e-9", "hard_limit": "1e-5"})
+            for row in current:
+                if row["stage"] == "BPI": row["cosine"] = "1.00000002"
+            with self.assertRaises(ValueError):
+                f1a.validate_operator_replay(current, archived, linearity)
+
+    def test_rank0_log_supplies_missing_tight_solve_cycles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "model.log"
+            log.write_text("ALA COUPLED INNER VELOCITY summary status=converged "
+                "cycles=481 max_cycles=2000 residual=9.91e-10 initial=1.0e1 "
+                "target=1.0e-9 relative=9.91e-11 seconds=3.0e2\n")
+            row = {"call_id": "1", "role": "BPI", "POD_mode": "1",
+                   "rhs_norm": "10", "requested_relative_tolerance": "1e-10",
+                   "target_residual": "1e-9", "achieved_relative_residual": "9.9e-11",
+                   "cycles": "0", "max_cycles": "2000", "converged": "1"}
+            evidence = f1a.validate_tight_solves([row], log)
+            self.assertEqual(evidence["source"], "rank0_model_log")
+            self.assertEqual(evidence["total_cycles"], 481)
+            log.write_text("")
+            with self.assertRaises(ValueError):
+                f1a.validate_tight_solves([row], log)
+
     def test_f1a_cfg_contract_accepts_only_configured_schwarz_difference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -143,8 +193,57 @@ class StaticContractTests(unittest.TestCase):
         self.assertIn("rank_log_contract", launcher)
         self.assertIn("verify_e2_binary_lineage", launcher)
         self.assertIn("F1a_gated_instrumentation_only_rebuild", launcher)
+        self.assertIn('--model-log "${MODEL_LOG}"', launcher)
         self.assertIn("lib/Strict_ala_stage_f1a.inc|tools/analyze_strict_ala_stage_F1a.py|tests/ala_strict/test_stage_f1a_forensics.py", launcher)
         self.assertNotIn("STRICT_STAGE_E2_12110470", launcher)
+
+    def test_postprocess_launcher_reuses_only_frozen_analysis_only_evidence(self):
+        launcher = (ROOT.parents[1] / "runs" /
+                    "cmbhf_ALA_strict_stage_F1a_postprocess.lsf").read_text()
+        self.assertIn("#BSUB -n 1", launcher)
+        self.assertIn("verify_evidence_root", launcher)
+        self.assertIn("relation=F1a_analysis_only_replay", launcher)
+        self.assertIn("numerical_evidence.pre.sha256", launcher)
+        self.assertIn("E2_snapshots.post.sha256", launcher)
+        self.assertIn("postprocess-audit", launcher)
+        self.assertNotIn("pycitcoms --pyre-start", launcher)
+
+    def test_postprocess_audit_requires_unchanged_frozen_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def dump(name, value):
+                path = root / name; path.write_text(json.dumps(value)); return path
+            decision = dump("decision.json", {"experiment_valid": True,
+                "automatic_solver_change_authorized": False,
+                "production_schwarz_modification_authorized": False,
+                "next_authorized_task": "F1B_LOCAL_CANDIDATE"})
+            provenance = {"provenance_complete": True, "source": {
+                "branch": "cmbhf_ALA_strict", "branch_verified": True,
+                "scientific_dirty": []}}
+            numerical = dump("numerical.json", provenance)
+            analysis = dump("analysis.json", provenance)
+            e2 = dump("e2.json", {"experiment_valid": True,
+                "numerical_validation_pass": True,
+                "observation_only_trajectory_pass": True,
+                "next_authorized_path": "LOCAL_SCHWARZ_PATH"})
+            log = root / "model.log"; log.write_text("STRICT_ALA_STAGE_F1A_COMPLETE\n")
+            lineage = root / "lineage.txt"
+            lineage.write_text("relation=F1a_analysis_only_replay\n"
+                "tools/analyze_strict_ala_stage_F1a.py\n")
+            pairs = {}
+            for stem in ("evidence", "analysis", "source", "snapshot"):
+                before, after = root / (stem + ".pre"), root / (stem + ".post")
+                before.write_text(stem); after.write_text(stem); pairs[stem] = (before, after)
+            args = SimpleNamespace(decision=decision, numerical_manifest=numerical,
+                analysis_manifest=analysis, evidence_pre=pairs["evidence"][0],
+                evidence_post=pairs["evidence"][1], analysis_pre=pairs["analysis"][0],
+                analysis_post=pairs["analysis"][1], source_pre=pairs["source"][0],
+                source_post=pairs["source"][1], snapshot_pre=pairs["snapshot"][0],
+                snapshot_post=pairs["snapshot"][1], lineage=lineage, e2_audit=e2,
+                model_log=log, evidence_root=root, output=root / "final.json")
+            self.assertEqual(f1a.postprocess_audit(args), 0)
+            pairs["evidence"][1].write_text("tampered")
+            self.assertEqual(f1a.postprocess_audit(args), 1)
 
     def test_linearity_guard_is_relative_reported_and_fail_closed(self):
         source = (ROOT / "lib" / "Strict_ala_stage_f1a.inc").read_text()

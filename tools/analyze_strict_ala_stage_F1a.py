@@ -145,13 +145,27 @@ def validate_linearity(rows):
     if len(rows) != 1 or rows[0]["role"] != "CONFIGURED":
         raise ValueError("linearity guard completeness violation")
     row = rows[0]
+    values = {}
     for column in LINEARITY_COLUMNS[1:8]:
         value = finite(row[column], column)
         if value < 0.0:
             raise ValueError("negative linearity metric")
-    if (row["valid"] != "1" or row["status"] not in ("PASS", "WARN") or
-            float(row["relative_defect"]) > float(row["hard_limit"]) or
-            float(row["warn_limit"]) > float(row["hard_limit"])):
+        values[column] = value
+    expected_relative = values["difference_norm"] / max(
+        values["combined_norm"], values["sum_norm"], SCALE_FLOOR)
+    expected_warn = max(100.0 * values["solve_floor"], 1.0e-8)
+    expected_hard = max(100000.0 * values["solve_floor"], 1.0e-5)
+    expected_status = "WARN" if values["relative_defect"] > values["warn_limit"] else "PASS"
+    identities = (
+        math.isclose(values["relative_defect"], expected_relative, rel_tol=5e-13,
+                     abs_tol=SCALE_FLOOR) and
+        math.isclose(values["warn_limit"], expected_warn, rel_tol=5e-13,
+                     abs_tol=SCALE_FLOOR) and
+        math.isclose(values["hard_limit"], expected_hard, rel_tol=5e-13,
+                     abs_tol=SCALE_FLOOR))
+    if (row["valid"] != "1" or row["status"] != expected_status or not identities or
+            values["relative_defect"] > values["hard_limit"] or
+            values["warn_limit"] > values["hard_limit"]):
         raise ValueError("normalized linearity guard failed")
     return row
 
@@ -172,6 +186,8 @@ def thresholds():
         "MAX_REPRESENTATIVE_PATCHES": MAX_PATCHES,
         "MAX_TIGHT_SGAMMA_SOLVES": MAX_TIGHT_SOLVES,
         "OPERATOR_REPLAY_RELATIVE_TOLERANCE": REPLAY_RELATIVE,
+        "CONFIGURED_REPLAY_TOLERANCE_RULE":
+            "max(fixed replay tolerance, validated configured linearity defect), capped by hard limit",
         "LINEARITY_RELATIVE_WARN_FLOOR": 1.0e-8,
         "LINEARITY_RELATIVE_HARD_FLOOR": 1.0e-5,
         "scale_floor": SCALE_FLOOR,
@@ -342,13 +358,23 @@ def classify_telescoping(rows):
             "mode_consistency_energy_fraction": mode_consistency}
 
 
-def validate_operator_replay(rows, e2_true_mode):
+def replay_tolerances(linearity):
+    relative_defect = finite(linearity["relative_defect"], "linearity relative_defect")
+    hard_limit = finite(linearity["hard_limit"], "linearity hard_limit")
+    configured = max(REPLAY_RELATIVE, relative_defect)
+    if configured > hard_limit:
+        raise ValueError("operator replay tolerance exceeds validated linearity hard limit")
+    return {"BPI": REPLAY_RELATIVE, "CONFIGURED": configured}
+
+
+def validate_operator_replay(rows, e2_true_mode, linearity):
     archived = read_csv(e2_true_mode, ("mode", "map", "mode_energy_fraction",
         "cumulative_energy", "E_P", "cosine", "alpha_opt", "Pq_norm",
         "SPq_norm", "qTPq", "qTSPq", "positive_qTPq", "positive_qTSPq",
         "tight_solve_achieved", "map_semantics"))
     current = {(int(row["POD_mode"]), row["stage"]): row for row in rows}
     checked = []
+    tolerances = replay_tolerances(linearity)
     for old in archived:
         mode = int(old["mode"])
         if mode not in (1, 2) or old["map"] not in ("BPI", "CONFIGURED"):
@@ -360,41 +386,92 @@ def validate_operator_replay(rows, e2_true_mode):
             actual = finite(row[field], f"replayed {field}")
             relative = abs(actual - expected) / max(abs(expected), 1e-300)
             differences[field] = relative
-            if relative > REPLAY_RELATIVE:
+            if relative > tolerances[old["map"]]:
                 raise ValueError(f"OPERATOR_REPLAY_IDENTITY_FAIL {mode} {old['map']} {field}")
         checked.append({"mode": mode, "map": old["map"],
-                        "relative_differences": differences})
+                        "relative_differences": differences,
+                        "base_relative_tolerance": REPLAY_RELATIVE,
+                        "effective_relative_tolerance": tolerances[old["map"]],
+                        "tolerance_basis": ("fixed_identity" if old["map"] == "BPI"
+                            else "max(fixed_identity,validated_configured_linearity_defect)")})
     if len(checked) != 4:
         raise ValueError("operator replay did not cover E2 modes 1 and 2")
     return checked
 
 
-def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
-    root = Path(input_dir); output = Path(output_dir); output.mkdir(parents=True, exist_ok=True)
-    freeze_contract(output)
-    rows = read_csv(root / "strict_ala_stage_F1a_telescoping.csv", TELESCOPING_COLUMNS)
-    replay = validate_operator_replay(rows, e2_true_mode)
-    e2 = json.loads(Path(e2_reanalysis).read_text())
-    if e2.get("next_authorized_path") != "LOCAL_SCHWARZ_PATH" or not \
-            e2.get("forensic_path_authorized") or \
-            e2.get("production_schwarz_modification_authorized") is not False:
-        raise ValueError("corrected E2 authorization gate failed")
-    tight = read_csv(root / "strict_ala_stage_F1a_tight_solves.csv", TIGHT_COLUMNS)
-    if len(tight) > MAX_TIGHT_SOLVES or len({r["call_id"] for r in tight}) != len(tight):
+def tight_solve_log_evidence(model_log):
+    if model_log is None:
+        return []
+    text = Path(model_log).read_text(errors="replace")
+    pattern = re.compile(
+        r"ALA COUPLED INNER VELOCITY summary status=converged "
+        r"cycles=([0-9]+) max_cycles=([0-9]+) residual=(\S+) "
+        r"initial=(\S+) target=(\S+) relative=(\S+) seconds=(\S+)")
+    evidence = []
+    for match in pattern.finditer(text):
+        cycles, max_cycles = int(match.group(1)), int(match.group(2))
+        values = [finite(value, name) for value, name in zip(match.groups()[2:],
+            ("log residual", "log initial", "log target", "log relative", "log seconds"))]
+        if cycles <= 0 or cycles > max_cycles or values[0] < 0.0 or values[1] < 0.0 or \
+                values[2] < 0.0 or values[3] < 0.0 or values[4] < 0.0:
+            raise ValueError("invalid tight solve summary in model log")
+        evidence.append({"cycles": cycles, "max_cycles": max_cycles,
+                         "residual": values[0], "initial": values[1],
+                         "target": values[2], "relative": values[3],
+                         "seconds": values[4]})
+    return evidence
+
+
+def validate_tight_solves(rows, model_log=None):
+    if len(rows) > MAX_TIGHT_SOLVES or len({r["call_id"] for r in rows}) != len(rows):
         raise ValueError("tight solve budget or unique-key violation")
-    for row in tight:
+    log_evidence = tight_solve_log_evidence(model_log)
+    if model_log is not None and len(log_evidence) != len(rows):
+        raise ValueError("tight solve CSV/log count mismatch")
+    for index, row in enumerate(rows):
         for column in TIGHT_COLUMNS[3:9]:
             finite(row[column], column)
         requested = float(row["requested_relative_tolerance"])
         rhs_norm = float(row["rhs_norm"])
         target = float(row["target_residual"])
         achieved = float(row["achieved_relative_residual"])
+        csv_cycles = int(row["cycles"])
+        max_cycles = int(row["max_cycles"])
         if (row["converged"] != "1" or requested <= 0.0 or rhs_norm < 0.0 or
                 target < 0.0 or achieved < 0.0 or
                 achieved > max(2.0 * requested, 1.0e-15) or
-                int(row["cycles"]) < 0 or
-                int(row["cycles"]) > int(row["max_cycles"])):
+                csv_cycles < 0 or csv_cycles > max_cycles):
             raise ValueError("failed tight solve contract")
+        if log_evidence:
+            logged = log_evidence[index]
+            if logged["max_cycles"] != max_cycles or \
+                    (csv_cycles not in (0, logged["cycles"])) or \
+                    logged["relative"] > max(2.0 * requested, 1.0e-15):
+                raise ValueError("tight solve CSV/log identity mismatch")
+    cycles = [entry["cycles"] for entry in log_evidence]
+    return {"source": "rank0_model_log" if cycles else "tight_solve_csv",
+            "solve_count": len(rows),
+            "cycles_available": bool(cycles or all(int(row["cycles"]) > 0 for row in rows)),
+            "total_cycles": sum(cycles) if cycles else sum(int(row["cycles"]) for row in rows),
+            "minimum_cycles": min(cycles) if cycles else min(int(row["cycles"]) for row in rows),
+            "maximum_cycles": max(cycles) if cycles else max(int(row["cycles"]) for row in rows)}
+
+
+def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis, model_log=None):
+    root = Path(input_dir); output = Path(output_dir); output.mkdir(parents=True, exist_ok=True)
+    freeze_contract(output)
+    rows = read_csv(root / "strict_ala_stage_F1a_telescoping.csv", TELESCOPING_COLUMNS)
+    linearity_rows = read_csv(root / "strict_ala_stage_F1a_linearity.csv",
+                              LINEARITY_COLUMNS)
+    linearity = validate_linearity(linearity_rows)
+    replay = validate_operator_replay(rows, e2_true_mode, linearity)
+    e2 = json.loads(Path(e2_reanalysis).read_text())
+    if e2.get("next_authorized_path") != "LOCAL_SCHWARZ_PATH" or not \
+            e2.get("forensic_path_authorized") or \
+            e2.get("production_schwarz_modification_authorized") is not False:
+        raise ValueError("corrected E2 authorization gate failed")
+    tight = read_csv(root / "strict_ala_stage_F1a_tight_solves.csv", TIGHT_COLUMNS)
+    tight_evidence = validate_tight_solves(tight, model_log)
     patches = read_csv(root / "strict_ala_stage_F1a_patch_selection.csv", PATCH_COLUMNS)
     if (len(patches) > MAX_PATCHES or len({(r["patch_ID"], r["POD_mode"],
             r["selection_rule"]) for r in patches}) != len(patches)):
@@ -439,9 +516,6 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
             value = finite(row[column], column)
             if value < 0.0 or value > 1.0 + 1.0e-12:
                 raise ValueError("support fraction outside [0,1]")
-    linearity_rows = read_csv(root / "strict_ala_stage_F1a_linearity.csv",
-                              LINEARITY_COLUMNS)
-    linearity = validate_linearity(linearity_rows)
     result = classify_telescoping(rows)
     if result["dominant_damage_stage"] == "RAW_LOCAL" and \
             result["primary_defect_class"] == "UNRESOLVED":
@@ -485,6 +559,7 @@ def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis):
                        "forensic_path_authorized": True,
                        "production_schwarz_modification_authorized": False},
                    "operator_replay_identity": replay,
+                   "tight_solve_evidence": tight_evidence,
                    "normalized_linearity_guard": {
                        "status": linearity["status"],
                        "relative_defect": float(linearity["relative_defect"]),
@@ -555,12 +630,77 @@ def audit(args):
     return 0 if valid else 1
 
 
+def postprocess_audit(args):
+    decision = json.loads(Path(args.decision).read_text())
+    numerical_manifest = json.loads(Path(args.numerical_manifest).read_text())
+    analysis_manifest = json.loads(Path(args.analysis_manifest).read_text())
+    evidence_pass = Path(args.evidence_pre).read_bytes() == Path(args.evidence_post).read_bytes()
+    analysis_inputs_pass = Path(args.analysis_pre).read_bytes() == Path(args.analysis_post).read_bytes()
+    source_pass = Path(args.source_pre).read_bytes() == Path(args.source_post).read_bytes()
+    snapshots_pass = Path(args.snapshot_pre).read_bytes() == Path(args.snapshot_post).read_bytes()
+    model_log = Path(args.model_log).read_text(errors="replace")
+    marker_pass = model_log.count("STRICT_ALA_STAGE_F1A_COMPLETE") == 1
+    lower_log = model_log.lower()
+    logs_clean = not any((re.search(r"(?<![a-z])(?:nan|inf)(?![a-z])", lower_log),
+                          "fatal error" in lower_log, "mpi_abort" in lower_log,
+                          "traceback" in lower_log,
+                          re.search(r"(?:fallback_blocks|velocity_block_fallbacks)=[1-9][0-9]*",
+                                    lower_log)))
+    numerical_provenance = bool(numerical_manifest.get("provenance_complete") and
+        numerical_manifest.get("source", {}).get("branch") == "cmbhf_ALA_strict" and
+        numerical_manifest.get("source", {}).get("branch_verified") and
+        not numerical_manifest.get("source", {}).get("scientific_dirty"))
+    analysis_provenance = bool(analysis_manifest.get("provenance_complete") and
+        analysis_manifest.get("source", {}).get("branch") == "cmbhf_ALA_strict" and
+        analysis_manifest.get("source", {}).get("branch_verified") and
+        not analysis_manifest.get("source", {}).get("scientific_dirty"))
+    lineage = [line.strip() for line in Path(args.lineage).read_text().splitlines()
+               if line.strip()]
+    allowed = {"tools/analyze_strict_ala_stage_F1a.py",
+               "tests/ala_strict/test_stage_f1a_forensics.py"}
+    lineage_pass = bool(lineage and lineage[0] == "relation=F1a_analysis_only_replay" and
+                        set(lineage[1:]) <= allowed)
+    e2_audit = json.loads(Path(args.e2_audit).read_text())
+    e2_pass = bool(e2_audit.get("experiment_valid") is True and
+                   e2_audit.get("numerical_validation_pass") is True and
+                   e2_audit.get("observation_only_trajectory_pass") is True and
+                   e2_audit.get("next_authorized_path") == "LOCAL_SCHWARZ_PATH")
+    authorization_closed = bool(
+        decision.get("automatic_solver_change_authorized") is False and
+        decision.get("production_schwarz_modification_authorized") is False and
+        decision.get("next_authorized_task") in
+            ("F1B_LOCAL_CANDIDATE", "MORE_F1A_DIAGNOSTICS"))
+    valid = bool(decision.get("experiment_valid") and evidence_pass and
+                 analysis_inputs_pass and source_pass and snapshots_pass and marker_pass and
+                 logs_clean and numerical_provenance and analysis_provenance and lineage_pass and
+                 e2_pass and authorization_closed)
+    result = dict(decision)
+    result.update({"schema": "strict-ala-stage-F1a-final-audit-v1",
+                   "experiment_valid": valid,
+                   "analysis_only_replay": True,
+                   "numerical_evidence_root": str(Path(args.evidence_root)),
+                   "numerical_evidence_unchanged": evidence_pass,
+                   "analysis_inputs_unchanged": analysis_inputs_pass,
+                   "analysis_source_unchanged": source_pass,
+                   "E2_snapshots_unchanged": snapshots_pass,
+                   "valid_E2_authorization_pass": e2_pass,
+                   "case_log_clean": logs_clean,
+                   "authorization_closed": authorization_closed,
+                   "completion_marker_pass": marker_pass,
+                   "numerical_provenance_pass": numerical_provenance,
+                   "analysis_provenance_pass": analysis_provenance,
+                   "analysis_only_lineage_pass": lineage_pass})
+    write_json(args.output, result)
+    return 0 if valid else 1
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     freeze = sub.add_parser("freeze-contract"); freeze.add_argument("--output-dir", required=True)
     run = sub.add_parser("analyze"); run.add_argument("--input-dir", required=True); run.add_argument("--output-dir", required=True)
     run.add_argument("--e2-true-mode", required=True); run.add_argument("--e2-reanalysis", required=True)
+    run.add_argument("--model-log")
     cfg = sub.add_parser("check-cfg"); cfg.add_argument("--c0", required=True)
     cfg.add_argument("--c1", required=True); cfg.add_argument("--diff", required=True)
     check = sub.add_parser("audit")
@@ -571,12 +711,26 @@ def main():
     check.add_argument("--snapshot-pre", required=True); check.add_argument("--snapshot-post", required=True)
     check.add_argument("--e2-audit", required=True)
     check.add_argument("--model-log", required=True); check.add_argument("--output", required=True)
+    post = sub.add_parser("postprocess-audit")
+    post.add_argument("--decision", required=True)
+    post.add_argument("--numerical-manifest", required=True)
+    post.add_argument("--analysis-manifest", required=True)
+    post.add_argument("--evidence-pre", required=True); post.add_argument("--evidence-post", required=True)
+    post.add_argument("--analysis-pre", required=True); post.add_argument("--analysis-post", required=True)
+    post.add_argument("--source-pre", required=True); post.add_argument("--source-post", required=True)
+    post.add_argument("--snapshot-pre", required=True); post.add_argument("--snapshot-post", required=True)
+    post.add_argument("--lineage", required=True); post.add_argument("--e2-audit", required=True)
+    post.add_argument("--model-log", required=True); post.add_argument("--evidence-root", required=True)
+    post.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.command == "freeze-contract": freeze_contract(args.output_dir)
     elif args.command == "analyze":
-        analyze(args.input_dir, args.output_dir, args.e2_true_mode, args.e2_reanalysis)
+        analyze(args.input_dir, args.output_dir, args.e2_true_mode, args.e2_reanalysis,
+                args.model_log)
     elif args.command == "check-cfg":
         check_cfg_contract(args.c0, args.c1, args.diff)
+    elif args.command == "postprocess-audit":
+        raise SystemExit(postprocess_audit(args))
     else:
         raise SystemExit(audit(args))
 
