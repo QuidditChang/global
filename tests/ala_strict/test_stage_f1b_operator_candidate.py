@@ -2,6 +2,8 @@
 import csv
 import importlib.util
 import json
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,11 +95,30 @@ class F1bContractTests(unittest.TestCase):
         self.assertNotIn('/usr/bin/time -v -o "${B}/case_time.txt" launch_case', lsf)
         self.assertIn('/usr/bin/time -v -o "${time_file}"', lsf)
         self.assertIn('/python/pythia-0.8.1.15-py2.6.egg:', lsf)
+        self.assertIn('require_path "${CODE_DIR}/python/pythia-0.8.1.15-py2.6.egg"', lsf)
+        self.assertNotIn('test -f "${CODE_DIR}/python/pythia-0.8.1.15-py2.6.egg"', lsf)
+        self.assertIn('STRICT_ALA_STAGE_F1B_MISSING_PATH', lsf)
         self.assertIn('if [ "${rc}" -ne 0 ]; then return "${rc}"; fi', lsf)
         self.assertIn('stage_inputs "${O}" "${OFFLINE_CFG}"', lsf)
         self.assertNotIn('stage_inputs "${O}" "${CAND_CFG}"', lsf)
         self.assertIn('completion_valid "${B}/phase3_base_completion.json"', lsf)
         self.assertIn('--binary-pre "${M}/binary.pre.sha256"', lsf)
+
+    def test_lsf_accepts_unpacked_pythia_egg_directory(self):
+        lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
+        function = re.search(r"(require_path\(\) \{.*?\n\})", lsf,
+                             flags=re.DOTALL).group(1)
+        with tempfile.TemporaryDirectory() as td:
+            egg = Path(td)/"pythia-0.8.1.15-py2.6.egg"; egg.mkdir()
+            accepted = subprocess.run(
+                ["bash", "-c", function + '\nrequire_path "$1"', "bash", str(egg)],
+                text=True, capture_output=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            missing = subprocess.run(
+                ["bash", "-c", function + '\nrequire_path "$1"', "bash",
+                 str(egg/"missing")], text=True, capture_output=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("STRICT_ALA_STAGE_F1B_MISSING_PATH", missing.stderr)
 
     def test_hpc_evidence_root_is_valid_lineage(self):
         with tempfile.TemporaryDirectory() as td:
