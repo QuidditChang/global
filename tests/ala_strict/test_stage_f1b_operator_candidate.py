@@ -78,11 +78,21 @@ class F1bContractTests(unittest.TestCase):
 
     def test_source_keeps_legacy_default_and_outer_projection(self):
         instructions = (ROOT / "lib/Instructions.c").read_text()
+        bridge = (ROOT / "module/setProperties.c").read_text()
         source = (ROOT / "lib/Stokes_flow_Incomp.c").read_text()
         candidate = (ROOT / "lib/Strict_ala_stage_f1b.inc").read_text()
         self.assertIn('ala_shallow_patch_local_operator,"legacy"', instructions)
         self.assertIn('"operator_consistent"', instructions)
+        self.assertIn(
+            'getStringProperty(properties, "ala_shallow_patch_local_operator"',
+            bridge)
+        self.assertIn(
+            'strcmp(E->control.ala_shallow_patch_local_operator,', bridge)
         self.assertIn("ala_f1b_build_operator_consistent_patch", source)
+        self.assertIn("STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR", source)
+        self.assertIn("STRICT_ALA_STAGE_F1B_CONFIG_ACTIVE", source)
+        self.assertIn("STRICT_ALA_STAGE_F1B_CONFIG_MISMATCH", source)
+        self.assertIn("operator_consistent(GKgamma^-1G^T)", source)
         self.assertIn("direct-face plus two-hop corner element records", candidate)
         self.assertIn("Kgamma_replay_relative_defect", candidate)
         # Existing pre/post Q_i and multiplicity path remains in the common
@@ -128,6 +138,10 @@ class F1bContractTests(unittest.TestCase):
         self.assertNotIn('stage_inputs "${O}" "${CAND_CFG}"', lsf)
         self.assertIn('completion_valid "${B}/phase3_base_completion.json"', lsf)
         self.assertIn('--binary-pre "${M}/binary.pre.sha256"', lsf)
+        self.assertIn("require_operator_handshake", lsf)
+        self.assertIn(
+            "STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=operator_consistent", lsf)
+        self.assertIn("STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=legacy", lsf)
 
     def test_lsf_accepts_unpacked_pythia_egg_directory(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()

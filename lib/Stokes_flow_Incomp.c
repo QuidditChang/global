@@ -4976,6 +4976,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     double local_min_pivot_ratio,global_min_pivot_ratio;
     double *L;
     int f1b_candidate;
+    const char *f1b_expected_operator;
+    const char *f1b_operator_description;
     const double *f1b_pressure_records[ALA_PATCH_MAX_ELEMENTS];
     struct ala_f1b_element_pool f1b_pool;
     struct ala_f1b_patch_stats f1b_local_stats,f1b_interface_stats;
@@ -4997,6 +4999,37 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     overlap=E->control.ala_shallow_patch_mpi_overlap;
     f1b_candidate=strcmp(E->control.ala_shallow_patch_local_operator,
                          "operator_consistent")==0;
+    f1b_operator_description=f1b_candidate
+        ? "operator=operator_consistent(GKgamma^-1G^T)"
+        : "operator=principal((D+C)Mv^-1(D+C)^T)";
+    f1b_expected_operator=getenv(
+        "STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR");
+    if(f1b_expected_operator!=NULL &&
+       strcmp(f1b_expected_operator,"legacy")!=0 &&
+       strcmp(f1b_expected_operator,"operator_consistent")!=0)
+        myerror(E,"STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR must be legacy "
+                "or operator_consistent");
+    if(f1b_expected_operator!=NULL &&
+       strcmp(f1b_expected_operator,
+              E->control.ala_shallow_patch_local_operator)!=0) {
+        if(E->parallel.me==0) {
+            fprintf(stderr,"STRICT_ALA_STAGE_F1B_CONFIG_MISMATCH "
+                    "expected=%s effective=%s\n",f1b_expected_operator,
+                    E->control.ala_shallow_patch_local_operator);
+            fflush(stderr);
+        }
+        myerror(E,"Strict-ALA F1b local-operator configuration mismatch");
+    }
+    if(E->parallel.me==0 && f1b_expected_operator!=NULL) {
+        fprintf(E->fp,"STRICT_ALA_STAGE_F1B_CONFIG_ACTIVE expected=%s "
+                "effective=%s candidate=%d\n",f1b_expected_operator,
+                E->control.ala_shallow_patch_local_operator,f1b_candidate);
+        fprintf(stderr,"STRICT_ALA_STAGE_F1B_CONFIG_ACTIVE expected=%s "
+                "effective=%s candidate=%d\n",f1b_expected_operator,
+                E->control.ala_shallow_patch_local_operator,f1b_candidate);
+        fflush(E->fp);
+        fflush(stderr);
+    }
     memset(&f1b_pool,0,sizeof(f1b_pool));
     memset(&f1b_local_stats,0,sizeof(f1b_local_stats));
     memset(&f1b_interface_stats,0,sizeof(f1b_interface_stats));
@@ -5572,7 +5605,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
                 "interface_velocity_metric=%s "
-                "operator=principal((D+C)Mv^-1(D+C)^T) "
+                "%s "
                 "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
@@ -5592,6 +5625,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 strcmp(E->control.ala_shallow_patch_velocity_solver,
                        "element_vanka")==0
                     ? "halo_element_vanka" : "halo_nodal",
+                f1b_operator_description,
                 global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,
@@ -5604,7 +5638,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 "weight=%e regularization=%e "
                 "velocity_solver=%s "
                 "interface_velocity_metric=%s "
-                "operator=principal((D+C)Mv^-1(D+C)^T) "
+                "%s "
                 "velocity_block_fallbacks=%d "
                 "patch_entries=%d "
                 "unique_elements=%d overlap_range=(%d,%d) "
@@ -5624,6 +5658,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 strcmp(E->control.ala_shallow_patch_velocity_solver,
                        "element_vanka")==0
                     ? "halo_element_vanka" : "halo_nodal",
+                f1b_operator_description,
                 global_velocity_fallbacks,
                 global_elements,global_unique,global_overlap_min,
                 global_overlap_max,global_blocks,global_interface_blocks,

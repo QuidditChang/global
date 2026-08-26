@@ -1240,6 +1240,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_shallow_patch_mpi_overlap, fp);
     getStringProperty(properties, "ala_shallow_patch_velocity_solver",
                       E->control.ala_shallow_patch_velocity_solver, fp);
+    getStringProperty(properties, "ala_shallow_patch_local_operator",
+                      E->control.ala_shallow_patch_local_operator, fp);
     getIntProperty(properties, "ala_geneo_preconditioner",
                    E->control.ala_geneo_preconditioner, fp);
     getStringProperty(properties, "ala_geneo_basis_type",
@@ -1573,6 +1575,11 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
        strcmp(E->control.ala_shallow_patch_velocity_solver,"element_vanka") != 0)
         myerror(E, "ala_shallow_patch_velocity_solver must be diagonal, "
                 "node_block, or element_vanka");
+    if(strcmp(E->control.ala_shallow_patch_local_operator,"legacy") != 0 &&
+       strcmp(E->control.ala_shallow_patch_local_operator,
+              "operator_consistent") != 0)
+        myerror(E, "ala_shallow_patch_local_operator must be legacy or "
+                "operator_consistent");
     if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
         myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
     if(strcmp(E->control.ala_geneo_basis_type,"spectral") != 0 &&
