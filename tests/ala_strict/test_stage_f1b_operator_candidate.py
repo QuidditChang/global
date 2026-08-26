@@ -92,6 +92,8 @@ class F1bContractTests(unittest.TestCase):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
         self.assertNotIn('/usr/bin/time -v -o "${B}/case_time.txt" launch_case', lsf)
         self.assertIn('/usr/bin/time -v -o "${time_file}"', lsf)
+        self.assertIn('/python/pythia-0.8.1.15-py2.6.egg:', lsf)
+        self.assertIn('if [ "${rc}" -ne 0 ]; then return "${rc}"; fi', lsf)
         self.assertIn('stage_inputs "${O}" "${OFFLINE_CFG}"', lsf)
         self.assertNotIn('stage_inputs "${O}" "${CAND_CFG}"', lsf)
         self.assertIn('completion_valid "${B}/phase3_base_completion.json"', lsf)
