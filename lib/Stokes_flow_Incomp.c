@@ -39,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
 
 void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
 void assemble_grad_c_p(struct All_variables *,double **,double **,int);
@@ -115,6 +116,22 @@ struct ala_pressure_preconditioner_cache {
     int pressure_mg_min_level;
     int pressure_mg_max_level;
     int pressure_mg_operator_applications;
+    int f1b_candidate_active;
+    int f1b_local_patch_count;
+    int f1b_interface_patch_count;
+    int f1b_local_max_pdim;
+    int f1b_local_max_vdim;
+    int f1b_interface_max_pdim;
+    int f1b_interface_max_vdim;
+    int f1b_local_rhs_solve_count;
+    int f1b_interface_rhs_solve_count;
+    double f1b_max_symmetry_defect;
+    double f1b_min_k_pivot_ratio;
+    double f1b_max_k_solve_residual;
+    double f1b_k_replay_relative_defect;
+    double f1b_peak_temporary_bytes;
+    double f1b_mpi_payload_bytes;
+    double f1b_estimated_dense_work;
 };
 /* -1 is the immutable production path.  Nonnegative values are used only by
  * the opt-in F1a observer to expose one exact Schwarz transformation at a
@@ -127,6 +144,7 @@ static void strict_ala_stage_e2_finalize(
     struct All_variables *,void *,struct ala_pressure_preconditioner_cache *);
 static int strict_ala_stage_f1a_run(
     struct All_variables *,struct ala_pressure_preconditioner_cache *,int);
+static void ala_f1b_write_rank_memory(struct All_variables *);
 static int ala_geneo_jacobi_eigensolve(double *,double *,double *,int);
 static void build_ala_shallow_patch_cache(struct All_variables *,
     struct ala_pressure_preconditioner_cache *,int);
@@ -3295,6 +3313,8 @@ static float solve_ala_coupled_fgmres_core(
                 residual_est);
         fflush(E->fp);
     }
+    if(getenv("STRICT_ALA_STAGE_F1B_SHORT")!=NULL)
+        ala_f1b_write_rank_memory(E);
     if(!converged) {
         if(E->parallel.me==0) {
             fprintf(stderr,"Strict ALA coupled FGMRES failed acceptance: "
@@ -4061,6 +4081,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 E->control.ala_unaugmented_momentum_tolerance);
         fflush(E->fp);
     }
+    if(getenv("STRICT_ALA_STAGE_F1B_SHORT")!=NULL)
+        ala_f1b_write_rank_memory(E);
     if(!converged) {
         if(E->control.ala_stage_abc_production_logging) {
             if(E->parallel.me==0) {
@@ -4351,6 +4373,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
 
 #include "Strict_ala_stage_e2.inc"
 #include "Strict_ala_stage_f1a.inc"
+#include "Strict_ala_stage_f1b.inc"
 
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
@@ -4952,6 +4975,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     double target_center[3];
     double local_min_pivot_ratio,global_min_pivot_ratio;
     double *L;
+    int f1b_candidate;
+    const double *f1b_pressure_records[ALA_PATCH_MAX_ELEMENTS];
+    struct ala_f1b_element_pool f1b_pool;
+    struct ala_f1b_patch_stats f1b_local_stats,f1b_interface_stats;
     MPI_Request requests[2*ALA_PATCH_MPI_FACES];
     MPI_Status statuses[2*ALA_PATCH_MPI_FACES];
     double CPU_time0();
@@ -4968,6 +4995,13 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     horizontal_elements=E->control.ala_shallow_patch_horizontal_elements;
     horizontal_stride=E->control.ala_shallow_patch_horizontal_stride;
     overlap=E->control.ala_shallow_patch_mpi_overlap;
+    f1b_candidate=strcmp(E->control.ala_shallow_patch_local_operator,
+                         "operator_consistent")==0;
+    memset(&f1b_pool,0,sizeof(f1b_pool));
+    memset(&f1b_local_stats,0,sizeof(f1b_local_stats));
+    memset(&f1b_interface_stats,0,sizeof(f1b_interface_stats));
+    f1b_local_stats.min_k_pivot_ratio=1.0e300;
+    f1b_interface_stats.min_k_pivot_ratio=1.0e300;
     if(horizontal_elements>elx || horizontal_elements>ely)
         myerror(E,"ALA shallow-patch width exceeds the local horizontal mesh");
     if(overlap>ALA_PATCH_MAX_MPI_OVERLAP)
@@ -4993,6 +5027,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     }
     shallow_layers=(shallow_min_ez<=elz)
         ? elz-shallow_min_ez+1 : 0;
+    if(f1b_candidate)
+        ala_f1b_build_element_pool(E,lev,1,shallow_min_ez,&f1b_pool);
     block_count=((elx+horizontal_stride-1)/horizontal_stride)
         *((ely+horizontal_stride-1)/horizontal_stride)
         *((shallow_layers+ALA_PATCH_RADIAL_STRIDE-1)
@@ -5058,12 +5094,34 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     for(i=0;i<n;i++)
                         for(j=0;j<n;j++)
                             matrix[i][j]=0.0;
-                    ala_build_pressure_patch_schur(
-                        E,cache,cache->elements[m]+b*patch_capacity,
-                        n,lev,m,&matrix[0][0]);
+                    if(f1b_candidate) {
+                        for(i=0;i<n;i++) {
+                            f1b_pressure_records[i]=ala_f1b_local_record(
+                                E,lev,&f1b_pool,
+                                cache->elements[m][b*patch_capacity+i]);
+                            if(f1b_pressure_records[i]==NULL)
+                                myerror(E,"F1b local pressure record is missing");
+                        }
+                        if(!ala_f1b_build_operator_consistent_patch(
+                              E,&f1b_pool,f1b_pressure_records,n,matrix,
+                              &f1b_local_stats)) {
+                            fprintf(stderr,"STRICT_ALA_STAGE_F1B_CANDIDATE_NUMERICAL_FAILURE reason=local_Kgamma_restriction rank=%d patch=%d\n",E->parallel.me,b);
+                            fflush(stderr);
+                            myerror(E,"F1b local operator-consistent patch failed");
+                        }
+                    }
+                    else
+                        ala_build_pressure_patch_schur(
+                            E,cache,cache->elements[m]+b*patch_capacity,
+                            n,lev,m,&matrix[0][0]);
                     L=cache->chol[m]+(size_t)b*patch_capacity*patch_capacity;
                     if(!ala_factor_pressure_patch(E,matrix,n,L,patch_capacity,
                                                   &local_min_pivot_ratio)) {
+                        if(f1b_candidate) {
+                            fprintf(stderr,"STRICT_ALA_STAGE_F1B_CANDIDATE_NUMERICAL_FAILURE reason=local_pressure_factor rank=%d patch=%d\n",E->parallel.me,b);
+                            fflush(stderr);
+                            myerror(E,"F1b regularized local pressure factor failed");
+                        }
                         cache->size[m][b]=0;
                         local_fallback++;
                     }
@@ -5293,7 +5351,35 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                             }
                     cache->interface_size[m][b]=(unsigned char)n;
                     cache->interface_face[m][b]=(unsigned char)face;
-                    for(i=0;i<n;i++)
+                    if(f1b_candidate) {
+                        for(i=0;i<n;i++) {
+                            ref=cache->interface_elements[m]
+                                [b*interface_capacity+i];
+                            if(ref>0)
+                                f1b_pressure_records[i]=ala_f1b_local_record(
+                                    E,lev,&f1b_pool,ref);
+                            else {
+                                ala_halo_record_center(patch_records[i],
+                                                       target_center);
+                                f1b_pressure_records[i]=
+                                    ala_f1b_find_remote_record(&f1b_pool,
+                                                               target_center);
+                            }
+                            if(f1b_pressure_records[i]==NULL)
+                                myerror(E,"F1b interface pressure record is missing");
+                        }
+                        for(i=0;i<n;i++)
+                            for(j=0;j<n;j++)
+                                matrix[i][j]=0.0;
+                        if(!ala_f1b_build_operator_consistent_patch(
+                              E,&f1b_pool,f1b_pressure_records,n,matrix,
+                              &f1b_interface_stats)) {
+                            fprintf(stderr,"STRICT_ALA_STAGE_F1B_CANDIDATE_NUMERICAL_FAILURE reason=interface_Kgamma_restriction rank=%d patch=%d\n",E->parallel.me,b);
+                            fflush(stderr);
+                            myerror(E,"F1b interface operator-consistent patch failed");
+                        }
+                    }
+                    else for(i=0;i<n;i++)
                         for(j=0;j<=i;j++) {
                             if(strcmp(E->control
                                       .ala_shallow_patch_velocity_solver,
@@ -5317,6 +5403,11 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     if(!ala_factor_pressure_patch(E,matrix,n,L,
                                                   interface_capacity,
                                                   &local_min_pivot_ratio)) {
+                        if(f1b_candidate) {
+                            fprintf(stderr,"STRICT_ALA_STAGE_F1B_CANDIDATE_NUMERICAL_FAILURE reason=interface_pressure_factor rank=%d patch=%d\n",E->parallel.me,b);
+                            fflush(stderr);
+                            myerror(E,"F1b regularized interface pressure factor failed");
+                        }
                         cache->interface_size[m][b]=0;
                         local_fallback++;
                     }
@@ -5392,6 +5483,37 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                       (int)cache->multiplicity[m][e]);
             }
     }
+    if(f1b_candidate) {
+        cache->f1b_candidate_active=1;
+        cache->f1b_local_patch_count=f1b_local_stats.count;
+        cache->f1b_interface_patch_count=f1b_interface_stats.count;
+        cache->f1b_local_max_pdim=f1b_local_stats.max_pdim;
+        cache->f1b_local_max_vdim=f1b_local_stats.max_vdim;
+        cache->f1b_interface_max_pdim=f1b_interface_stats.max_pdim;
+        cache->f1b_interface_max_vdim=f1b_interface_stats.max_vdim;
+        cache->f1b_local_rhs_solve_count=f1b_local_stats.rhs_solve_count;
+        cache->f1b_interface_rhs_solve_count=
+            f1b_interface_stats.rhs_solve_count;
+        cache->f1b_max_symmetry_defect=max(
+            f1b_local_stats.max_symmetry_defect,
+            f1b_interface_stats.max_symmetry_defect);
+        cache->f1b_min_k_pivot_ratio=min(
+            f1b_local_stats.min_k_pivot_ratio,
+            f1b_interface_stats.min_k_pivot_ratio);
+        cache->f1b_max_k_solve_residual=max(
+            f1b_local_stats.max_k_solve_residual,
+            f1b_interface_stats.max_k_solve_residual);
+        cache->f1b_k_replay_relative_defect=
+            ala_f1b_replay_global_k(E,lev);
+        cache->f1b_peak_temporary_bytes=max(
+            f1b_local_stats.max_temporary_bytes,
+            f1b_interface_stats.max_temporary_bytes);
+        cache->f1b_mpi_payload_bytes=f1b_pool.mpi_payload_bytes;
+        cache->f1b_estimated_dense_work=
+            f1b_local_stats.estimated_dense_work+
+            f1b_interface_stats.estimated_dense_work;
+        ala_f1b_free_element_pool(&f1b_pool);
+    }
     MPI_Allreduce(&local_blocks,&global_blocks,1,MPI_INT,MPI_SUM,
                   E->parallel.world);
     MPI_Allreduce(&local_fallback,&global_fallback,1,MPI_INT,MPI_SUM,
@@ -5420,6 +5542,9 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     build_seconds=CPU_time0()-build_start;
     MPI_Allreduce(&build_seconds,&global_build_seconds,1,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
+    if(f1b_candidate)
+        ala_f1b_write_candidate_evidence(E,cache,global_cache_bytes,
+                                          global_build_seconds);
     if(E->control.ala_stage_abc_production_logging)
         E->control.ala_stage_abc_schwarz_seconds+=global_build_seconds;
     if(E->control.ala_stage_abc_production_logging &&

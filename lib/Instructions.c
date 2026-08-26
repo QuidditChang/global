@@ -762,6 +762,8 @@ void read_initial_settings(struct All_variables *E)
             &(E->control.ala_shallow_patch_mpi_overlap),"2",m);
   input_string("ala_shallow_patch_velocity_solver",
                E->control.ala_shallow_patch_velocity_solver,"diagonal",m);
+  input_string("ala_shallow_patch_local_operator",
+               E->control.ala_shallow_patch_local_operator,"legacy",m);
   input_boolean("ala_geneo_preconditioner",
                 &(E->control.ala_geneo_preconditioner),"off",m);
   input_string("ala_geneo_basis_type",
@@ -1112,6 +1114,11 @@ void read_initial_settings(struct All_variables *E)
      strcmp(E->control.ala_shallow_patch_velocity_solver,"element_vanka") != 0)
       myerror(E, "ala_shallow_patch_velocity_solver must be diagonal, "
               "node_block, or element_vanka");
+  if(strcmp(E->control.ala_shallow_patch_local_operator,"legacy") != 0 &&
+     strcmp(E->control.ala_shallow_patch_local_operator,
+            "operator_consistent") != 0)
+      myerror(E, "ala_shallow_patch_local_operator must be legacy or "
+              "operator_consistent");
   if(E->control.ala_geneo_eigenvalue_threshold <= 0.0)
       myerror(E, "ala_geneo_eigenvalue_threshold must be positive");
   if(strcmp(E->control.ala_geneo_basis_type,"spectral") != 0 &&
@@ -1259,6 +1266,15 @@ void read_initial_settings(struct All_variables *E)
      E->control.ala_radial_line_preconditioner)
       myerror(E, "ALA shallow-patch and radial-line preconditioners are "
               "mutually exclusive");
+  if(strcmp(E->control.ala_shallow_patch_local_operator,
+            "operator_consistent") == 0 &&
+     (!E->control.ala_shallow_patch_preconditioner ||
+      strcmp(E->control.ala_shallow_patch_velocity_solver,
+             "element_vanka") != 0 ||
+      E->control.ala_augmented_lagrangian_gamma <= 0.0 ||
+      !E->control.ala_pressure_buoyancy))
+      myerror(E, "operator_consistent shallow patches require strict ALA, "
+              "element_vanka, and positive K_gamma augmentation");
   if(E->control.ala_geneo_preconditioner &&
      (!E->control.precondition ||
       !E->control.ala_pressure_buoyancy ||
@@ -1869,6 +1885,7 @@ void global_default_values(E)
     E->control.ala_shallow_patch_horizontal_stride = 2;
     E->control.ala_shallow_patch_mpi_overlap = 2;
     strcpy(E->control.ala_shallow_patch_velocity_solver,"diagonal");
+    strcpy(E->control.ala_shallow_patch_local_operator,"legacy");
     E->control.ala_geneo_preconditioner = 0;
     strcpy(E->control.ala_geneo_basis_type,"spectral");
     E->control.ala_geneo_eigenvalue_threshold = 0.20;

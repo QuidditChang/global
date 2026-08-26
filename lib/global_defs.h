@@ -589,6 +589,7 @@ struct CONTROL {
     int ala_shallow_patch_horizontal_stride;
     int ala_shallow_patch_mpi_overlap;
     char ala_shallow_patch_velocity_solver[20];
+    char ala_shallow_patch_local_operator[24];
     int ala_geneo_preconditioner;
     char ala_geneo_basis_type[24];
     double ala_geneo_eigenvalue_threshold;
