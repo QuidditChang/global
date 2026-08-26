@@ -84,8 +84,64 @@ def cfg_values(path):
     return values
 
 
+def cfg_entries(path):
+    entries = {}
+    section = None
+    for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+        header = re.match(r"^\s*\[([^]]+)\]\s*$", line)
+        if header:
+            section = header.group(1)
+            continue
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*(?:=\s*|\s+)(\S.*?)\s*$", line)
+        if match and not match.group(1).startswith("#"):
+            if match.group(1) in entries:
+                raise ValueError(f"duplicate cfg key {match.group(1)}")
+            entries[match.group(1)] = (match.group(2), section, number)
+    return entries
+
+
+def set_cfg_value(args):
+    path = Path(args.cfg)
+    lines = path.read_text().splitlines(keepends=True)
+    section = None
+    section_start = section_end = None
+    matches = []
+    key_pattern = re.compile(r"^\s*" + re.escape(args.key) + r"\s*(?:=|\s)")
+    for index, line in enumerate(lines):
+        header = re.match(r"^\s*\[([^]]+)\]\s*$", line)
+        if header:
+            if section == args.section and section_end is None:
+                section_end = index
+            section = header.group(1)
+            if section == args.section:
+                if section_start is not None:
+                    raise ValueError(f"duplicate cfg section {args.section}")
+                section_start = index
+            continue
+        if key_pattern.match(line) and not line.lstrip().startswith("#"):
+            matches.append((index, section))
+    if section == args.section and section_end is None:
+        section_end = len(lines)
+    if section_start is None:
+        raise ValueError(f"missing cfg section {args.section}")
+    if len(matches) > 1:
+        raise ValueError(f"duplicate cfg key {args.key}")
+    replacement = f"{args.key} = {args.value}\n"
+    if matches:
+        index, owner = matches[0]
+        if owner != args.section:
+            raise ValueError(f"cfg key {args.key} belongs to [{owner}], not [{args.section}]")
+        lines[index] = replacement
+    else:
+        lines.insert(section_end, replacement)
+    path.write_text("".join(lines))
+    return 0
+
+
 def check_cfg(args):
-    base, cand = cfg_values(args.base), cfg_values(args.candidate)
+    base_entries, cand_entries = cfg_entries(args.base), cfg_entries(args.candidate)
+    base = {key: entry[0] for key, entry in base_entries.items()}
+    cand = {key: entry[0] for key, entry in cand_entries.items()}
     differences = [(key, base.get(key), cand.get(key))
                    for key in sorted(set(base) | set(cand))
                    if base.get(key) != cand.get(key)]
@@ -102,11 +158,30 @@ def check_cfg(args):
         "ala_outer_solver": "fgmres",
         "ala_pcg_restart_interval": "50",
         "ala_stage_abc_production_logging": "on",
+        "ala_stage_e_diagnostic": "on",
         "piterations": "30", "nprocx": "4", "nprocy": "4", "nprocz": "2",
         "nodex": "129", "nodey": "129", "nodez": "65", "steps": "1"}
+    required_sections = {
+        **{key: "CitcomS.solver.vsolver" for key in (
+            "ala_shallow_patch_preconditioner",
+            "ala_shallow_patch_velocity_solver",
+            "ala_augmented_lagrangian_gamma", "ala_outer_solver",
+            "ala_pcg_restart_interval", "ala_stage_abc_production_logging",
+            "ala_stage_e_diagnostic", "piterations")},
+        **{key: "CitcomS.solver.mesher" for key in (
+            "nprocx", "nprocy", "nprocz", "nodex", "nodey", "nodez")},
+        "steps": "CitcomS"}
     for key, value in required.items():
         if base.get(key) != value or cand.get(key) != value:
             raise ValueError(f"F1b cfg requires {key}={value}")
+        expected_section = required_sections[key]
+        if (base_entries[key][1] != expected_section or
+                cand_entries[key][1] != expected_section):
+            raise ValueError(f"F1b cfg key {key} is outside [{expected_section}]")
+    for entries in (base_entries, cand_entries):
+        if entries["ala_shallow_patch_local_operator"][1] != \
+                "CitcomS.solver.vsolver":
+            raise ValueError("F1b selector is outside [CitcomS.solver.vsolver]")
     return 0
 
 
@@ -592,6 +667,10 @@ def parser():
     p = commands.add_parser("check-cfg")
     for name in ("base", "candidate", "diff"): p.add_argument(f"--{name}", required=True)
     p.set_defaults(fn=check_cfg)
+    p = commands.add_parser("set-cfg")
+    for name in ("cfg", "section", "key", "value"):
+        p.add_argument(f"--{name}", required=True)
+    p.set_defaults(fn=set_cfg_value)
     p = commands.add_parser("verify-lineage")
     for name in ("final-audit", "evidence-root", "expected-hpc-root", "output"):
         p.add_argument(f"--{name}", required=True)

@@ -3,6 +3,7 @@ import csv
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -26,10 +27,17 @@ def write_cfg(path, selector):
         "ala_shallow_patch_velocity_solver": "element_vanka",
         "ala_augmented_lagrangian_gamma": "10.0",
         "ala_outer_solver": "fgmres", "ala_pcg_restart_interval": "50",
-        "ala_stage_abc_production_logging": "on", "piterations": "30",
+        "ala_stage_abc_production_logging": "on",
+        "ala_stage_e_diagnostic": "on", "piterations": "30",
         "nprocx": "4", "nprocy": "4", "nprocz": "2",
         "nodex": "129", "nodey": "129", "nodez": "65", "steps": "1"}
-    Path(path).write_text("".join(f"{key} = {value}\n" for key, value in values.items()))
+    mesher = {"nprocx", "nprocy", "nprocz", "nodex", "nodey", "nodez"}
+    lines = ["[CitcomS]\n", "steps = 1\n", "[CitcomS.solver.mesher]\n"]
+    lines.extend(f"{key} = {values[key]}\n" for key in sorted(mesher))
+    lines.append("[CitcomS.solver.vsolver]\n")
+    lines.extend(f"{key} = {value}\n" for key, value in values.items()
+                 if key not in mesher and key != "steps")
+    Path(path).write_text("".join(lines))
 
 
 def write_stage(path, case, terminal_cont=0.5, terminal_mom=1e-4):
@@ -89,6 +97,23 @@ class F1bContractTests(unittest.TestCase):
             self.assertEqual(F1B.check_cfg(Args(base=base, candidate=cand, diff=diff)), 0)
             self.assertEqual(diff.read_text().strip(),
                              "ala_shallow_patch_local_operator: legacy -> operator_consistent")
+
+    def test_cfg_editor_inserts_new_keys_in_vsolver_section(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td)/"case.cfg"
+            shutil.copy(RUNS/"cmbhf_ALA_strict.cfg", cfg)
+            for key, value in (("ala_stage_abc_production_logging", "on"),
+                               ("ala_stage_e_diagnostic", "on"),
+                               ("ala_shallow_patch_local_operator",
+                                "operator_consistent")):
+                F1B.set_cfg_value(Args(cfg=cfg, section="CitcomS.solver.vsolver",
+                                       key=key, value=value))
+            entries = F1B.cfg_entries(cfg)
+            for key in ("ala_stage_abc_production_logging",
+                        "ala_stage_e_diagnostic",
+                        "ala_shallow_patch_local_operator"):
+                self.assertEqual(entries[key][1], "CitcomS.solver.vsolver")
+            self.assertNotIn("full.phase.ala_", cfg.read_text())
 
     def test_lsf_times_executable_and_preserves_manifest_templates(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
