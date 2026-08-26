@@ -200,6 +200,7 @@ class StaticContractTests(unittest.TestCase):
     def test_postprocess_launcher_reuses_only_frozen_analysis_only_evidence(self):
         launcher = (ROOT.parents[1] / "runs" /
                     "cmbhf_ALA_strict_stage_F1a_postprocess.lsf").read_text()
+        self.assertIn("#BSUB -q ser", launcher)
         self.assertIn("#BSUB -n 1", launcher)
         self.assertIn("verify_evidence_root", launcher)
         self.assertIn("relation=F1a_analysis_only_replay", launcher)
