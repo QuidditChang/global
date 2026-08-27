@@ -11,9 +11,11 @@ from pathlib import Path
 
 SCALE_FLOOR = 1.0e-300
 MAX_TIGHT_SOLVES = 24
-K_REPLAY = 5.0e-6
+K_REPLAY = 1.0e-10
+K_REPLAY_REVIEW = 1.0e-8
 SYMMETRY = 1.0e-10
 LOCAL_SOLVE = 1.0e-10
+OUTPUT_REPLICA = 1.0e-10
 MOMENTUM_GATE = 1.0e-3
 MOMENTUM_PRECISION = 1.0e-12
 
@@ -22,7 +24,10 @@ ASSEMBLY_COLUMNS = (
     "velocity_dim", "symmetry_defect", "regularization",
     "factorization_status", "pivot_metric", "local_solve_residual",
     "fallback", "candidate_matrix_bytes", "candidate_factor_bytes",
-    "Kgamma_replay_relative_defect")
+    "Kgamma_replay_relative_defect",
+    "production_output_replica_relative_difference",
+    "B_restriction_relative_defect", "Bt_restriction_relative_defect",
+    "B_Bt_bilinear_relative_defect")
 SHORT_COLUMNS = (
     "case", "fgmres_candidate_iteration", "global_cancellation_L2",
     "unaugmented_momentum_relative", "recursive_krylov_residual",
@@ -32,7 +37,8 @@ SHORT_COLUMNS = (
 COST_COLUMNS = (
     "case", "terminal_iteration", "total_MG_cycles",
     "total_Kgamma_applications", "solver_wall_seconds", "case_wall_seconds",
-    "rank_rss_max_kib", "rank_rss_sum_kib", "ranks")
+    "rank_rss_max_kib", "rank_rss_sum_kib", "ranks",
+    "retained_cache_bytes_per_rank", "temporary_peak_bytes_per_rank")
 
 
 def finite(value, name):
@@ -185,14 +191,20 @@ def check_cfg(args):
     return 0
 
 
-def thresholds():
+def thresholds(layout=None):
+    layout = dict(layout or {})
+    node_memory_kib = int(layout.pop("allocated_node_memory_kib", 0))
+    wall_limit_seconds = int(layout.pop("allocated_wall_limit_seconds", 0))
+    startup_budget_seconds = int(layout.pop("startup_budget_seconds", 0))
     return {
         "schema": "strict-ala-stage-F1b-thresholds-v1",
-        "threshold_status": "PROVISIONAL_DIAGNOSTIC",
+        "threshold_status": "FROZEN_PRELAUNCH",
         "MAX_F1B_TIGHT_SGAMMA_SOLVES": MAX_TIGHT_SOLVES,
         "Kgamma_replay_relative_tolerance": K_REPLAY,
+        "Kgamma_replay_stop_review_upper_bound": K_REPLAY_REVIEW,
         "candidate_symmetry_tolerance": SYMMETRY,
         "local_solve_relative_tolerance": LOCAL_SOLVE,
+        "production_output_replica_relative_tolerance": OUTPUT_REPLICA,
         "projected_peak_memory_ratio_limit": 1.25,
         "local_action_RMS_ratio_limit": 0.70,
         "true_mode_EP_RMS_ratio_limit": 0.80,
@@ -205,11 +217,31 @@ def thresholds():
         "momentum_precision_absolute": MOMENTUM_PRECISION,
         "weighted_metric": "sqrt(sum(weight*error^2)/sum(weight))",
         "operator_action": "Q_i solve(A_raw + epsilon diag(A_raw), Q_i rhs)",
+        "mpi_layout": layout,
+        "allocated_node_memory_kib": node_memory_kib,
+        "node_peak_fraction_limit": 0.80,
+        "allocated_wall_limit_seconds": wall_limit_seconds,
+        "declared_project_startup_budget_seconds": startup_budget_seconds,
+        "startup_wall_fraction_limit": 0.25,
+        "production_freeze_contract": {
+            "F1c_is_final_production_qualification": False,
+            "production_representative_smoke_soak_required": True,
+            "minimum_scope": "one complete coupled Stokes/thermal timestep",
+            "independent_repeat_required": True,
+        },
     }
 
 
 def schema_manifest():
-    return {"schema": "strict-ala-stage-F1b-schema-v1", "files": [
+    return {"schema": "strict-ala-stage-F1b-schema-v1",
+            "collective_manifest": [
+                {"audit_sequence_id": 0, "patch_category": "LOCAL",
+                 "vector_id": "canonical_trigonometric_v1",
+                 "collective_buffer_count": 1, "collectives_per_velocity_dof": 2},
+                {"audit_sequence_id": 1, "patch_category": "INTERFACE",
+                 "vector_id": "canonical_trigonometric_v1",
+                 "collective_buffer_count": 1, "collectives_per_velocity_dof": 2}],
+            "files": [
         {"filename": "strict_ala_stage_F1b_candidate_assembly.csv",
          "columns": list(ASSEMBLY_COLUMNS),
          "unique_key": ["row_type", "patch_category", "rank", "patch_id"]},
@@ -231,8 +263,50 @@ def schema_manifest():
 
 def freeze_contract(args):
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
-    write_json(output / "strict_ala_stage_F1b_thresholds.json", thresholds())
+    layout = {
+        "allocated_tasks": int(args.allocated_tasks),
+        "solver_world_size": int(args.solver_world_size),
+        "nprocx": int(args.nprocx), "nprocy": int(args.nprocy),
+        "nprocz": int(args.nprocz), "caps": int(args.caps),
+        "ranks_per_node": int(args.ranks_per_node),
+        "allocated_node_memory_kib": int(args.node_memory_kib),
+        "allocated_wall_limit_seconds": int(args.allocated_wall_seconds),
+        "startup_budget_seconds": int(args.startup_budget_seconds),
+    }
+    if min(layout.values()) <= 0:
+        raise ValueError("F1b MPI layout values must be positive")
+    expected = layout["nprocx"] * layout["nprocy"] * layout["nprocz"] * layout["caps"]
+    if expected != layout["solver_world_size"]:
+        raise ValueError("F1b solver world does not match topology times caps")
+    if layout["allocated_tasks"] < layout["solver_world_size"]:
+        raise ValueError("F1b allocation is smaller than solver world")
+    write_json(output / "strict_ala_stage_F1b_thresholds.json", thresholds(layout))
     write_json(output / "strict_ala_stage_F1b_schema.json", schema_manifest())
+    return 0
+
+
+def verify_layout(args):
+    frozen = load_json(args.thresholds)["mpi_layout"]
+    entries = cfg_entries(args.cfg)
+    observed = {key: int(entries[key][0]) for key in ("nprocx", "nprocy", "nprocz")}
+    observed.update({
+        "caps": int(args.caps),
+        "solver_world_size": int(args.solver_world_size),
+        "allocated_tasks": int(args.allocated_tasks),
+        "ranks_per_node": int(args.ranks_per_node),
+    })
+    expected_world = observed["nprocx"] * observed["nprocy"] * observed["nprocz"] * observed["caps"]
+    checks = {
+        "frozen_layout_matches_runtime": observed == frozen,
+        "cfg_topology_matches_solver_world": expected_world == observed["solver_world_size"],
+        "allocation_covers_solver_world": observed["allocated_tasks"] >= observed["solver_world_size"],
+    }
+    result = {"schema": "strict-ala-stage-F1b-layout-v1", "valid": all(checks.values()),
+              "checks": checks, "layout": observed,
+              "unused_allocation_tasks": observed["allocated_tasks"] - observed["solver_world_size"]}
+    write_json(args.output, result)
+    if not result["valid"]:
+        raise ValueError(f"F1b MPI layout contract failed: {checks}")
     return 0
 
 
@@ -296,20 +370,119 @@ def write_tagged_csv(path, groups, tag="operator"):
                 writer.writerow(tagged)
 
 
+def identity(args):
+    """Gate distributed restriction evidence before scientific candidate use."""
+    feasibility = load_json(args.feasibility)
+    thresholds = load_json(args.thresholds)
+    if feasibility.get("collective_manifest_sha256") != sha256(args.schema):
+        raise ValueError("F1b collective manifest hash mismatch")
+    if feasibility.get("factorization_phase") != "diagnostic_factor_attempt":
+        raise ValueError("identity preflight used a non-diagnostic factor phase")
+    tolerance = finite(thresholds["Kgamma_replay_relative_tolerance"],
+                       "frozen restriction tolerance")
+    review = finite(thresholds["Kgamma_replay_stop_review_upper_bound"],
+                    "frozen restriction review bound")
+    if tolerance != K_REPLAY or review != K_REPLAY_REVIEW:
+        raise ValueError("F1b identity thresholds differ from source contract")
+    rows = read_csv(args.assembly, ASSEMBLY_COLUMNS)
+    if {row["patch_category"] for row in rows} != {"LOCAL", "INTERFACE"}:
+        raise ValueError("identity evidence lacks local/interface representatives")
+    identity_fields = ("Kgamma_replay_relative_defect",
+                       "B_restriction_relative_defect",
+                       "Bt_restriction_relative_defect",
+                       "B_Bt_bilinear_relative_defect")
+    values = [finite(row[field], field) for row in rows
+              for field in identity_fields]
+    values.extend(finite(feasibility[field], f"feasibility {field}")
+                  for field in identity_fields)
+    replicas = [finite(row["production_output_replica_relative_difference"],
+                       "output replica difference") for row in rows]
+    replicas.append(finite(
+        feasibility["production_output_replica_relative_difference"],
+        "feasibility output replica difference"))
+    maximum = max(values)
+    maximum_replica = max(replicas)
+    passed = maximum <= tolerance and maximum_replica <= OUTPUT_REPLICA
+    review_required = tolerance < maximum <= review
+    gates = {"lineage": True, "candidate_isolatable": passed,
+             "memory": True, "startup": True, "assembly": passed,
+             "tight_solves": False, "local_RMS": False,
+             "local_heavy_mode": False, "true_mode_RMS": False,
+             "true_mode_heavy": False, "dominant_mode_positivity": False,
+             "H_RAW": False}
+    result = {
+        "schema": "strict-ala-stage-F1b-identity-gate-v1",
+        "experiment_evidence_valid": True,
+        "identity_gate_pass": passed,
+        "offline_gate_pass": False,
+        "gates": gates,
+        "restriction_tolerance_review_required": review_required,
+        "maximum_restriction_identity_relative_defect": maximum,
+        "maximum_production_output_replica_relative_difference": maximum_replica,
+        "factorization_phase": "diagnostic_factor_attempt",
+        "authorized_candidate_factorization": False,
+        "thresholds_sha256": sha256(args.thresholds),
+        "schema_sha256": sha256(args.schema)}
+    write_json(args.output, result)
+    return 0
+
+
 def offline(args):
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
     lineage = load_json(args.lineage)
+    identity_result = load_json(args.identity_gate)
     feasibility = load_json(args.feasibility)
+    frozen_thresholds = load_json(args.thresholds)
+    if feasibility.get("collective_manifest_sha256") != sha256(args.schema):
+        raise ValueError("F1b collective manifest hash mismatch")
+    if feasibility.get("factorization_phase") != "authorized_candidate_factorization":
+        raise ValueError("offline candidate was not authorized after identity gate")
+    if identity_result.get("identity_gate_pass") is not True:
+        raise ValueError("authorized candidate lacks a passing identity gate")
+    replay_tolerance = finite(
+        frozen_thresholds["Kgamma_replay_relative_tolerance"],
+        "frozen Kgamma replay tolerance")
+    replay_review = finite(
+        frozen_thresholds["Kgamma_replay_stop_review_upper_bound"],
+        "frozen Kgamma replay review bound")
+    if replay_tolerance != K_REPLAY or replay_review != K_REPLAY_REVIEW:
+        raise ValueError("F1b runtime replay thresholds differ from source contract")
+    base_memory = memory_row(args.base_memory, "BASE_MEMORY_PREFLIGHT")
+    cand_memory = memory_row(args.cand_memory, "CAND_MEMORY_PREFLIGHT")
+    if (int(base_memory["ranks"]) != frozen_thresholds["mpi_layout"]["solver_world_size"] or
+            int(cand_memory["ranks"]) != frozen_thresholds["mpi_layout"]["solver_world_size"]):
+        raise ValueError("F1b memory preflight MPI world mismatch")
     for field in ("factorization_count", "RHS_solve_count",
                   "estimated_dense_factor_and_solve_work",
                   "temporary_peak_bytes_per_rank",
                   "retained_cache_bytes_per_rank",
+                  "legacy_retained_cache_bytes_per_rank",
+                  "retained_cache_ratio_vs_legacy",
                   "projected_peak_ratio_vs_legacy_cache",
                   "new_mpi_payload_bytes_max_per_rank",
                   "diagonal_completion_relative_max",
-                  "Kgamma_replay_relative_defect", "startup_seconds_max"):
+                  "Kgamma_replay_relative_defect",
+                  "production_output_replica_relative_difference",
+                  "B_restriction_relative_defect",
+                  "Bt_restriction_relative_defect",
+                  "B_Bt_bilinear_relative_defect",
+                  "startup_seconds_max"):
         if finite(feasibility[field], field) < 0:
             raise ValueError(f"negative feasibility field {field}")
+    m1 = (cand_memory["retained_cache_bytes_per_rank"] <=
+          1.25 * base_memory["retained_cache_bytes_per_rank"])
+    m2 = (cand_memory["rank_rss_max_kib"] <=
+          1.25 * base_memory["rank_rss_max_kib"])
+    projected_node_peak = (cand_memory["rank_rss_max_kib"] *
+                           frozen_thresholds["mpi_layout"]["ranks_per_node"])
+    m3 = projected_node_peak <= (frozen_thresholds["node_peak_fraction_limit"] *
+                                 frozen_thresholds["allocated_node_memory_kib"])
+    startup_limit = min(
+        frozen_thresholds["startup_wall_fraction_limit"] *
+        frozen_thresholds["allocated_wall_limit_seconds"],
+        frozen_thresholds["declared_project_startup_budget_seconds"])
+    startup_pass = finite(feasibility["startup_seconds_max"],
+                          "startup seconds") <= startup_limit
     if (int(feasibility["factorization_count"]) <= 0 or
             int(feasibility["RHS_solve_count"]) <= 0):
         raise ValueError("candidate did not factor or solve any real patch")
@@ -320,22 +493,43 @@ def offline(args):
         for field in ("pressure_dim", "velocity_dim", "symmetry_defect",
                       "regularization", "pivot_metric", "local_solve_residual",
                       "candidate_matrix_bytes", "candidate_factor_bytes",
-                      "Kgamma_replay_relative_defect"):
+                      "Kgamma_replay_relative_defect",
+                      "production_output_replica_relative_difference",
+                      "B_restriction_relative_defect",
+                      "Bt_restriction_relative_defect",
+                      "B_Bt_bilinear_relative_defect"):
             finite(row[field], field)
         if int(row["pressure_dim"]) <= 0 or int(row["velocity_dim"]) <= 0:
             raise ValueError("candidate assembly has an empty aggregate")
         if (row["row_type"] != "AGGREGATE" or
                 row["factorization_status"] != "PASS" or row["fallback"] != "0"):
             raise ValueError("candidate assembly status failed")
+    identity_fields = ("Kgamma_replay_relative_defect",
+                       "B_restriction_relative_defect",
+                       "Bt_restriction_relative_defect",
+                       "B_Bt_bilinear_relative_defect")
+    maximum_replay = max(
+        *(finite(r[field], field) for r in assembly for field in identity_fields),
+        *(finite(feasibility[field], f"feasibility {field}")
+          for field in identity_fields))
+    replay_review_required = replay_tolerance < maximum_replay <= replay_review
     assembly_pass = (max(finite(r["symmetry_defect"], "symmetry") for r in assembly)
                      <= SYMMETRY and
                      max(finite(r["local_solve_residual"], "solve") for r in assembly)
                      <= LOCAL_SOLVE and
                      max(finite(r["Kgamma_replay_relative_defect"], "replay")
-                         for r in assembly) <= K_REPLAY)
+                         for r in assembly) <= replay_tolerance)
     assembly_pass = (assembly_pass and
-                     finite(feasibility["Kgamma_replay_relative_defect"],
-                            "feasibility replay") <= K_REPLAY)
+                     all(finite(r[field], field) <= replay_tolerance
+                         for r in assembly for field in identity_fields) and
+                     all(finite(feasibility[field], f"feasibility {field}")
+                         <= replay_tolerance for field in identity_fields) and
+                     max(finite(r["production_output_replica_relative_difference"],
+                                "output replica difference") for r in assembly)
+                     <= OUTPUT_REPLICA and
+                     finite(feasibility["production_output_replica_relative_difference"],
+                            "feasibility output replica difference")
+                     <= OUTPUT_REPLICA)
 
     legacy_local = read_csv(args.legacy_local)
     cand_local = read_csv(args.candidate_local)
@@ -426,7 +620,7 @@ def offline(args):
     gates = {
         "lineage": lineage.get("valid") is True,
         "candidate_isolatable": feasibility.get("candidate_isolatable") is True,
-        "memory": feasibility.get("memory_gate_pass") is True,
+        "memory": m1 and m2 and m3, "startup": startup_pass,
         "assembly": assembly_pass, "tight_solves": tight_pass,
         "local_RMS": metrics["E_local_RMS_ratio"] <= 0.70,
         "local_heavy_mode": local_heavy_guard,
@@ -437,6 +631,25 @@ def offline(args):
     result = {"schema": "strict-ala-stage-F1b-offline-gate-v1",
               "experiment_evidence_valid": True, "metrics": metrics,
               "gates": gates, "offline_gate_pass": all(gates.values()),
+              "restriction_tolerance_review_required": replay_review_required,
+              "maximum_restriction_identity_relative_defect": maximum_replay,
+              "thresholds_sha256": sha256(args.thresholds),
+              "memory_gates": {
+                  "M1_retained_cache": m1,
+                  "M2_total_process_peak": m2,
+                  "M3_node_safety": m3,
+                  "BASE_rank_rss_max_kib": base_memory["rank_rss_max_kib"],
+                  "CAND_rank_rss_max_kib": cand_memory["rank_rss_max_kib"],
+                  "BASE_retained_cache_bytes_per_rank":
+                      base_memory["retained_cache_bytes_per_rank"],
+                  "CAND_retained_cache_bytes_per_rank":
+                      cand_memory["retained_cache_bytes_per_rank"],
+                  "projected_candidate_node_peak_kib": projected_node_peak,
+                  "allocated_node_memory_kib": frozen_thresholds["allocated_node_memory_kib"],
+              },
+              "startup_gate": {"pass": startup_pass,
+                  "startup_seconds_max": feasibility["startup_seconds_max"],
+                  "frozen_limit_seconds": startup_limit},
               "tight_solve_count": len(tight),
               "mode_manifest_sha256": sha256(mode_manifest)}
     write_json(output / "strict_ala_stage_F1b_offline_gate.json", result)
@@ -512,7 +725,8 @@ def memory_row(path, expected_case):
     if len(rows) != 1 or rows[0]["case"] != expected_case:
         raise ValueError("rank memory evidence mismatch")
     return {key: finite(rows[0][key], key) for key in
-            ("rank_rss_max_kib", "rank_rss_sum_kib", "ranks")}
+            ("rank_rss_max_kib", "rank_rss_sum_kib", "ranks",
+             "retained_cache_bytes_per_rank", "temporary_peak_bytes_per_rank")}
 
 
 def short(args):
@@ -628,8 +842,11 @@ def final_audit(args):
         decision = "INVALID_EXPERIMENT"
     elif not offline_result.get("offline_gate_pass"):
         gates = offline_result["gates"]
-        if not gates.get("candidate_isolatable"): decision = "CANDIDATE_NOT_ISOLATABLE"
+        if offline_result.get("restriction_tolerance_review_required"):
+            decision = "F1B_RESTRICTION_TOLERANCE_REVIEW"
+        elif not gates.get("candidate_isolatable"): decision = "CANDIDATE_NOT_ISOLATABLE"
         elif not gates.get("memory"): decision = "CANDIDATE_REJECTED_MEMORY"
+        elif not gates.get("startup", True): decision = "F1B_STARTUP_COST_REVIEW"
         elif not gates.get("assembly"): decision = "CANDIDATE_REJECTED_ASSEMBLY"
         elif not gates.get("local_RMS") or not gates.get("local_heavy_mode"):
             decision = "CANDIDATE_REJECTED_LOCAL_OPERATOR"
@@ -647,6 +864,10 @@ def final_audit(args):
         next_task = "F1C_FULL_PRODUCTION_QUALIFICATION"
     elif decision == "INVALID_EXPERIMENT":
         next_task = "REPEAT_F1B_VALID_EXPERIMENT"
+    elif decision == "F1B_RESTRICTION_TOLERANCE_REVIEW":
+        next_task = "REVIEW_RESTRICTION_IMPLEMENTATION_NOT_THRESHOLD"
+    elif decision == "F1B_STARTUP_COST_REVIEW":
+        next_task = "REVIEW_F1B_STARTUP_COST"
     else:
         next_task = "F1B_LOCAL_OPERATOR_REDESIGN"
     result = {"schema": "strict-ala-stage-F1b-final-audit-v1",
@@ -657,6 +878,12 @@ def final_audit(args):
               "offline": offline_result, "short_AB": short_result,
               "decision": decision,
               "production_default_change_authorized": False,
+              "production_freeze_authorized": False,
+              "production_freeze_requires": [
+                  "F1c pressure physics qualification",
+                  "G0 qualified-solver profile",
+                  "production-representative coupled smoke/soak",
+                  "independent repeat"],
               "next_authorized_task": next_task}
     write_json(args.output, result)
     return 0
@@ -664,7 +891,18 @@ def final_audit(args):
 
 def parser():
     root = argparse.ArgumentParser(); commands = root.add_subparsers(required=True)
-    p = commands.add_parser("freeze-contract"); p.add_argument("--output-dir", required=True); p.set_defaults(fn=freeze_contract)
+    p = commands.add_parser("freeze-contract")
+    p.add_argument("--output-dir", required=True)
+    for name in ("allocated-tasks", "solver-world-size", "nprocx", "nprocy",
+                 "nprocz", "caps", "ranks-per-node", "node-memory-kib",
+                 "allocated-wall-seconds", "startup-budget-seconds"):
+        p.add_argument(f"--{name}", required=True)
+    p.set_defaults(fn=freeze_contract)
+    p = commands.add_parser("verify-layout")
+    for name in ("cfg", "thresholds", "allocated-tasks", "solver-world-size",
+                 "caps", "ranks-per-node", "output"):
+        p.add_argument(f"--{name}", required=True)
+    p.set_defaults(fn=verify_layout)
     p = commands.add_parser("check-cfg")
     for name in ("base", "candidate", "diff"): p.add_argument(f"--{name}", required=True)
     p.set_defaults(fn=check_cfg)
@@ -676,11 +914,16 @@ def parser():
     for name in ("final-audit", "evidence-root", "expected-hpc-root", "output"):
         p.add_argument(f"--{name}", required=True)
     p.set_defaults(fn=verify_lineage)
+    p = commands.add_parser("identity")
+    for name in ("feasibility", "assembly", "thresholds", "schema", "output"):
+        p.add_argument(f"--{name}", required=True)
+    p.set_defaults(fn=identity)
     p = commands.add_parser("offline")
-    for name in ("lineage", "feasibility", "assembly", "legacy-local",
+    for name in ("lineage", "identity-gate", "feasibility", "assembly", "legacy-local",
                  "candidate-local", "legacy-telescoping", "candidate-telescoping",
                  "legacy-decision", "candidate-decision", "candidate-tight",
-                 "snapshot-manifest", "output-dir"):
+                 "snapshot-manifest", "thresholds", "schema", "base-memory",
+                 "cand-memory", "output-dir"):
         p.add_argument(f"--{name}", required=True)
     p.set_defaults(fn=offline)
     p = commands.add_parser("short")

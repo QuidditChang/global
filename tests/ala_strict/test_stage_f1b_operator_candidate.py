@@ -59,10 +59,19 @@ def write_stage(path, case, terminal_cont=0.5, terminal_mom=1e-4):
                 "elapsed_seconds": 1 + iteration})
 
 
-def write_memory(path, case, rss):
+def write_memory(path, case, rss, retained=None):
+    retained = rss * 1024 if retained is None else retained
     Path(path).write_text(
-        "case,rank_rss_max_kib,rank_rss_sum_kib,ranks,source\n"
-        f"{case},{rss},{rss*384},384,getrusage_RUSAGE_SELF_MPI_reduce\n")
+        "case,rank_rss_max_kib,rank_rss_sum_kib,ranks,"
+        "retained_cache_bytes_per_rank,temporary_peak_bytes_per_rank,source\n"
+        f"{case},{rss},{rss*384},384,{retained},0,"
+        "getrusage_RUSAGE_SELF_MPI_reduce\n")
+
+
+def write_dict_csv(path, rows):
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=tuple(rows[0]))
+        writer.writeheader(); writer.writerows(rows)
 
 
 class F1bContractTests(unittest.TestCase):
@@ -101,6 +110,15 @@ class F1bContractTests(unittest.TestCase):
         self.assertIn("diagonal_completion_relative_max", candidate)
         self.assertIn("MPI_Abort(E->parallel.world,8)", candidate)
         self.assertIn("pivot_index=%d", candidate)
+        self.assertIn("production_output_replica_relative_difference", candidate)
+        self.assertIn("B_restriction_relative_defect", candidate)
+        self.assertIn("Bt_restriction_relative_defect", candidate)
+        self.assertIn("B_Bt_bilinear_relative_defect", candidate)
+        self.assertIn("assemble_div_rho_u", candidate)
+        self.assertIn("assemble_grad_rho_p", candidate)
+        self.assertIn("STRICT_ALA_STAGE_F1B_MEMORY_PREFLIGHT", source)
+        self.assertIn("ala_f1b_replay_global_k(E,lev,0", source)
+        self.assertIn("ala_f1b_replay_global_k(E,lev,1", source)
         # Existing pre/post Q_i and multiplicity path remains in the common
         # apply routine; the candidate changes only cached A_i factors.
         self.assertGreaterEqual(source.count("rhs[i] -= sum*constant_mode[i]"), 2)
@@ -149,6 +167,201 @@ class F1bContractTests(unittest.TestCase):
             "STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=operator_consistent", lsf)
         self.assertIn("STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=legacy", lsf)
         self.assertIn("binary_F1b_diagonal_completion_marker.txt", lsf)
+        self.assertIn("binary_F1b_replica_conformity_marker.txt", lsf)
+        self.assertIn("binary_F1b_B_restriction_marker.txt", lsf)
+        self.assertIn("binary_F1b_Bt_restriction_marker.txt", lsf)
+        self.assertIn("binary_F1b_bilinear_marker.txt", lsf)
+        self.assertIn("strict_ala_stage_F1b_factor_forensic.json", lsf)
+        self.assertIn("STRICT_ALA_STAGE_F1B_IDENTITY_PREFLIGHT=1", lsf)
+        self.assertIn("run_f1b identity", lsf)
+        self.assertIn("reason=identity", lsf)
+        self.assertIn("BASE_MEMORY_PREFLIGHT", lsf)
+        self.assertIn("CAND_MEMORY_PREFLIGHT", lsf)
+        self.assertIn('F1B_ALLOCATED_TASKS=400', lsf)
+        self.assertIn('F1B_SOLVER_WORLD_SIZE=384', lsf)
+        self.assertIn('--thresholds "${M}/strict_ala_stage_F1b_thresholds.json"', lsf)
+        self.assertIn('"${M}/strict_ala_stage_F1b_layout.json"', lsf)
+
+    def test_threshold_and_mpi_layout_are_frozen_before_launch(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td); cfg = td/"case.cfg"; write_cfg(cfg, "legacy")
+            args = Args(output_dir=td, allocated_tasks="400",
+                        solver_world_size="384", nprocx="4", nprocy="4",
+                        nprocz="2", caps="12", ranks_per_node="40",
+                        node_memory_kib=str(256 * 1024 * 1024),
+                        allocated_wall_seconds="604800",
+                        startup_budget_seconds="7200")
+            F1B.freeze_contract(args)
+            threshold_path = td/"strict_ala_stage_F1b_thresholds.json"
+            frozen = json.loads(threshold_path.read_text())
+            self.assertEqual(frozen["threshold_status"], "FROZEN_PRELAUNCH")
+            self.assertEqual(frozen["Kgamma_replay_relative_tolerance"], 1e-10)
+            self.assertEqual(
+                frozen["Kgamma_replay_stop_review_upper_bound"], 1e-8)
+            self.assertTrue(frozen["production_freeze_contract"]
+                            ["production_representative_smoke_soak_required"])
+            self.assertEqual(
+                frozen["declared_project_startup_budget_seconds"], 7200)
+            schema = json.loads(
+                (td/"strict_ala_stage_F1b_schema.json").read_text())
+            self.assertEqual(
+                [entry["patch_category"] for entry in schema["collective_manifest"]],
+                ["LOCAL", "INTERFACE"])
+            F1B.verify_layout(Args(cfg=cfg, thresholds=threshold_path,
+                allocated_tasks="400", solver_world_size="384", caps="12",
+                ranks_per_node="40", output=td/"layout.json"))
+            layout = json.loads((td/"layout.json").read_text())
+            self.assertTrue(layout["valid"])
+            self.assertEqual(layout["unused_allocation_tasks"], 16)
+
+    def test_identity_gate_precedes_authorized_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            freeze = Args(output_dir=td, allocated_tasks="400",
+                solver_world_size="384", nprocx="4", nprocy="4",
+                nprocz="2", caps="12", ranks_per_node="40",
+                node_memory_kib=str(256*1024*1024),
+                allocated_wall_seconds="604800", startup_budget_seconds="7200")
+            F1B.freeze_contract(freeze)
+            schema = td/"strict_ala_stage_F1b_schema.json"
+            feasibility = {
+                "collective_manifest_sha256": F1B.sha256(schema),
+                "factorization_phase": "diagnostic_factor_attempt",
+                "Kgamma_replay_relative_defect": 1e-12,
+                "B_restriction_relative_defect": 1e-12,
+                "Bt_restriction_relative_defect": 1e-12,
+                "B_Bt_bilinear_relative_defect": 1e-12,
+                "production_output_replica_relative_difference": 1e-12}
+            (td/"feasibility.json").write_text(json.dumps(feasibility))
+            rows = []
+            for category in ("LOCAL", "INTERFACE"):
+                rows.append(dict(zip(F1B.ASSEMBLY_COLUMNS,
+                    ("AGGREGATE", category, "-1", "-1", "0", "0", "0", "0",
+                     "PASS", "1", "0", "0", "0", "0", "1e-12", "1e-12",
+                     "1e-12", "1e-12", "1e-12"))))
+            write_dict_csv(td/"assembly.csv", rows)
+            F1B.identity(Args(feasibility=td/"feasibility.json",
+                assembly=td/"assembly.csv",
+                thresholds=td/"strict_ala_stage_F1b_thresholds.json",
+                schema=schema, output=td/"identity.json"))
+            result = json.loads((td/"identity.json").read_text())
+            self.assertTrue(result["identity_gate_pass"])
+            self.assertEqual(result["factorization_phase"],
+                             "diagnostic_factor_attempt")
+            self.assertFalse(result["authorized_candidate_factorization"])
+
+    def test_restriction_review_never_accepts_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            offline = {"experiment_evidence_valid": True,
+                       "offline_gate_pass": False,
+                       "restriction_tolerance_review_required": True,
+                       "gates": {"candidate_isolatable": False,
+                                 "memory": True, "assembly": False}}
+            (td/"offline.json").write_text(json.dumps(offline))
+            F1B.final_audit(self.audit_args(td, td/"offline.json",
+                                            td/"audit.json"))
+            result = json.loads((td/"audit.json").read_text())
+            self.assertEqual(result["decision"],
+                             "F1B_RESTRICTION_TOLERANCE_REVIEW")
+            self.assertFalse(result["production_freeze_authorized"])
+
+    def test_offline_gate_consumes_frozen_layout_memory_and_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td); out = td/"out"
+            freeze = Args(output_dir=td, allocated_tasks="400",
+                solver_world_size="384", nprocx="4", nprocy="4",
+                nprocz="2", caps="12", ranks_per_node="40",
+                node_memory_kib=str(256*1024*1024),
+                allocated_wall_seconds="604800", startup_budget_seconds="7200")
+            F1B.freeze_contract(freeze)
+            schema = td/"strict_ala_stage_F1b_schema.json"
+            thresholds = td/"strict_ala_stage_F1b_thresholds.json"
+            (td/"lineage.json").write_text(json.dumps(
+                {"valid": True, "H_RAW_legacy": 1.0}))
+            (td/"identity.json").write_text(json.dumps(
+                {"identity_gate_pass": True}))
+            feasibility = {
+                "collective_manifest_sha256": F1B.sha256(schema),
+                "factorization_phase": "authorized_candidate_factorization",
+                "candidate_isolatable": True, "factorization_count": 2,
+                "RHS_solve_count": 2, "estimated_dense_factor_and_solve_work": 1,
+                "temporary_peak_bytes_per_rank": 100,
+                "retained_cache_bytes_per_rank": 100,
+                "legacy_retained_cache_bytes_per_rank": 100,
+                "retained_cache_ratio_vs_legacy": 1.0,
+                "projected_peak_ratio_vs_legacy_cache": 2.0,
+                "new_mpi_payload_bytes_max_per_rank": 1,
+                "diagonal_completion_relative_max": 0,
+                "Kgamma_replay_relative_defect": 1e-12,
+                "production_output_replica_relative_difference": 1e-12,
+                "B_restriction_relative_defect": 1e-12,
+                "Bt_restriction_relative_defect": 1e-12,
+                "B_Bt_bilinear_relative_defect": 1e-12,
+                "startup_seconds_max": 60, "memory_gate_pass": True}
+            (td/"feasibility.json").write_text(json.dumps(feasibility))
+            assembly = []
+            for category in ("LOCAL", "INTERFACE"):
+                assembly.append(dict(zip(F1B.ASSEMBLY_COLUMNS,
+                    ("AGGREGATE", category, "-1", "-1", "1", "1", "0", "0",
+                     "PASS", "1", "0", "0", "8", "8", "1e-12", "1e-12",
+                     "1e-12", "1e-12", "1e-12"))))
+            write_dict_csv(td/"assembly.csv", assembly)
+            local = [{"patch_or_bin_ID":"0", "POD_mode":"0",
+                      "local_action_error":"1", "contribution_weight":"1"}]
+            cand_local = [dict(local[0], local_action_error="0.5")]
+            write_dict_csv(td/"legacy_local.csv", local)
+            write_dict_csv(td/"cand_local.csv", cand_local)
+            tel = [{"POD_mode":"0", "stage":"CONFIGURED",
+                    "POD_energy_weight":"1", "E_P":"1", "cosine":"1",
+                    "qTPq":"1", "qTSPq":"1", "tight_solve_achieved":"1"}]
+            cand_tel = [dict(tel[0], E_P="0.5")]
+            write_dict_csv(td/"legacy_tel.csv", tel)
+            write_dict_csv(td/"cand_tel.csv", cand_tel)
+            (td/"legacy_decision.json").write_text(json.dumps(
+                {"weighted_telescoping_damage":{"RAW_LOCAL":1.0}}))
+            (td/"cand_decision.json").write_text(json.dumps(
+                {"weighted_telescoping_damage":{"RAW_LOCAL":0.4}}))
+            write_dict_csv(td/"tight.csv", [{"converged":"1"}])
+            (td/"snapshots.csv").write_text("snapshot\n0\n")
+            write_memory(td/"base_memory.csv", "BASE_MEMORY_PREFLIGHT", 1000)
+            write_memory(td/"cand_memory.csv", "CAND_MEMORY_PREFLIGHT", 1100)
+            F1B.offline(Args(lineage=td/"lineage.json",
+                identity_gate=td/"identity.json",
+                feasibility=td/"feasibility.json", assembly=td/"assembly.csv",
+                legacy_local=td/"legacy_local.csv", candidate_local=td/"cand_local.csv",
+                legacy_telescoping=td/"legacy_tel.csv",
+                candidate_telescoping=td/"cand_tel.csv",
+                legacy_decision=td/"legacy_decision.json",
+                candidate_decision=td/"cand_decision.json",
+                candidate_tight=td/"tight.csv", snapshot_manifest=td/"snapshots.csv",
+                thresholds=thresholds, schema=schema,
+                base_memory=td/"base_memory.csv", cand_memory=td/"cand_memory.csv",
+                output_dir=out))
+            result = json.loads((out/"strict_ala_stage_F1b_offline_gate.json").read_text())
+            self.assertTrue(result["offline_gate_pass"])
+            self.assertTrue(all(result["memory_gates"][key] for key in
+                ("M1_retained_cache", "M2_total_process_peak", "M3_node_safety")))
+
+            # M1 is a real matched BASE/CAND retained-cache comparison, not
+            # the former candidate/self circular ratio.
+            write_memory(td/"cand_memory.csv", "CAND_MEMORY_PREFLIGHT", 1100,
+                         retained=1.30 * 1000 * 1024)
+            args = Args(lineage=td/"lineage.json", identity_gate=td/"identity.json",
+                feasibility=td/"feasibility.json", assembly=td/"assembly.csv",
+                legacy_local=td/"legacy_local.csv", candidate_local=td/"cand_local.csv",
+                legacy_telescoping=td/"legacy_tel.csv",
+                candidate_telescoping=td/"cand_tel.csv",
+                legacy_decision=td/"legacy_decision.json",
+                candidate_decision=td/"cand_decision.json",
+                candidate_tight=td/"tight.csv", snapshot_manifest=td/"snapshots.csv",
+                thresholds=thresholds, schema=schema,
+                base_memory=td/"base_memory.csv", cand_memory=td/"cand_memory.csv",
+                output_dir=td/"out_m1_fail")
+            F1B.offline(args)
+            failed = json.loads((td/"out_m1_fail/strict_ala_stage_F1b_offline_gate.json").read_text())
+            self.assertFalse(failed["memory_gates"]["M1_retained_cache"])
+            self.assertFalse(failed["offline_gate_pass"])
 
     def test_exact_global_diagonal_closes_restricted_spd_operator(self):
         # Exterior elements contribute to the assembled diagonal even when

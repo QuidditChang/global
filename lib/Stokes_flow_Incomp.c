@@ -130,6 +130,17 @@ struct ala_pressure_preconditioner_cache {
     double f1b_max_k_solve_residual;
     double f1b_max_diagonal_completion_relative;
     double f1b_k_replay_relative_defect;
+    double f1b_output_replica_relative_difference;
+    double f1b_local_k_replay_relative_defect;
+    double f1b_interface_k_replay_relative_defect;
+    double f1b_local_output_replica_relative_difference;
+    double f1b_interface_output_replica_relative_difference;
+    double f1b_local_b_restriction_relative_defect;
+    double f1b_interface_b_restriction_relative_defect;
+    double f1b_local_bt_restriction_relative_defect;
+    double f1b_interface_bt_restriction_relative_defect;
+    double f1b_local_bilinear_transpose_relative_defect;
+    double f1b_interface_bilinear_transpose_relative_defect;
     double f1b_peak_temporary_bytes;
     double f1b_mpi_payload_bytes;
     double f1b_estimated_dense_work;
@@ -5140,7 +5151,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                         }
                         if(!ala_f1b_build_operator_consistent_patch(
                               E,&f1b_pool,f1b_pressure_records,n,matrix,
-                              &f1b_local_stats,&f1b_failure))
+                              &f1b_local_stats,&f1b_failure,0))
                             ala_f1b_abort_candidate(E,"LOCAL",b,
                                 ala_f1b_failure_name(f1b_failure.reason),
                                 &f1b_failure);
@@ -5410,7 +5421,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 matrix[i][j]=0.0;
                         if(!ala_f1b_build_operator_consistent_patch(
                               E,&f1b_pool,f1b_pressure_records,n,matrix,
-                              &f1b_interface_stats,&f1b_failure))
+                              &f1b_interface_stats,&f1b_failure,1))
                             ala_f1b_abort_candidate(E,"INTERFACE",b,
                                 ala_f1b_failure_name(f1b_failure.reason),
                                 &f1b_failure);
@@ -5543,8 +5554,24 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         cache->f1b_max_diagonal_completion_relative=max(
             f1b_local_stats.max_diagonal_completion_relative,
             f1b_interface_stats.max_diagonal_completion_relative);
-        cache->f1b_k_replay_relative_defect=
-            ala_f1b_replay_global_k(E,lev);
+        cache->f1b_local_k_replay_relative_defect=
+            ala_f1b_replay_global_k(E,lev,0,
+                &cache->f1b_local_output_replica_relative_difference,
+                &cache->f1b_local_b_restriction_relative_defect,
+                &cache->f1b_local_bt_restriction_relative_defect,
+                &cache->f1b_local_bilinear_transpose_relative_defect);
+        cache->f1b_interface_k_replay_relative_defect=
+            ala_f1b_replay_global_k(E,lev,1,
+                &cache->f1b_interface_output_replica_relative_difference,
+                &cache->f1b_interface_b_restriction_relative_defect,
+                &cache->f1b_interface_bt_restriction_relative_defect,
+                &cache->f1b_interface_bilinear_transpose_relative_defect);
+        cache->f1b_k_replay_relative_defect=max(
+            cache->f1b_local_k_replay_relative_defect,
+            cache->f1b_interface_k_replay_relative_defect);
+        cache->f1b_output_replica_relative_difference=max(
+            cache->f1b_local_output_replica_relative_difference,
+            cache->f1b_interface_output_replica_relative_difference);
         cache->f1b_peak_temporary_bytes=max(
             f1b_local_stats.max_temporary_bytes,
             f1b_interface_stats.max_temporary_bytes);
@@ -5585,6 +5612,19 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     if(f1b_candidate)
         ala_f1b_write_candidate_evidence(E,cache,global_cache_bytes,
                                           global_build_seconds);
+    if(getenv("STRICT_ALA_STAGE_F1B_MEMORY_PREFLIGHT")!=NULL)
+        ala_f1b_write_rank_memory(E,global_cache_bytes,
+            f1b_candidate ? cache->f1b_peak_temporary_bytes : 0.0);
+    if(f1b_candidate &&
+       getenv("STRICT_ALA_STAGE_F1B_IDENTITY_PREFLIGHT")!=NULL) {
+        MPI_Barrier(E->parallel.world);
+        if(E->parallel.me==0) {
+            fprintf(stderr,"STRICT_ALA_STAGE_F1B_IDENTITY_PREFLIGHT_COMPLETE\n");
+            fflush(stderr);
+        }
+        MPI_Finalize();
+        exit(0);
+    }
     if(E->control.ala_stage_abc_production_logging)
         E->control.ala_stage_abc_schwarz_seconds+=global_build_seconds;
     if(E->control.ala_stage_abc_production_logging &&
