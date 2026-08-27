@@ -12,7 +12,8 @@
 #define ALA_F1B_RECORD_COORD (ALA_F1B_RECORD_META)
 #define ALA_F1B_RECORD_B (ALA_F1B_RECORD_COORD+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_FIXED (ALA_F1B_RECORD_B+ALA_VANKA_DOF)
-#define ALA_F1B_RECORD_K (ALA_F1B_RECORD_FIXED+ALA_VANKA_DOF)
+#define ALA_F1B_RECORD_GLOBAL_DIAG (ALA_F1B_RECORD_FIXED+ALA_VANKA_DOF)
+#define ALA_F1B_RECORD_K (ALA_F1B_RECORD_GLOBAL_DIAG+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_DOUBLES (ALA_F1B_RECORD_K+ALA_VANKA_DOF*ALA_VANKA_DOF)
 #define ALA_F1B_MAX_VELOCITY_DOF 441
 
@@ -36,6 +37,7 @@ struct ala_f1b_patch_stats {
     double max_symmetry_defect;
     double min_k_pivot_ratio;
     double max_k_solve_residual;
+    double max_diagonal_completion_relative;
     double max_temporary_bytes;
     double max_factor_bytes;
     double estimated_dense_work;
@@ -49,7 +51,69 @@ struct ala_f1b_replay_snapshot {
     unsigned char components[ALA_F1B_MAX_VELOCITY_DOF];
 };
 
+enum ala_f1b_failure_reason {
+    ALA_F1B_FAILURE_NONE=0,
+    ALA_F1B_FAILURE_MISSING_RECORD=1,
+    ALA_F1B_FAILURE_VELOCITY_DIMENSION=2,
+    ALA_F1B_FAILURE_EMPTY_PATCH=3,
+    ALA_F1B_FAILURE_INVALID_GLOBAL_DIAGONAL=4,
+    ALA_F1B_FAILURE_INCIDENT_ELEMENT_BOUND=5,
+    ALA_F1B_FAILURE_KGAMMA_FACTOR=6
+};
+
+struct ala_f1b_failure_info {
+    int reason;
+    int pressure_dim;
+    int velocity_dim;
+    int incident_elements;
+    int pivot_index;
+    double pivot;
+    double max_diagonal;
+    double diagonal_completion_relative;
+};
+
 static struct ala_f1b_replay_snapshot ala_f1b_replay_snapshot;
+
+static const char *ala_f1b_failure_name(int reason)
+{
+    switch(reason) {
+    case ALA_F1B_FAILURE_MISSING_RECORD: return("missing_record");
+    case ALA_F1B_FAILURE_VELOCITY_DIMENSION:
+        return("velocity_dimension");
+    case ALA_F1B_FAILURE_EMPTY_PATCH: return("empty_patch");
+    case ALA_F1B_FAILURE_INVALID_GLOBAL_DIAGONAL:
+        return("invalid_global_diagonal");
+    case ALA_F1B_FAILURE_INCIDENT_ELEMENT_BOUND:
+        return("incident_element_bound");
+    case ALA_F1B_FAILURE_KGAMMA_FACTOR: return("Kgamma_factor");
+    default: return("unknown");
+    }
+}
+
+
+static void ala_f1b_abort_candidate(struct All_variables *E,
+    const char *category,int patch,const char *reason,
+    const struct ala_f1b_failure_info *failure)
+{
+    fprintf(stderr,"STRICT_ALA_STAGE_F1B_CANDIDATE_NUMERICAL_FAILURE "
+        "reason=%s category=%s rank=%d pz=%d patch=%d pdim=%d vdim=%d "
+        "incident_elements=%d pivot_index=%d pivot=%.17e maxdiag=%.17e "
+        "diagonal_completion_relative=%.17e\n",reason,category,
+        E->parallel.me,E->parallel.me_loc[3],patch,
+        failure ? failure->pressure_dim : 0,
+        failure ? failure->velocity_dim : 0,
+        failure ? failure->incident_elements : 0,
+        failure ? failure->pivot_index : -1,
+        failure ? failure->pivot : 0.0,
+        failure ? failure->max_diagonal : 0.0,
+        failure ? failure->diagonal_completion_relative : 0.0);
+    fflush(stderr);
+    /* A rank-local myerror left the other radial layer inside collectives in
+     * job 12126878.  MPI_Abort is intentional here: the LSF wrapper converts
+     * this deterministic candidate rejection into the final audit record. */
+    MPI_Abort(E->parallel.world,8);
+    exit(8);
+}
 
 static int ala_f1b_same_point(const double *a,const double *b)
 {
@@ -73,7 +137,7 @@ static void ala_f1b_record_center(const double *record,double center[3])
 static void ala_f1b_fill_element_record(struct All_variables *E,int e,
     int lev,int m,int ex,int ey,int ez,double *record)
 {
-    int a,b,da,db,i,j,node;
+    int a,b,da,db,i,j,node,eq,fixed;
     double matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
     void get_elt_k();
     void get_ala_aug_k();
@@ -98,10 +162,18 @@ static void ala_f1b_fill_element_record(struct All_variables *E,int e,
             record[ALA_F1B_RECORD_B+i]=ALA_COMBINED_PRESSURE_COEFFICIENT(
                 E->elt_del[lev][m][e].g[i][0],
                 E->elt_c[lev][m][e].c[i][0]);
-            record[ALA_F1B_RECORD_FIXED+i]=
+            fixed=
                 (da==0 && (E->NODE[lev][m][node]&VBX)) ||
                 (da==1 && (E->NODE[lev][m][node]&VBY)) ||
                 (da==2 && (E->NODE[lev][m][node]&VBZ));
+            record[ALA_F1B_RECORD_FIXED+i]=(double)fixed;
+            eq=E->ID[lev][m][node].doff[da+1];
+            if(!fixed) {
+                record[ALA_F1B_RECORD_GLOBAL_DIAG+i]=
+                    (!isfinite(E->BI[lev][m][eq]) ||
+                     E->BI[lev][m][eq]<=0.0)
+                    ? NAN : 1.0/E->BI[lev][m][eq];
+            }
         }
     }
     for(a=1;a<=ends;a++)
@@ -291,14 +363,19 @@ static const double *ala_f1b_find_remote_record(
 }
 
 
-static int ala_f1b_factor(double *matrix,int n,double *min_ratio)
+static int ala_f1b_factor(double *matrix,int n,double *min_ratio,
+    struct ala_f1b_failure_info *failure)
 {
     int i,j,k;
     double maxdiag=0.0,sum,pivot;
     for(i=0;i<n;i++)
         maxdiag=max(maxdiag,matrix[i*n+i]);
-    if(!isfinite(maxdiag) || maxdiag<=0.0)
+    failure->max_diagonal=maxdiag;
+    if(!isfinite(maxdiag) || maxdiag<=0.0) {
+        failure->pivot_index=-1;
+        failure->pivot=maxdiag;
         return(0);
+    }
     for(i=0;i<n;i++)
         for(j=0;j<=i;j++) {
             sum=matrix[i*n+j];
@@ -306,8 +383,11 @@ static int ala_f1b_factor(double *matrix,int n,double *min_ratio)
                 sum -= matrix[i*n+k]*matrix[j*n+k];
             if(i==j) {
                 pivot=sum;
-                if(!isfinite(pivot) || pivot<=1.0e-14*maxdiag)
+                if(!isfinite(pivot) || pivot<=1.0e-14*maxdiag) {
+                    failure->pivot_index=i;
+                    failure->pivot=pivot;
                     return(0);
+                }
                 *min_ratio=min(*min_ratio,pivot/maxdiag);
                 matrix[i*n+j]=sqrt(pivot);
             }
@@ -369,38 +449,72 @@ static int ala_f1b_build_operator_consistent_patch(
     struct All_variables *E,const struct ala_f1b_element_pool *pool,
     const double **pressure_records,int np,
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS],
-    struct ala_f1b_patch_stats *stats)
+    struct ala_f1b_patch_stats *stats,
+    struct ala_f1b_failure_info *failure)
 {
     int p,a,d,i,j,k,r,nv,nused,map[ALA_VANKA_DOF];
     int used[1024][4];
     unsigned char vcomp[ALA_F1B_MAX_VELOCITY_DOF];
     double vcoord[3*ALA_F1B_MAX_VELOCITY_DOF];
+    double vdiag[ALA_F1B_MAX_VELOCITY_DOF];
     double *K,*factor,*B,*rhs,*solution;
     double bnorm2,rnorm2,sum,numerator,denominator,symmetry,min_pivot;
+    double diagonal_completion;
     const double *record,*coord;
 
+    memset(failure,0,sizeof(*failure));
+    failure->pivot_index=-1;
     nv=0;
     for(p=0;p<np;p++) {
         record=pressure_records[p];
-        if(record==NULL)
+        if(record==NULL) {
+            failure->reason=ALA_F1B_FAILURE_MISSING_RECORD;
             return(0);
+        }
         for(a=0;a<8;a++)
             for(d=0;d<3;d++) {
                 i=3*a+d;
                 if(record[ALA_F1B_RECORD_FIXED+i]!=0.0)
                     continue;
                 coord=record+ALA_F1B_RECORD_COORD+3*a;
-                if(ala_f1b_velocity_index(coord,d,vcoord,vcomp,nv)<0) {
-                    if(nv>=ALA_F1B_MAX_VELOCITY_DOF)
+                k=ala_f1b_velocity_index(coord,d,vcoord,vcomp,nv);
+                if(k<0) {
+                    if(nv>=ALA_F1B_MAX_VELOCITY_DOF) {
+                        failure->reason=ALA_F1B_FAILURE_VELOCITY_DIMENSION;
+                        failure->velocity_dim=nv+1;
                         return(0);
+                    }
                     memcpy(vcoord+3*nv,coord,3*sizeof(double));
                     vcomp[nv]=(unsigned char)d;
+                    vdiag[nv]=record[ALA_F1B_RECORD_GLOBAL_DIAG+i];
+                    if(!isfinite(vdiag[nv]) || vdiag[nv]<=0.0) {
+                        failure->reason=
+                            ALA_F1B_FAILURE_INVALID_GLOBAL_DIAGONAL;
+                        failure->velocity_dim=nv+1;
+                        return(0);
+                    }
                     nv++;
+                }
+                else {
+                    double replica_diag=
+                        record[ALA_F1B_RECORD_GLOBAL_DIAG+i];
+                    if(!isfinite(replica_diag) || replica_diag<=0.0 ||
+                       fabs(replica_diag-vdiag[k])>
+                         1.0e-10*max(max(replica_diag,vdiag[k]),1.0e-300)) {
+                        failure->reason=
+                            ALA_F1B_FAILURE_INVALID_GLOBAL_DIAGONAL;
+                        failure->velocity_dim=nv;
+                        return(0);
+                    }
                 }
             }
     }
-    if(nv<=0 || np<=0)
+    failure->pressure_dim=np;
+    failure->velocity_dim=nv;
+    if(nv<=0 || np<=0) {
+        failure->reason=ALA_F1B_FAILURE_EMPTY_PATCH;
         return(0);
+    }
     K=(double *)calloc((size_t)nv*nv,sizeof(double));
     factor=(double *)calloc((size_t)nv*nv,sizeof(double));
     B=(double *)calloc((size_t)np*nv,sizeof(double));
@@ -437,8 +551,12 @@ static int ala_f1b_build_operator_consistent_patch(
             continue;
         if(ala_f1b_record_key_seen(record,used,nused))
             continue;
-        if(nused>=1024)
-            myerror(E,"F1b patch incident-element bound exceeded");
+        if(nused>=1024) {
+            failure->reason=ALA_F1B_FAILURE_INCIDENT_ELEMENT_BOUND;
+            failure->incident_elements=nused+1;
+            free(K); free(factor); free(B); free(rhs); free(solution);
+            return(0);
+        }
         for(d=0;d<4;d++)
             used[nused][d]=(int)(record[d]+0.5);
         nused++;
@@ -450,6 +568,18 @@ static int ala_f1b_build_operator_consistent_patch(
                             record[ALA_F1B_RECORD_K+i*ALA_VANKA_DOF+j];
     }
 
+    failure->incident_elements=nused;
+    diagonal_completion=0.0;
+    for(i=0;i<nv;i++) {
+        diagonal_completion=max(diagonal_completion,
+            fabs(K[i*nv+i]-vdiag[i])/max(vdiag[i],1.0e-300));
+        /* This is the exact assembled principal diagonal already used by
+         * the production K_gamma operator.  Element records supply every
+         * retained-retained off-diagonal; BI closes contributions from
+         * incident elements outside the pressure patch. */
+        K[i*nv+i]=vdiag[i];
+    }
+    failure->diagonal_completion_relative=diagonal_completion;
     numerator=denominator=0.0;
     for(i=0;i<nv;i++)
         for(j=0;j<nv;j++) {
@@ -460,7 +590,8 @@ static int ala_f1b_build_operator_consistent_patch(
     symmetry=numerator/max(denominator,1.0e-300);
     memcpy(factor,K,(size_t)nv*nv*sizeof(double));
     min_pivot=1.0e300;
-    if(!ala_f1b_factor(factor,nv,&min_pivot)) {
+    if(!ala_f1b_factor(factor,nv,&min_pivot,failure)) {
+        failure->reason=ALA_F1B_FAILURE_KGAMMA_FACTOR;
         free(K); free(factor); free(B); free(rhs); free(solution);
         return(0);
     }
@@ -495,6 +626,8 @@ static int ala_f1b_build_operator_consistent_patch(
     stats->max_pdim=max(stats->max_pdim,np);
     stats->max_vdim=max(stats->max_vdim,nv);
     stats->max_symmetry_defect=max(stats->max_symmetry_defect,symmetry);
+    stats->max_diagonal_completion_relative=max(
+        stats->max_diagonal_completion_relative,diagonal_completion);
     stats->min_k_pivot_ratio=min(stats->min_k_pivot_ratio,min_pivot);
     stats->max_temporary_bytes=max(stats->max_temporary_bytes,
         max(pool->temporary_bytes,pool->resident_bytes+
@@ -629,7 +762,7 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
 {
     int local_counts[4],global_counts[4];
     int local_dims[4],global_dims[4];
-    double local_max[6],global_max[6],local_min,global_min;
+    double local_max[7],global_max[7],local_min,global_min;
     double projected_ratio;
     const char *directory;
     char path[2048];
@@ -650,19 +783,20 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
     MPI_Allreduce(local_dims,global_dims,4,MPI_INT,MPI_MAX,E->parallel.world);
     local_max[0]=cache->f1b_max_symmetry_defect;
     local_max[1]=cache->f1b_max_k_solve_residual;
-    local_max[2]=cache->f1b_peak_temporary_bytes;
-    local_max[3]=cache->f1b_mpi_payload_bytes;
-    local_max[4]=cache->f1b_k_replay_relative_defect;
-    local_max[5]=cache->f1b_estimated_dense_work;
-    MPI_Allreduce(local_max,global_max,5,MPI_DOUBLE,MPI_MAX,
+    local_max[2]=cache->f1b_max_diagonal_completion_relative;
+    local_max[3]=cache->f1b_peak_temporary_bytes;
+    local_max[4]=cache->f1b_mpi_payload_bytes;
+    local_max[5]=cache->f1b_k_replay_relative_defect;
+    local_max[6]=cache->f1b_estimated_dense_work;
+    MPI_Allreduce(local_max,global_max,6,MPI_DOUBLE,MPI_MAX,
                   E->parallel.world);
-    MPI_Allreduce(local_max+5,global_max+5,1,MPI_DOUBLE,MPI_SUM,
+    MPI_Allreduce(local_max+6,global_max+6,1,MPI_DOUBLE,MPI_SUM,
                   E->parallel.world);
     local_min=(cache->f1b_local_patch_count+cache->f1b_interface_patch_count)>0
         ? cache->f1b_min_k_pivot_ratio : 1.0e300;
     MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,
                   E->parallel.world);
-    projected_ratio=(legacy_cache_bytes+global_max[2])
+    projected_ratio=(legacy_cache_bytes+global_max[3])
         /max(legacy_cache_bytes,1.0);
     directory=getenv("STRICT_ALA_STAGE_F1B_OUTPUT_DIR");
     if(E->parallel.me!=0 || directory==NULL || directory[0]=='\0')
@@ -687,6 +821,7 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
         "  \"retained_cache_bytes_per_rank\": %.17e,\n"
         "  \"projected_peak_ratio_vs_legacy_cache\": %.17e,\n"
         "  \"new_mpi_payload_bytes_max_per_rank\": %.17e,\n"
+        "  \"diagonal_completion_relative_max\": %.17e,\n"
         "  \"Kgamma_replay_relative_defect\": %.17e,\n"
         "  \"Kgamma_replay_tolerance\": 5.0e-6,\n"
         "  \"startup_seconds_max\": %.17e,\n"
@@ -694,11 +829,12 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
         "  \"communication\": \"direct-face plus two-hop corner element records\"\n"
         "}\n",
         (global_counts[0]>0 && global_counts[1]>0 &&
-         global_max[4]<=5.0e-6) ? "true" : "false",
+         global_max[5]<=5.0e-6) ? "true" : "false",
         global_dims[0],global_dims[1],global_dims[2],global_dims[3],
         global_counts[0]+global_counts[1],global_counts[2]+global_counts[3],
-        global_max[5],global_max[2],legacy_cache_bytes,
-        projected_ratio,global_max[3],global_max[4],build_seconds,
+        global_max[6],global_max[3],legacy_cache_bytes,
+        projected_ratio,global_max[4],global_max[2],global_max[5],
+        build_seconds,
         projected_ratio<=1.25 ? "true" : "false");
     fclose(fp);
     snprintf(path,sizeof(path),
@@ -715,13 +851,13 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
         global_dims[0],global_dims[1],global_max[0],
         E->control.ala_shallow_patch_regularization,global_min,global_max[1],
         (double)global_dims[0]*global_dims[0]*sizeof(double),
-        (double)global_dims[0]*global_dims[0]*sizeof(double),global_max[4]);
+        (double)global_dims[0]*global_dims[0]*sizeof(double),global_max[5]);
     fprintf(fp,"AGGREGATE,INTERFACE,-1,-1,%d,%d,%.17e,%.17e,PASS,%.17e,"
         "%.17e,0,%.17e,%.17e,%.17e\n",
         global_dims[2],global_dims[3],global_max[0],
         E->control.ala_shallow_patch_regularization,global_min,global_max[1],
         (double)global_dims[2]*global_dims[2]*sizeof(double),
-        (double)global_dims[2]*global_dims[2]*sizeof(double),global_max[4]);
+        (double)global_dims[2]*global_dims[2]*sizeof(double),global_max[5]);
     fclose(fp);
 }
 

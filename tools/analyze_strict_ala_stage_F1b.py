@@ -306,6 +306,7 @@ def offline(args):
                   "retained_cache_bytes_per_rank",
                   "projected_peak_ratio_vs_legacy_cache",
                   "new_mpi_payload_bytes_max_per_rank",
+                  "diagonal_completion_relative_max",
                   "Kgamma_replay_relative_defect", "startup_seconds_max"):
         if finite(feasibility[field], field) < 0:
             raise ValueError(f"negative feasibility field {field}")

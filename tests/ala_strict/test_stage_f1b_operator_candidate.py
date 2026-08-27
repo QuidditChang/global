@@ -95,6 +95,12 @@ class F1bContractTests(unittest.TestCase):
         self.assertIn("operator_consistent(GKgamma^-1G^T)", source)
         self.assertIn("direct-face plus two-hop corner element records", candidate)
         self.assertIn("Kgamma_replay_relative_defect", candidate)
+        self.assertIn("ALA_F1B_RECORD_GLOBAL_DIAG", candidate)
+        self.assertIn("1.0/E->BI[lev][m][eq]", candidate)
+        self.assertIn("K[i*nv+i]=vdiag[i]", candidate)
+        self.assertIn("diagonal_completion_relative_max", candidate)
+        self.assertIn("MPI_Abort(E->parallel.world,8)", candidate)
+        self.assertIn("pivot_index=%d", candidate)
         # Existing pre/post Q_i and multiplicity path remains in the common
         # apply routine; the candidate changes only cached A_i factors.
         self.assertGreaterEqual(source.count("rhs[i] -= sum*constant_mode[i]"), 2)
@@ -142,6 +148,23 @@ class F1bContractTests(unittest.TestCase):
         self.assertIn(
             "STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=operator_consistent", lsf)
         self.assertIn("STRICT_ALA_STAGE_F1B_EXPECTED_OPERATOR=legacy", lsf)
+        self.assertIn("binary_F1b_diagonal_completion_marker.txt", lsf)
+
+    def test_exact_global_diagonal_closes_restricted_spd_operator(self):
+        # Exterior elements contribute to the assembled diagonal even when
+        # their pressure rows are outside this patch.  Completing that exact
+        # diagonal turns the incident-only singular matrix into the true SPD
+        # principal restriction, without adding regularization.
+        incomplete = [[1.0, -1.0], [-1.0, 1.0]]
+        production_diagonal = [2.0, 3.0]
+        restricted = [row[:] for row in incomplete]
+        for index, value in enumerate(production_diagonal):
+            restricted[index][index] = value
+        self.assertEqual(restricted, [[2.0, -1.0], [-1.0, 3.0]])
+        self.assertEqual(incomplete[0][0] * incomplete[1][1]
+                         - incomplete[0][1] ** 2, 0.0)
+        self.assertGreater(restricted[0][0] * restricted[1][1]
+                           - restricted[0][1] ** 2, 0.0)
 
     def test_lsf_accepts_unpacked_pythia_egg_directory(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
