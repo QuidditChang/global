@@ -527,7 +527,11 @@ static int ala_f1b_factor(double *matrix,int n,double *min_ratio,
             }
             failure->largest_abs_factor=max(
                 failure->largest_abs_factor,fabs(value));
-            matrix[j*n+i]=0.0;
+            /* Clear only the strict upper triangle.  When i==j this entry is
+             * the Cholesky diagonal just written above; clearing it makes the
+             * next off-diagonal update divide by zero (job 12127697). */
+            if(j<i)
+                matrix[j*n+i]=0.0;
         }
     return(1);
 }
@@ -1235,7 +1239,7 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
 }
 
 
-static void ala_f1b_write_rank_memory(struct All_variables *E,
+static void ala_f1b_write_rank_memory_with_cache(struct All_variables *E,
     double retained_cache_bytes,double temporary_peak_bytes)
 {
     struct rusage usage;
@@ -1272,4 +1276,13 @@ static void ala_f1b_write_rank_memory(struct All_variables *E,
             case_name ? case_name : "UNKNOWN",maximum_kib,sum_kib,
             E->parallel.nproc,retained_cache_bytes,maximum_temporary_bytes);
     fclose(fp);
+}
+
+
+/* Existing Stage-E/F1a call sites need only RSS.  Keep their original
+ * one-argument interface while F1b cache construction records the two
+ * additional cache metrics through the explicit helper above. */
+static void ala_f1b_write_rank_memory(struct All_variables *E)
+{
+    ala_f1b_write_rank_memory_with_cache(E,0.0,0.0);
 }

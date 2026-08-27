@@ -5613,7 +5613,7 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
         ala_f1b_write_candidate_evidence(E,cache,global_cache_bytes,
                                           global_build_seconds);
     if(getenv("STRICT_ALA_STAGE_F1B_MEMORY_PREFLIGHT")!=NULL)
-        ala_f1b_write_rank_memory(E,global_cache_bytes,
+        ala_f1b_write_rank_memory_with_cache(E,global_cache_bytes,
             f1b_candidate ? cache->f1b_peak_temporary_bytes : 0.0);
     if(f1b_candidate &&
        getenv("STRICT_ALA_STAGE_F1B_IDENTITY_PREFLIGHT")!=NULL) {

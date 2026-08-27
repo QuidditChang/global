@@ -379,6 +379,23 @@ class F1bContractTests(unittest.TestCase):
         self.assertGreater(restricted[0][0] * restricted[1][1]
                            - restricted[0][1] ** 2, 0.0)
 
+    def test_f1b_cholesky_preserves_each_diagonal_factor(self):
+        candidate = (ROOT / "lib/Strict_ala_stage_f1b.inc").read_text()
+        factor = candidate[candidate.index("static int ala_f1b_factor"):
+                           candidate.index("static void ala_f1b_solve")]
+        self.assertIn("if(j<i)\n                matrix[j*n+i]=0.0;", factor)
+        self.assertNotIn("\n            matrix[j*n+i]=0.0;", factor)
+
+        # Mirror the two-by-two recurrence that exposed the defect on HPC.
+        # L00 must survive long enough to form L10 and the second pivot.
+        matrix = [[4.0, 2.0], [2.0, 3.0]]
+        l00 = matrix[0][0] ** 0.5
+        l10 = matrix[1][0] / l00
+        l11 = (matrix[1][1] - l10 * l10) ** 0.5
+        self.assertEqual(l00, 2.0)
+        self.assertEqual(l10, 1.0)
+        self.assertEqual(l11, 2.0 ** 0.5)
+
     def test_lsf_accepts_unpacked_pythia_egg_directory(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
         function = re.search(r"(require_path\(\) \{.*?\n\})", lsf,
