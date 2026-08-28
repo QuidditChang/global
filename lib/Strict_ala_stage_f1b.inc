@@ -16,7 +16,14 @@
 #define ALA_F1B_RECORD_GLOBAL_DIAG (ALA_F1B_RECORD_FIXED+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_K (ALA_F1B_RECORD_GLOBAL_DIAG+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_DOUBLES (ALA_F1B_RECORD_K+ALA_VANKA_DOF*ALA_VANKA_DOF)
-#define ALA_F1B_MAX_VELOCITY_DOF 441
+/* Absolute diagnostic workspace bound over two completely disjoint strips.
+ * A conforming interface is smaller: (2*overlap+1)*(width+1)*(radial+1)*3.
+ * The active 6/3/2 case therefore expects 7*7*3*3=441. */
+#define ALA_F1B_MAX_VELOCITY_DOF \
+    (2*(ALA_PATCH_MAX_MPI_OVERLAP+1) \
+     *(ALA_PATCH_MAX_HORIZONTAL_ELEMENTS+1) \
+     *(ALA_PATCH_RADIAL_ELEMENTS+1)*3)
+#define ALA_F1B_MAX_PATCH_NODES (8*ALA_PATCH_MAX_ELEMENTS)
 #define ALA_F1B_K_RESTRICTION_TOLERANCE 1.0e-10
 #define ALA_F1B_K_RESTRICTION_REVIEW_BOUND 1.0e-8
 #define ALA_F1B_OUTPUT_REPLICA_TOLERANCE 1.0e-10
@@ -68,7 +75,8 @@ enum ala_f1b_failure_reason {
     ALA_F1B_FAILURE_INPUT_MATRIX_NONFINITE=6,
     ALA_F1B_FAILURE_CHOLESKY_RECURRENCE_OVERFLOW=7,
     ALA_F1B_FAILURE_FINITE_NEGATIVE_PIVOT=8,
-    ALA_F1B_FAILURE_FINITE_SMALL_PIVOT=9
+    ALA_F1B_FAILURE_FINITE_SMALL_PIVOT=9,
+    ALA_F1B_FAILURE_INTERFACE_TOPOLOGY=10
 };
 
 struct ala_f1b_failure_info {
@@ -82,6 +90,19 @@ struct ala_f1b_failure_info {
     int recurrence_k;
     int matrix_nonfinite_count;
     int duplicate_element_key_count;
+    int topology_local_records;
+    int topology_remote_records;
+    int topology_local_nodes;
+    int topology_remote_nodes;
+    int topology_shared_nodes;
+    int topology_union_nodes;
+    int topology_expected_union_nodes;
+    int topology_expected_velocity_dofs;
+    int interface_face;
+    int interface_tangent;
+    int interface_radial_element;
+    int remote_rank_min;
+    int remote_rank_max;
     double pivot;
     double max_diagonal;
     double min_diagonal;
@@ -120,6 +141,8 @@ static const char *ala_f1b_failure_name(int reason)
         return("FINITE_NEGATIVE_PIVOT");
     case ALA_F1B_FAILURE_FINITE_SMALL_PIVOT:
         return("FINITE_SMALL_PIVOT");
+    case ALA_F1B_FAILURE_INTERFACE_TOPOLOGY:
+        return("INTERFACE_TOPOLOGY_MISMATCH");
     default: return("unknown");
     }
 }
@@ -144,7 +167,14 @@ static void ala_f1b_abort_candidate(struct All_variables *E,
         "max_abs_offdiagonal=%.17e max_abs_offdiagonal_row=%d "
         "max_abs_offdiagonal_col=%d diagonal_difference_min=%.17e "
         "diagonal_difference_max=%.17e duplicate_element_key_count=%d "
-        "nearest_same_component_distance=%.17e\n",
+        "nearest_same_component_distance=%.17e "
+        "topology_local_records=%d topology_remote_records=%d "
+        "topology_local_nodes=%d topology_remote_nodes=%d "
+        "topology_shared_nodes=%d topology_union_nodes=%d "
+        "topology_expected_union_nodes=%d "
+        "topology_expected_velocity_dofs=%d interface_face=%d "
+        "interface_tangent=%d interface_radial_element=%d "
+        "remote_rank_min=%d remote_rank_max=%d\n",
         reason,factorization_phase,category,
         E->parallel.me,E->parallel.me_loc[3],patch,
         failure ? failure->pressure_dim : 0,
@@ -169,7 +199,20 @@ static void ala_f1b_abort_candidate(struct All_variables *E,
         failure ? failure->diagonal_difference_min : 0.0,
         failure ? failure->diagonal_difference_max : 0.0,
         failure ? failure->duplicate_element_key_count : 0,
-        failure ? failure->nearest_same_component_distance : 0.0);
+        failure ? failure->nearest_same_component_distance : 0.0,
+        failure ? failure->topology_local_records : 0,
+        failure ? failure->topology_remote_records : 0,
+        failure ? failure->topology_local_nodes : 0,
+        failure ? failure->topology_remote_nodes : 0,
+        failure ? failure->topology_shared_nodes : 0,
+        failure ? failure->topology_union_nodes : 0,
+        failure ? failure->topology_expected_union_nodes : 0,
+        failure ? failure->topology_expected_velocity_dofs : 0,
+        failure ? failure->interface_face : -1,
+        failure ? failure->interface_tangent : -1,
+        failure ? failure->interface_radial_element : -1,
+        failure ? failure->remote_rank_min : -1,
+        failure ? failure->remote_rank_max : -1);
     fflush(stderr);
     /* A rank-local myerror left the other radial layer inside collectives in
      * job 12126878.  MPI_Abort is intentional here: the LSF wrapper converts
@@ -193,6 +236,113 @@ static int ala_f1b_same_node_key(const double *record_key,
         if((int)(record_key[d]+0.5)!=stored_key[d])
             return(0);
     return(1);
+}
+
+
+static int ala_f1b_node_index(const double *coord,const double *node_key,
+    const double *coordinates,const int *keys,int n)
+{
+    int i;
+    for(i=0;i<n;i++)
+        if(ala_f1b_same_node_key(node_key,keys+4*i) ||
+           ala_f1b_same_point(coord,coordinates+3*i))
+            return(i);
+    return(-1);
+}
+
+
+static int ala_f1b_add_node(const double *coord,const double *node_key,
+    double *coordinates,int *keys,int n)
+{
+    int d;
+    if(ala_f1b_node_index(coord,node_key,coordinates,keys,n)>=0)
+        return(n);
+    if(n>=ALA_F1B_MAX_PATCH_NODES)
+        return(-1);
+    memcpy(coordinates+3*n,coord,3*sizeof(double));
+    for(d=0;d<4;d++)
+        keys[4*n+d]=(int)(node_key[d]+0.5);
+    return(n+1);
+}
+
+
+static int ala_f1b_measure_patch_topology(struct All_variables *E,
+    const double **records,int np,struct ala_f1b_failure_info *failure)
+{
+    int p,a,q,rank,next,union_nodes=0,local_nodes=0,remote_nodes=0,shared=0;
+    int *union_keys,*local_keys,*remote_keys;
+    double *union_coord,*local_coord,*remote_coord;
+    const double *record,*coord,*key;
+
+    union_keys=(int *)calloc(4*ALA_F1B_MAX_PATCH_NODES,sizeof(int));
+    local_keys=(int *)calloc(4*ALA_F1B_MAX_PATCH_NODES,sizeof(int));
+    remote_keys=(int *)calloc(4*ALA_F1B_MAX_PATCH_NODES,sizeof(int));
+    union_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
+    local_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
+    remote_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
+    if(union_keys==NULL || local_keys==NULL || remote_keys==NULL ||
+       union_coord==NULL || local_coord==NULL || remote_coord==NULL)
+        myerror(E,"Unable to allocate F1b topology workspace");
+    failure->remote_rank_min=E->parallel.nproc;
+    failure->remote_rank_max=-1;
+    for(p=0;p<np;p++) {
+        record=records[p];
+        if(record==NULL)
+            continue;
+        rank=(int)(record[0]+0.5);
+        if(rank==E->parallel.me)
+            failure->topology_local_records++;
+        else {
+            failure->topology_remote_records++;
+            failure->remote_rank_min=min(failure->remote_rank_min,rank);
+            failure->remote_rank_max=max(failure->remote_rank_max,rank);
+        }
+        for(a=0;a<8;a++) {
+            coord=record+ALA_F1B_RECORD_COORD+3*a;
+            key=record+ALA_F1B_RECORD_NODE_KEY+4*a;
+            next=ala_f1b_add_node(coord,key,union_coord,union_keys,
+                                   union_nodes);
+            if(next<0) goto topology_bound;
+            union_nodes=next;
+            if(rank==E->parallel.me) {
+                next=ala_f1b_add_node(coord,key,local_coord,local_keys,
+                                       local_nodes);
+                if(next<0) goto topology_bound;
+                local_nodes=next;
+            }
+            else {
+                next=ala_f1b_add_node(coord,key,remote_coord,remote_keys,
+                                       remote_nodes);
+                if(next<0) goto topology_bound;
+                remote_nodes=next;
+            }
+        }
+    }
+    for(a=0;a<local_nodes;a++) {
+        for(q=0;q<remote_nodes;q++)
+            if((local_keys[4*a]==remote_keys[4*q] &&
+                local_keys[4*a+1]==remote_keys[4*q+1] &&
+                local_keys[4*a+2]==remote_keys[4*q+2] &&
+                local_keys[4*a+3]==remote_keys[4*q+3]) ||
+               ala_f1b_same_point(local_coord+3*a,remote_coord+3*q)) {
+                shared++;
+                break;
+            }
+    }
+    failure->topology_local_nodes=local_nodes;
+    failure->topology_remote_nodes=remote_nodes;
+    failure->topology_shared_nodes=shared;
+    failure->topology_union_nodes=union_nodes;
+    if(failure->remote_rank_max<0)
+        failure->remote_rank_min=-1;
+    free(union_keys); free(local_keys); free(remote_keys);
+    free(union_coord); free(local_coord); free(remote_coord);
+    return(1);
+
+topology_bound:
+    free(union_keys); free(local_keys); free(remote_keys);
+    free(union_coord); free(local_coord); free(remote_coord);
+    return(0);
 }
 
 
@@ -652,6 +802,17 @@ static int ala_f1b_build_operator_consistent_patch(
 
     memset(failure,0,sizeof(*failure));
     failure->pivot_index=-1;
+    failure->interface_face=-1;
+    failure->interface_tangent=-1;
+    failure->interface_radial_element=-1;
+    if(replay_category==1) {
+        failure->topology_expected_union_nodes=
+            (2*E->control.ala_shallow_patch_mpi_overlap+1)
+            *(E->control.ala_shallow_patch_horizontal_elements+1)
+            *(ALA_PATCH_RADIAL_ELEMENTS+1);
+        failure->topology_expected_velocity_dofs=
+            3*failure->topology_expected_union_nodes;
+    }
     nv=0;
     for(p=0;p<np;p++) {
         record=pressure_records[p];
@@ -707,6 +868,18 @@ static int ala_f1b_build_operator_consistent_patch(
     }
     failure->pressure_dim=np;
     failure->velocity_dim=nv;
+    if(replay_category==1 &&
+       nv>failure->topology_expected_velocity_dofs) {
+        /* The normal path pays no topology-audit cost.  Only an interface
+         * that exceeds the conforming bound performs the complete node-union
+         * census before the collective fail-fast. */
+        if(!ala_f1b_measure_patch_topology(E,pressure_records,np,failure)) {
+            failure->reason=ALA_F1B_FAILURE_INCIDENT_ELEMENT_BOUND;
+            return(0);
+        }
+        failure->reason=ALA_F1B_FAILURE_INTERFACE_TOPOLOGY;
+        return(0);
+    }
     if(nv<=0 || np<=0) {
         failure->reason=ALA_F1B_FAILURE_EMPTY_PATCH;
         return(0);

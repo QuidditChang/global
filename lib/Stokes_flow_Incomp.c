@@ -5421,10 +5421,14 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 matrix[i][j]=0.0;
                         if(!ala_f1b_build_operator_consistent_patch(
                               E,&f1b_pool,f1b_pressure_records,n,matrix,
-                              &f1b_interface_stats,&f1b_failure,1))
+                              &f1b_interface_stats,&f1b_failure,1)) {
+                            f1b_failure.interface_face=face+1;
+                            f1b_failure.interface_tangent=tangent;
+                            f1b_failure.interface_radial_element=ez;
                             ala_f1b_abort_candidate(E,"INTERFACE",b,
                                 ala_f1b_failure_name(f1b_failure.reason),
                                 &f1b_failure);
+                        }
                     }
                     else for(i=0;i<n;i++)
                         for(j=0;j<=i;j++) {
