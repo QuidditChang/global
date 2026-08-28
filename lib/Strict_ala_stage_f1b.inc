@@ -10,7 +10,8 @@
 
 #define ALA_F1B_RECORD_META 4
 #define ALA_F1B_RECORD_COORD (ALA_F1B_RECORD_META)
-#define ALA_F1B_RECORD_B (ALA_F1B_RECORD_COORD+ALA_VANKA_DOF)
+#define ALA_F1B_RECORD_NODE_KEY (ALA_F1B_RECORD_COORD+ALA_VANKA_DOF)
+#define ALA_F1B_RECORD_B (ALA_F1B_RECORD_NODE_KEY+4*8)
 #define ALA_F1B_RECORD_FIXED (ALA_F1B_RECORD_B+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_GLOBAL_DIAG (ALA_F1B_RECORD_FIXED+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_K (ALA_F1B_RECORD_GLOBAL_DIAG+ALA_VANKA_DOF)
@@ -94,6 +95,7 @@ struct ala_f1b_failure_info {
     double recurrence_sum;
     double recurrence_term;
     double largest_abs_factor;
+    double nearest_same_component_distance;
 };
 
 /* Fixed manifest order: 0=LOCAL representative, 1=INTERFACE representative. */
@@ -141,7 +143,8 @@ static void ala_f1b_abort_candidate(struct All_variables *E,
         "largest_abs_factor=%.17e min_diagonal=%.17e "
         "max_abs_offdiagonal=%.17e max_abs_offdiagonal_row=%d "
         "max_abs_offdiagonal_col=%d diagonal_difference_min=%.17e "
-        "diagonal_difference_max=%.17e duplicate_element_key_count=%d\n",
+        "diagonal_difference_max=%.17e duplicate_element_key_count=%d "
+        "nearest_same_component_distance=%.17e\n",
         reason,factorization_phase,category,
         E->parallel.me,E->parallel.me_loc[3],patch,
         failure ? failure->pressure_dim : 0,
@@ -165,7 +168,8 @@ static void ala_f1b_abort_candidate(struct All_variables *E,
         failure ? failure->max_abs_offdiagonal_column : -1,
         failure ? failure->diagonal_difference_min : 0.0,
         failure ? failure->diagonal_difference_max : 0.0,
-        failure ? failure->duplicate_element_key_count : 0);
+        failure ? failure->duplicate_element_key_count : 0,
+        failure ? failure->nearest_same_component_distance : 0.0);
     fflush(stderr);
     /* A rank-local myerror left the other radial layer inside collectives in
      * job 12126878.  MPI_Abort is intentional here: the LSF wrapper converts
@@ -178,6 +182,35 @@ static int ala_f1b_same_point(const double *a,const double *b)
 {
     double dx=a[0]-b[0],dy=a[1]-b[1],dz=a[2]-b[2];
     return(dx*dx+dy*dy+dz*dz<=1.0e-18);
+}
+
+
+static int ala_f1b_same_node_key(const double *record_key,
+    const int *stored_key)
+{
+    int d;
+    for(d=0;d<4;d++)
+        if((int)(record_key[d]+0.5)!=stored_key[d])
+            return(0);
+    return(1);
+}
+
+
+static double ala_f1b_nearest_component_distance(const double *coord,
+    int component,const double *vcoord,const unsigned char *vcomp,int n)
+{
+    int i;
+    double dx,dy,dz,distance2,nearest2=INFINITY;
+    for(i=0;i<n;i++) {
+        if(vcomp[i]!=component)
+            continue;
+        dx=coord[0]-vcoord[3*i];
+        dy=coord[1]-vcoord[3*i+1];
+        dz=coord[2]-vcoord[3*i+2];
+        distance2=dx*dx+dy*dy+dz*dz;
+        nearest2=min(nearest2,distance2);
+    }
+    return(isfinite(nearest2) ? sqrt(nearest2) : INFINITY);
 }
 
 
@@ -196,7 +229,7 @@ static void ala_f1b_record_center(const double *record,double center[3])
 static void ala_f1b_fill_element_record(struct All_variables *E,int e,
     int lev,int m,int ex,int ey,int ez,double *record)
 {
-    int a,b,da,db,i,j,node,eq,fixed;
+    int a,b,da,db,i,j,node,eq,fixed,ix,iy,iz;
     double matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
     void get_elt_k();
     void get_ala_aug_k();
@@ -215,6 +248,21 @@ static void ala_f1b_fill_element_record(struct All_variables *E,int e,
         get_ala_aug_k(E,e,matrix,lev,m);
     for(a=1;a<=ends;a++) {
         node=E->IEN[lev][m][e].node[a];
+        iz=(node-1)%E->lmesh.NOZ[lev]+1;
+        ix=((node-1)/E->lmesh.NOZ[lev])%E->lmesh.NOX[lev]+1;
+        iy=(node-1)/(E->lmesh.NOZ[lev]*E->lmesh.NOX[lev])+1;
+        /* Exact same-cap topology is the primary MPI-replica identity.  This
+         * avoids inferring ownership from independently generated floating
+         * coordinates (job 12127734).  Cartesian matching remains the
+         * cross-cap fallback below, where structured cap indices differ. */
+        record[ALA_F1B_RECORD_NODE_KEY+4*(a-1)]=
+            (double)E->sphere.capid[m];
+        record[ALA_F1B_RECORD_NODE_KEY+4*(a-1)+1]=
+            (double)(E->lmesh.EXS[lev]+ix);
+        record[ALA_F1B_RECORD_NODE_KEY+4*(a-1)+2]=
+            (double)(E->lmesh.EYS[lev]+iy);
+        record[ALA_F1B_RECORD_NODE_KEY+4*(a-1)+3]=
+            (double)(E->lmesh.EZS[lev]+iz);
         for(da=0;da<dims;da++) {
             i=(a-1)*dims+da;
             record[ALA_F1B_RECORD_COORD+i]=E->X[lev][m][da+1][node];
@@ -571,13 +619,15 @@ static int ala_f1b_record_key_seen(const double *record,int used[][4],int n)
 }
 
 
-static int ala_f1b_velocity_index(const double *coord,int component,
-    const double *vcoord,const unsigned char *vcomp,int n)
+static int ala_f1b_velocity_index(const double *coord,const double *node_key,
+    int component,const double *vcoord,const int *vkey,
+    const unsigned char *vcomp,int n)
 {
     int i;
     for(i=0;i<n;i++)
         if(vcomp[i]==component &&
-           ala_f1b_same_point(coord,vcoord+3*i))
+           (ala_f1b_same_node_key(node_key,vkey+4*i) ||
+            ala_f1b_same_point(coord,vcoord+3*i)))
             return(i);
     return(-1);
 }
@@ -591,7 +641,7 @@ static int ala_f1b_build_operator_consistent_patch(
     struct ala_f1b_failure_info *failure,int replay_category)
 {
     int p,a,d,i,j,k,r,nv,nused,map[ALA_VANKA_DOF];
-    int used[1024][4];
+    int used[1024][4],vkey[4*ALA_F1B_MAX_VELOCITY_DOF];
     unsigned char vcomp[ALA_F1B_MAX_VELOCITY_DOF];
     double vcoord[3*ALA_F1B_MAX_VELOCITY_DOF];
     double vdiag[ALA_F1B_MAX_VELOCITY_DOF];
@@ -615,14 +665,22 @@ static int ala_f1b_build_operator_consistent_patch(
                 if(record[ALA_F1B_RECORD_FIXED+i]!=0.0)
                     continue;
                 coord=record+ALA_F1B_RECORD_COORD+3*a;
-                k=ala_f1b_velocity_index(coord,d,vcoord,vcomp,nv);
+                k=ala_f1b_velocity_index(coord,
+                    record+ALA_F1B_RECORD_NODE_KEY+4*a,d,
+                    vcoord,vkey,vcomp,nv);
                 if(k<0) {
                     if(nv>=ALA_F1B_MAX_VELOCITY_DOF) {
                         failure->reason=ALA_F1B_FAILURE_VELOCITY_DIMENSION;
                         failure->velocity_dim=nv+1;
+                        failure->nearest_same_component_distance=
+                            ala_f1b_nearest_component_distance(
+                                coord,d,vcoord,vcomp,nv);
                         return(0);
                     }
                     memcpy(vcoord+3*nv,coord,3*sizeof(double));
+                    for(j=0;j<4;j++)
+                        vkey[4*nv+j]=(int)(
+                            record[ALA_F1B_RECORD_NODE_KEY+4*a+j]+0.5);
                     vcomp[nv]=(unsigned char)d;
                     vdiag[nv]=record[ALA_F1B_RECORD_GLOBAL_DIAG+i];
                     if(!isfinite(vdiag[nv]) || vdiag[nv]<=0.0) {
@@ -666,7 +724,9 @@ static int ala_f1b_build_operator_consistent_patch(
             for(d=0;d<3;d++) {
                 i=3*a+d;
                 k=ala_f1b_velocity_index(
-                    record+ALA_F1B_RECORD_COORD+3*a,d,vcoord,vcomp,nv);
+                    record+ALA_F1B_RECORD_COORD+3*a,
+                    record+ALA_F1B_RECORD_NODE_KEY+4*a,d,
+                    vcoord,vkey,vcomp,nv);
                 if(k>=0)
                     B[p*nv+k] += record[ALA_F1B_RECORD_B+i];
             }
@@ -681,7 +741,9 @@ static int ala_f1b_build_operator_consistent_patch(
         for(a=0;a<8;a++)
             for(d=0;d<3;d++)
                 map[3*a+d]=ala_f1b_velocity_index(
-                    record+ALA_F1B_RECORD_COORD+3*a,d,vcoord,vcomp,nv);
+                    record+ALA_F1B_RECORD_COORD+3*a,
+                    record+ALA_F1B_RECORD_NODE_KEY+4*a,d,
+                    vcoord,vkey,vcomp,nv);
         for(i=0;i<ALA_VANKA_DOF;i++)
             if(map[i]>=0)
                 break;

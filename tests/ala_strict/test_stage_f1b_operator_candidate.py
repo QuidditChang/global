@@ -396,6 +396,28 @@ class F1bContractTests(unittest.TestCase):
         self.assertEqual(l10, 1.0)
         self.assertEqual(l11, 2.0 ** 0.5)
 
+    def test_interface_velocity_identity_keeps_the_441_dof_contract(self):
+        candidate = (ROOT / "lib/Strict_ala_stage_f1b.inc").read_text()
+        self.assertIn("#define ALA_F1B_MAX_VELOCITY_DOF 441", candidate)
+        self.assertIn("#define ALA_F1B_RECORD_NODE_KEY", candidate)
+        self.assertIn("E->sphere.capid[m]", candidate)
+        self.assertIn("E->lmesh.EXS[lev]+ix", candidate)
+        self.assertIn("E->lmesh.EYS[lev]+iy", candidate)
+        self.assertIn("E->lmesh.EZS[lev]+iz", candidate)
+        self.assertIn("ala_f1b_same_node_key(node_key,vkey+4*i)", candidate)
+        self.assertIn("ala_f1b_same_point(coord,vcoord+3*i)", candidate)
+        self.assertIn("nearest_same_component_distance", candidate)
+
+        # Two three-element-wide strips share one face.  Global structured
+        # node keys collapse that face to 7*7*3 physical nodes, exactly the
+        # frozen 441-component capacity, independently of rank-local indices.
+        left = {(12, gx, gy, gz)
+                for gx in range(4) for gy in range(7) for gz in range(3)}
+        right = {(12, gx, gy, gz)
+                 for gx in range(3, 7) for gy in range(7) for gz in range(3)}
+        self.assertEqual(len(left | right), 147)
+        self.assertEqual(3 * len(left | right), 441)
+
     def test_lsf_accepts_unpacked_pythia_egg_directory(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
         function = re.search(r"(require_path\(\) \{.*?\n\})", lsf,
