@@ -239,6 +239,84 @@ static int ala_f1b_same_node_key(const double *record_key,
 }
 
 
+static int ala_f1b_same_record_node(const double *left,int left_node,
+    const double *right,int right_node)
+{
+    int d,key_equal=1;
+    const double *left_key=left+ALA_F1B_RECORD_NODE_KEY+4*left_node;
+    const double *right_key=right+ALA_F1B_RECORD_NODE_KEY+4*right_node;
+    const double *left_coord=left+ALA_F1B_RECORD_COORD+3*left_node;
+    const double *right_coord=right+ALA_F1B_RECORD_COORD+3*right_node;
+
+    for(d=0;d<4;d++)
+        if((int)(left_key[d]+0.5)!=(int)(right_key[d]+0.5)) {
+            key_equal=0;
+            break;
+        }
+    return(key_equal || ala_f1b_same_point(left_coord,right_coord));
+}
+
+
+static int ala_f1b_record_already_selected(const double *candidate,
+    const double **selected,int nselected)
+{
+    int i;
+    for(i=0;i<nselected;i++)
+        if(candidate==selected[i])
+            return(1);
+    return(0);
+}
+
+
+/* Follow the actual hexahedral face topology across an MPI interface.  For
+ * q=0, the unique remote record must share one complete four-node face with
+ * the local boundary element.  For q>0, the next record must share the face
+ * opposite the incoming face; tangential and radial neighbours intersect
+ * that incoming face along an edge and are therefore rejected.  This avoids
+ * the curved-grid nearest-centre shear observed in job 12128415. */
+static const double *ala_f1b_find_outward_remote_record(
+    const struct ala_f1b_element_pool *pool,int target_rank,
+    const double *current,const double *incoming,
+    const double **selected,int nselected,int *match_count)
+{
+    int i,a,b,c,shared,incoming_shared,overlap;
+    const double *candidate,*answer=NULL;
+
+    *match_count=0;
+    for(i=0;i<pool->remote_count;i++) {
+        candidate=pool->remote_records
+            +(size_t)i*ALA_F1B_RECORD_DOUBLES;
+        if((int)(candidate[0]+0.5)!=target_rank ||
+           ala_f1b_record_already_selected(candidate,selected,nselected))
+            continue;
+        shared=0;
+        overlap=0;
+        for(a=0;a<8;a++) {
+            for(b=0;b<8;b++)
+                if(ala_f1b_same_record_node(current,a,candidate,b))
+                    break;
+            if(b==8)
+                continue;
+            shared++;
+            if(incoming!=NULL) {
+                incoming_shared=0;
+                for(c=0;c<8;c++)
+                    if(ala_f1b_same_record_node(current,a,incoming,c)) {
+                        incoming_shared=1;
+                        break;
+                    }
+                overlap += incoming_shared;
+            }
+        }
+        if(shared!=4 || (incoming!=NULL && overlap!=0))
+            continue;
+        answer=candidate;
+        (*match_count)++;
+    }
+    return(*match_count==1 ? answer : NULL);
+}
+
+
 static int ala_f1b_node_index(const double *coord,const double *node_key,
     const double *coordinates,const int *keys,int n)
 {
@@ -704,22 +782,6 @@ static const double *ala_f1b_local_record(struct All_variables *E,int lev,
     index=((ey-1)*elx+(ex-1))*pool->support_layers
         +(ez-pool->support_min_ez);
     return(pool->local_records+(size_t)index*ALA_F1B_RECORD_DOUBLES);
-}
-
-
-static const double *ala_f1b_find_remote_record(
-    const struct ala_f1b_element_pool *pool,const double center[3])
-{
-    int i;
-    double candidate[3];
-    const double *record;
-    for(i=0;i<pool->remote_count;i++) {
-        record=pool->remote_records+(size_t)i*ALA_F1B_RECORD_DOUBLES;
-        ala_f1b_record_center(record,candidate);
-        if(ala_f1b_same_point(center,candidate))
-            return(record);
-    }
-    return(NULL);
 }
 
 

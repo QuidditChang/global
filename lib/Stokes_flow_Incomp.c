@@ -4797,6 +4797,27 @@ static int ala_find_halo_record(const double *records, int count,
 }
 
 
+static int ala_find_halo_record_exact(const double *records,int count,
+    int normal_layer,const double target_center[3])
+{
+    int i,match=-1,matches=0;
+    double center[3];
+
+    for(i=0;i<count;i++) {
+        if((int)(records[i*ALA_HALO_ELEMENT_RECORD_DOUBLES]+0.5)
+           !=normal_layer)
+            continue;
+        ala_halo_record_center(
+            records+i*ALA_HALO_ELEMENT_RECORD_DOUBLES,center);
+        if(ala_f1b_same_point(center,target_center)) {
+            match=i;
+            matches++;
+        }
+    }
+    return(matches==1 ? match : -1);
+}
+
+
 static double ala_velocity_block_schur_entry(struct All_variables *E,
     struct ala_pressure_preconditioner_cache *cache,
     int e1, int e2, int lev, int m)
@@ -4972,6 +4993,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     int local_ghost_elements,global_ghost_elements,ghost_index;
     int local_velocity_fallbacks,global_velocity_fallbacks;
     int ref,boundary_coordinate;
+    int f1b_local_entries,f1b_tangent_entries,f1b_radial_entries;
+    int f1b_matches,f1b_offset;
     int nrequest,target;
     int received_counts[ALA_PATCH_MPI_FACES];
     unsigned short *ghost_count[ALA_PATCH_MPI_FACES];
@@ -4991,6 +5014,8 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
     const char *f1b_expected_operator;
     const char *f1b_operator_description;
     const double *f1b_pressure_records[ALA_PATCH_MAX_ELEMENTS];
+    const double *f1b_current_record,*f1b_incoming_record;
+    const double *f1b_remote_record;
     struct ala_f1b_element_pool f1b_pool;
     struct ala_f1b_patch_stats f1b_local_stats,f1b_interface_stats;
     struct ala_f1b_failure_info f1b_failure;
@@ -5319,6 +5344,10 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                 for(ez=elz;ez>=shallow_min_ez;
                     ez-=ALA_PATCH_RADIAL_STRIDE) {
                     n=0;
+                    f1b_tangent_entries=min(horizontal_elements,
+                                             tangent_count-tangent+1);
+                    f1b_radial_entries=min(ALA_PATCH_RADIAL_ELEMENTS,
+                                            ez-shallow_min_ez+1);
                     for(q=0;q<overlap;q++)
                         for(t=0;t<horizontal_elements &&
                             tangent+t<=tangent_count;t++)
@@ -5350,8 +5379,20 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                     [b*interface_capacity+n]=e;
                                 ala_fill_halo_element_record(E,cache,e,lev,m,q,
                                     patch_records[n]);
+                                if(f1b_candidate) {
+                                    f1b_pressure_records[n]=
+                                        ala_f1b_local_record(
+                                            E,lev,&f1b_pool,e);
+                                    if(f1b_pressure_records[n]==NULL)
+                                        ala_f1b_abort_candidate(
+                                            E,"INTERFACE",b,
+                                            "missing_local_pressure_record",
+                                            NULL);
+                                }
                                 n++;
                             }
+                    f1b_local_entries=n;
+                    target=E->parallel.PROCESSOR[lev][m].pass[face+1];
                     for(q=0;q<overlap;q++)
                         for(t=0;t<horizontal_elements &&
                             tangent+t<=tangent_count;t++)
@@ -5367,14 +5408,67 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                                 }
                                 e=(ez-dz)+(ex-1)*elz
                                     +(ey-1)*elz*elx;
-                                ala_fill_halo_element_record(E,cache,e,lev,m,0,
-                                                             target_record);
-                                ala_halo_record_center(target_record,
-                                                       target_center);
-                                ghost_index=ala_find_halo_record(
-                                    cache->halo_recv_records[m][face],
-                                    cache->halo_recv_count[m][face],q,
-                                    target_center);
+                                if(f1b_candidate) {
+                                    f1b_offset=t*f1b_radial_entries+dz;
+                                    if(q==0) {
+                                        f1b_current_record=
+                                            f1b_pressure_records[f1b_offset];
+                                        f1b_incoming_record=NULL;
+                                    }
+                                    else {
+                                        f1b_current_record=
+                                            f1b_pressure_records[
+                                              f1b_local_entries
+                                              +(q-1)*f1b_tangent_entries
+                                                *f1b_radial_entries
+                                              +f1b_offset];
+                                        f1b_incoming_record=q==1
+                                            ? f1b_pressure_records[f1b_offset]
+                                            : f1b_pressure_records[
+                                                f1b_local_entries
+                                                +(q-2)*f1b_tangent_entries
+                                                  *f1b_radial_entries
+                                                +f1b_offset];
+                                    }
+                                    f1b_remote_record=
+                                        ala_f1b_find_outward_remote_record(
+                                            &f1b_pool,target,
+                                            f1b_current_record,
+                                            f1b_incoming_record,
+                                            f1b_pressure_records,n,
+                                            &f1b_matches);
+                                    if(f1b_remote_record==NULL) {
+                                        fprintf(stderr,
+                                            "STRICT_ALA_STAGE_F1B_HALO_"
+                                            "TOPOLOGY_FAILURE rank=%d "
+                                            "face=%d tangent=%d radial=%d "
+                                            "q=%d t=%d dz=%d target=%d "
+                                            "matches=%d\n",
+                                            E->parallel.me,face+1,tangent,ez,
+                                            q,t,dz,target,f1b_matches);
+                                        fflush(stderr);
+                                        ala_f1b_abort_candidate(
+                                            E,"INTERFACE",b,
+                                            "interface_halo_topology",NULL);
+                                    }
+                                    f1b_pressure_records[n]=f1b_remote_record;
+                                    ala_f1b_record_center(f1b_remote_record,
+                                                           target_center);
+                                    ghost_index=ala_find_halo_record_exact(
+                                        cache->halo_recv_records[m][face],
+                                        cache->halo_recv_count[m][face],q,
+                                        target_center);
+                                }
+                                else {
+                                    ala_fill_halo_element_record(
+                                        E,cache,e,lev,m,0,target_record);
+                                    ala_halo_record_center(target_record,
+                                                           target_center);
+                                    ghost_index=ala_find_halo_record(
+                                        cache->halo_recv_records[m][face],
+                                        cache->halo_recv_count[m][face],q,
+                                        target_center);
+                                }
                                 if(ghost_index<0) {
                                     fprintf(stderr,"rank=%d ALA halo match "
                                             "failed face=%d q=%d element=%d "
@@ -5400,18 +5494,6 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
                     cache->interface_face[m][b]=(unsigned char)face;
                     if(f1b_candidate) {
                         for(i=0;i<n;i++) {
-                            ref=cache->interface_elements[m]
-                                [b*interface_capacity+i];
-                            if(ref>0)
-                                f1b_pressure_records[i]=ala_f1b_local_record(
-                                    E,lev,&f1b_pool,ref);
-                            else {
-                                ala_halo_record_center(patch_records[i],
-                                                       target_center);
-                                f1b_pressure_records[i]=
-                                    ala_f1b_find_remote_record(&f1b_pool,
-                                                               target_center);
-                            }
                             if(f1b_pressure_records[i]==NULL)
                                 ala_f1b_abort_candidate(E,"INTERFACE",b,
                                     "missing_pressure_record",NULL);

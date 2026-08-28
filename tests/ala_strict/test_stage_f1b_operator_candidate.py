@@ -417,9 +417,27 @@ class F1bContractTests(unittest.TestCase):
         self.assertIn("nearest_other_distance=%.17e", candidate)
         self.assertIn("local_occurrences[index]++", candidate)
         self.assertIn("remote_occurrences[index]++", candidate)
+        self.assertIn("ala_f1b_find_outward_remote_record", candidate)
+        self.assertIn("shared!=4 || (incoming!=NULL && overlap!=0)",
+                      candidate)
+        self.assertIn("curved-grid nearest-centre shear", candidate)
         source = (ROOT / "lib/Stokes_flow_Incomp.c").read_text()
         self.assertIn("face+1,tangent,ez", source)
         self.assertNotIn("f1b_failure.interface_face=face+1", source)
+        self.assertIn("ala_find_halo_record_exact", source)
+        self.assertIn("if(f1b_candidate) {", source)
+        self.assertIn("interface_halo_topology", source)
+
+        # The legacy nearest-centre selector remains the BASE path; only the
+        # operator-consistent candidate uses exact topology and exact centre
+        # lookup, preserving the single-variable A/B contract.
+        selector = source.index("f1b_remote_record=")
+        candidate_branch = source[selector-1800:
+                                  source.index("if(ghost_index<0)", selector)]
+        self.assertIn("ala_f1b_find_outward_remote_record", candidate_branch)
+        self.assertIn("ala_find_halo_record_exact", candidate_branch)
+        self.assertIn("else {", candidate_branch)
+        self.assertIn("ala_find_halo_record(", candidate_branch)
 
         # Two three-element-wide strips share one face.  Global structured
         # node keys collapse that face to 7*7*3 physical nodes, exactly the
@@ -430,6 +448,27 @@ class F1bContractTests(unittest.TestCase):
                  for gx in range(3, 7) for gy in range(7) for gz in range(3)}
         self.assertEqual(len(left | right), 147)
         self.assertEqual(3 * len(left | right), 441)
+
+    def test_interface_topology_chain_rejects_tangential_shear(self):
+        def element(x, y, z=0):
+            return {(x+dx, y+dy, z+dz)
+                    for dx in (0, 1) for dy in (0, 1)
+                    for dz in (0, 1)}
+
+        local = element(3, 0)
+        q0 = element(2, 0)
+        outward = element(1, 0)
+        tangential_shear = element(2, 1)
+        radial_shear = element(2, 0, 1)
+        incoming_face = local & q0
+
+        self.assertEqual(len(incoming_face), 4)
+        self.assertEqual(len(q0 & outward), 4)
+        self.assertEqual(len((q0 & outward) & incoming_face), 0)
+        self.assertEqual(len(q0 & tangential_shear), 4)
+        self.assertEqual(len((q0 & tangential_shear) & incoming_face), 2)
+        self.assertEqual(len(q0 & radial_shear), 4)
+        self.assertEqual(len((q0 & radial_shear) & incoming_face), 2)
 
     def test_lsf_accepts_unpacked_pythia_egg_directory(self):
         lsf = (RUNS / "cmbhf_ALA_strict_stage_F1b.lsf").read_text()
