@@ -269,10 +269,14 @@ static int ala_f1b_add_node(const double *coord,const double *node_key,
 static int ala_f1b_measure_patch_topology(struct All_variables *E,
     const double **records,int np,struct ala_f1b_failure_info *failure)
 {
-    int p,a,q,rank,next,union_nodes=0,local_nodes=0,remote_nodes=0,shared=0;
+    int p,a,d,q,rank,next,index,nearest,side_nodes,other_nodes;
+    int union_nodes=0,local_nodes=0,remote_nodes=0,shared=0;
     int *union_keys,*local_keys,*remote_keys;
+    int *local_occurrences,*remote_occurrences;
     double *union_coord,*local_coord,*remote_coord;
-    const double *record,*coord,*key;
+    double center[3],distance2,same_min2,other_min2,candidate2,dx;
+    const double *record,*coord,*key,*side_coord,*other_coord;
+    const int *side_keys;
 
     union_keys=(int *)calloc(4*ALA_F1B_MAX_PATCH_NODES,sizeof(int));
     local_keys=(int *)calloc(4*ALA_F1B_MAX_PATCH_NODES,sizeof(int));
@@ -280,8 +284,11 @@ static int ala_f1b_measure_patch_topology(struct All_variables *E,
     union_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
     local_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
     remote_coord=(double *)calloc(3*ALA_F1B_MAX_PATCH_NODES,sizeof(double));
+    local_occurrences=(int *)calloc(ALA_F1B_MAX_PATCH_NODES,sizeof(int));
+    remote_occurrences=(int *)calloc(ALA_F1B_MAX_PATCH_NODES,sizeof(int));
     if(union_keys==NULL || local_keys==NULL || remote_keys==NULL ||
-       union_coord==NULL || local_coord==NULL || remote_coord==NULL)
+       union_coord==NULL || local_coord==NULL || remote_coord==NULL ||
+       local_occurrences==NULL || remote_occurrences==NULL)
         myerror(E,"Unable to allocate F1b topology workspace");
     failure->remote_rank_min=E->parallel.nproc;
     failure->remote_rank_max=-1;
@@ -318,6 +325,100 @@ static int ala_f1b_measure_patch_topology(struct All_variables *E,
             }
         }
     }
+    /* This path is reached only after the active conforming dimension was
+     * exceeded.  Emit the complete, bounded element/node census before the
+     * collective fail-fast so one HPC attempt can distinguish a bad halo
+     * selection from a legitimate cubed-sphere corner topology. */
+    for(p=0;p<np;p++) {
+        record=records[p];
+        if(record==NULL)
+            continue;
+        for(d=0;d<3;d++) {
+            center[d]=0.0;
+            for(a=0;a<8;a++)
+                center[d] += record[ALA_F1B_RECORD_COORD+3*a+d];
+            center[d] *= 0.125;
+        }
+        fprintf(stderr,"STRICT_ALA_STAGE_F1B_TOPOLOGY_RECORD "
+            "interface_face=%d interface_tangent=%d "
+            "interface_radial_element=%d record=%d side=%s "
+            "rank=%d ex=%d ey=%d ez=%d "
+            "cap=%d center_x=%.17e center_y=%.17e center_z=%.17e\n",
+            failure->interface_face,failure->interface_tangent,
+            failure->interface_radial_element,p,
+            (int)(record[0]+0.5)==E->parallel.me ? "LOCAL" : "REMOTE",
+            (int)(record[0]+0.5),(int)(record[1]+0.5),
+            (int)(record[2]+0.5),(int)(record[3]+0.5),
+            (int)(record[ALA_F1B_RECORD_NODE_KEY]+0.5),
+            center[0],center[1],center[2]);
+        for(a=0;a<8;a++) {
+            coord=record+ALA_F1B_RECORD_COORD+3*a;
+            key=record+ALA_F1B_RECORD_NODE_KEY+4*a;
+            if((int)(record[0]+0.5)==E->parallel.me) {
+                index=ala_f1b_node_index(coord,key,local_coord,local_keys,
+                                          local_nodes);
+                if(index>=0)
+                    local_occurrences[index]++;
+            }
+            else {
+                index=ala_f1b_node_index(coord,key,remote_coord,remote_keys,
+                                          remote_nodes);
+                if(index>=0)
+                    remote_occurrences[index]++;
+            }
+        }
+    }
+    for(rank=0;rank<2;rank++) {
+        if(rank==0) {
+            side_coord=local_coord; side_keys=local_keys;
+            side_nodes=local_nodes; other_coord=remote_coord;
+            other_nodes=remote_nodes;
+        }
+        else {
+            side_coord=remote_coord; side_keys=remote_keys;
+            side_nodes=remote_nodes; other_coord=local_coord;
+            other_nodes=local_nodes;
+        }
+        for(a=0;a<side_nodes;a++) {
+            nearest=-1; same_min2=INFINITY;
+            for(q=0;q<side_nodes;q++) {
+                if(q==a)
+                    continue;
+                distance2=0.0;
+                for(d=0;d<3;d++) {
+                    dx=side_coord[3*a+d]-side_coord[3*q+d];
+                    distance2 += dx*dx;
+                }
+                if(distance2<same_min2) {
+                    same_min2=distance2; nearest=q;
+                }
+            }
+            index=-1; other_min2=INFINITY;
+            for(q=0;q<other_nodes;q++) {
+                candidate2=0.0;
+                for(d=0;d<3;d++) {
+                    dx=side_coord[3*a+d]-other_coord[3*q+d];
+                    candidate2 += dx*dx;
+                }
+                if(candidate2<other_min2) {
+                    other_min2=candidate2; index=q;
+                }
+            }
+            fprintf(stderr,"STRICT_ALA_STAGE_F1B_TOPOLOGY_NODE "
+                "side=%s index=%d cap=%d gx=%d gy=%d gz=%d "
+                "x=%.17e y=%.17e z=%.17e occurrences=%d "
+                "nearest_same_index=%d nearest_same_distance=%.17e "
+                "nearest_other_index=%d nearest_other_distance=%.17e\n",
+                rank==0 ? "LOCAL" : "REMOTE",a,
+                side_keys[4*a],side_keys[4*a+1],side_keys[4*a+2],
+                side_keys[4*a+3],side_coord[3*a],side_coord[3*a+1],
+                side_coord[3*a+2],rank==0 ? local_occurrences[a]
+                                          : remote_occurrences[a],
+                nearest,nearest>=0 ? sqrt(same_min2) : INFINITY,
+                index,index>=0 ? sqrt(other_min2) : INFINITY);
+        }
+    }
+    fflush(stderr);
     for(a=0;a<local_nodes;a++) {
         for(q=0;q<remote_nodes;q++)
             if((local_keys[4*a]==remote_keys[4*q] &&
@@ -337,11 +438,13 @@ static int ala_f1b_measure_patch_topology(struct All_variables *E,
         failure->remote_rank_min=-1;
     free(union_keys); free(local_keys); free(remote_keys);
     free(union_coord); free(local_coord); free(remote_coord);
+    free(local_occurrences); free(remote_occurrences);
     return(1);
 
 topology_bound:
     free(union_keys); free(local_keys); free(remote_keys);
     free(union_coord); free(local_coord); free(remote_coord);
+    free(local_occurrences); free(remote_occurrences);
     return(0);
 }
 
@@ -788,7 +891,8 @@ static int ala_f1b_build_operator_consistent_patch(
     const double **pressure_records,int np,
     double matrix[ALA_PATCH_MAX_ELEMENTS][ALA_PATCH_MAX_ELEMENTS],
     struct ala_f1b_patch_stats *stats,
-    struct ala_f1b_failure_info *failure,int replay_category)
+    struct ala_f1b_failure_info *failure,int replay_category,
+    int interface_face,int interface_tangent,int interface_radial_element)
 {
     int p,a,d,i,j,k,r,nv,nused,map[ALA_VANKA_DOF];
     int used[1024][4],vkey[4*ALA_F1B_MAX_VELOCITY_DOF];
@@ -802,9 +906,9 @@ static int ala_f1b_build_operator_consistent_patch(
 
     memset(failure,0,sizeof(*failure));
     failure->pivot_index=-1;
-    failure->interface_face=-1;
-    failure->interface_tangent=-1;
-    failure->interface_radial_element=-1;
+    failure->interface_face=interface_face;
+    failure->interface_tangent=interface_tangent;
+    failure->interface_radial_element=interface_radial_element;
     if(replay_category==1) {
         failure->topology_expected_union_nodes=
             (2*E->control.ala_shallow_patch_mpi_overlap+1)

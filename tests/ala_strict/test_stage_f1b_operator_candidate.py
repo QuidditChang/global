@@ -411,8 +411,15 @@ class F1bContractTests(unittest.TestCase):
         self.assertIn("ala_f1b_measure_patch_topology", candidate)
         self.assertIn("ALA_F1B_FAILURE_INTERFACE_TOPOLOGY", candidate)
         self.assertIn("topology_expected_velocity_dofs", candidate)
-        self.assertIn("f1b_failure.interface_face=face+1", (
-            ROOT / "lib/Stokes_flow_Incomp.c").read_text())
+        self.assertIn("STRICT_ALA_STAGE_F1B_TOPOLOGY_RECORD", candidate)
+        self.assertIn("STRICT_ALA_STAGE_F1B_TOPOLOGY_NODE", candidate)
+        self.assertIn("nearest_same_distance=%.17e", candidate)
+        self.assertIn("nearest_other_distance=%.17e", candidate)
+        self.assertIn("local_occurrences[index]++", candidate)
+        self.assertIn("remote_occurrences[index]++", candidate)
+        source = (ROOT / "lib/Stokes_flow_Incomp.c").read_text()
+        self.assertIn("face+1,tangent,ez", source)
+        self.assertNotIn("f1b_failure.interface_face=face+1", source)
 
         # Two three-element-wide strips share one face.  Global structured
         # node keys collapse that face to 7*7*3 physical nodes, exactly the
