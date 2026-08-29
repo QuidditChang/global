@@ -66,6 +66,26 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
 static double initial_vel_residual(struct All_variables *,double **,double **,
                                    double **,double);
 #define ALA_PATCH_MPI_FACES 4
+struct ala_f1b_k_replay_forensic {
+    int valid;
+    int row;
+    int component;
+    int incident_elements;
+    double completed_relative_defect;
+    double element_sum_relative_defect;
+    double diagonal_completion_action_relative;
+    double actual_action_norm;
+    double completed_action_norm;
+    double element_sum_action_norm;
+    double maximum_absolute_error;
+    double maximum_error_relative_to_action_rms;
+    double coordinate[3];
+    double actual_at_maximum;
+    double completed_at_maximum;
+    double element_sum_at_maximum;
+    double completed_diagonal_at_maximum;
+    double element_diagonal_at_maximum;
+};
 struct ala_pressure_preconditioner_cache {
     int patch_capacity;
     int interface_capacity;
@@ -141,6 +161,7 @@ struct ala_pressure_preconditioner_cache {
     double f1b_interface_bt_restriction_relative_defect;
     double f1b_local_bilinear_transpose_relative_defect;
     double f1b_interface_bilinear_transpose_relative_defect;
+    struct ala_f1b_k_replay_forensic f1b_k_replay_forensic[2];
     double f1b_peak_temporary_bytes;
     double f1b_mpi_payload_bytes;
     double f1b_estimated_dense_work;
@@ -5640,12 +5661,14 @@ static void build_ala_shallow_patch_cache(struct All_variables *E,
             f1b_interface_stats.max_diagonal_completion_relative);
         cache->f1b_local_k_replay_relative_defect=
             ala_f1b_replay_global_k(E,lev,0,
+                &cache->f1b_k_replay_forensic[0],
                 &cache->f1b_local_output_replica_relative_difference,
                 &cache->f1b_local_b_restriction_relative_defect,
                 &cache->f1b_local_bt_restriction_relative_defect,
                 &cache->f1b_local_bilinear_transpose_relative_defect);
         cache->f1b_interface_k_replay_relative_defect=
             ala_f1b_replay_global_k(E,lev,1,
+                &cache->f1b_k_replay_forensic[1],
                 &cache->f1b_interface_output_replica_relative_difference,
                 &cache->f1b_interface_b_restriction_relative_defect,
                 &cache->f1b_interface_bt_restriction_relative_defect,

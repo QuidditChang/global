@@ -61,8 +61,10 @@ struct ala_f1b_replay_snapshot {
     double *matrix;
     double *B;
     double coordinates[3*ALA_F1B_MAX_VELOCITY_DOF];
+    double element_diagonal[ALA_F1B_MAX_VELOCITY_DOF];
     double pressure_centers[3*ALA_PATCH_MAX_ELEMENTS];
     unsigned char components[ALA_F1B_MAX_VELOCITY_DOF];
+    int incident_elements;
 };
 
 enum ala_f1b_failure_reason {
@@ -961,6 +963,7 @@ static int ala_f1b_build_operator_consistent_patch(
     unsigned char vcomp[ALA_F1B_MAX_VELOCITY_DOF];
     double vcoord[3*ALA_F1B_MAX_VELOCITY_DOF];
     double vdiag[ALA_F1B_MAX_VELOCITY_DOF];
+    double element_diagonal[ALA_F1B_MAX_VELOCITY_DOF];
     double *K,*factor,*B,*rhs,*solution;
     double bnorm2,rnorm2,sum,numerator,denominator,symmetry,min_pivot;
     double diagonal_completion;
@@ -1115,6 +1118,7 @@ static int ala_f1b_build_operator_consistent_patch(
     failure->diagonal_difference_max=-1.0e300;
     for(i=0;i<nv;i++) {
         double difference=K[i*nv+i]-vdiag[i];
+        element_diagonal[i]=K[i*nv+i];
         diagonal_completion=max(diagonal_completion,
             fabs(difference)/max(vdiag[i],1.0e-300));
         failure->diagonal_difference_min=min(
@@ -1194,6 +1198,8 @@ static int ala_f1b_build_operator_consistent_patch(
                (size_t)nv*nv*sizeof(double));
         memcpy(ala_f1b_replay_snapshot[replay_category].coordinates,vcoord,
                (size_t)3*nv*sizeof(double));
+        memcpy(ala_f1b_replay_snapshot[replay_category].element_diagonal,
+               element_diagonal,(size_t)nv*sizeof(double));
         memcpy(ala_f1b_replay_snapshot[replay_category].components,vcomp,
                (size_t)nv*sizeof(unsigned char));
         memcpy(ala_f1b_replay_snapshot[replay_category].B,B,
@@ -1203,6 +1209,7 @@ static int ala_f1b_build_operator_consistent_patch(
                 ala_f1b_replay_snapshot[replay_category].pressure_centers+3*p);
         ala_f1b_replay_snapshot[replay_category].vdim=nv;
         ala_f1b_replay_snapshot[replay_category].pdim=np;
+        ala_f1b_replay_snapshot[replay_category].incident_elements=nused;
         ala_f1b_replay_snapshot[replay_category].valid=1;
     }
     free(K); free(factor); free(B); free(rhs); free(solution);
@@ -1253,7 +1260,8 @@ static int ala_f1b_find_local_element(struct All_variables *E,int lev,int m,
 
 
 static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
-    int replay_category,double *replica_difference,double *b_defect,
+    int replay_category,struct ala_f1b_k_replay_forensic *forensic,
+    double *replica_difference,double *b_defect,
     double *bt_defect,double *bilinear_defect)
 {
     int m,i,j,p,node,e,eq,owner,local_owner,nv,np,neq,npno;
@@ -1263,6 +1271,8 @@ static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
     double x[ALA_F1B_MAX_VELOCITY_DOF];
     double pressure_x[ALA_PATCH_MAX_ELEMENTS];
     double numerator=0.0,denominator=0.0,sum,actual;
+    double element_numerator=0.0,completed_norm2=0.0,element_norm2=0.0;
+    double completion_norm2=0.0,element_sum,error,maximum_error=0.0;
     double b_numerator=0.0,b_denominator=0.0;
     double bt_numerator=0.0,bt_denominator=0.0;
     double bilinear_lhs=0.0,bilinear_rhs=0.0;
@@ -1274,6 +1284,9 @@ static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
 
     if(replay_category<0 || replay_category>=2)
         return(INFINITY);
+    memset(forensic,0,sizeof(*forensic));
+    forensic->row=-1;
+    forensic->component=-1;
     snapshot=ala_f1b_replay_snapshot+replay_category;
     local_owner=snapshot->valid ? E->parallel.me
                                                : E->parallel.nproc;
@@ -1363,14 +1376,77 @@ static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
             sum=0.0;
             for(j=0;j<nv;j++)
                 sum += snapshot->matrix[i*nv+j]*x[j];
+            element_sum=sum+
+                (snapshot->element_diagonal[i]
+                 -snapshot->matrix[i*nv+i])*x[i];
             numerator += (sum-actual)*(sum-actual);
+            element_numerator +=
+                (element_sum-actual)*(element_sum-actual);
             denominator += actual*actual;
+            completed_norm2 += sum*sum;
+            element_norm2 += element_sum*element_sum;
+            completion_norm2 += (sum-element_sum)*(sum-element_sum);
+            error=fabs(sum-actual);
+            if(error>maximum_error) {
+                maximum_error=error;
+                forensic->row=i;
+                forensic->component=components[i];
+                memcpy(forensic->coordinate,coordinates+3*i,
+                       3*sizeof(double));
+                forensic->actual_at_maximum=actual;
+                forensic->completed_at_maximum=sum;
+                forensic->element_sum_at_maximum=element_sum;
+                forensic->completed_diagonal_at_maximum=
+                    snapshot->matrix[i*nv+i];
+                forensic->element_diagonal_at_maximum=
+                    snapshot->element_diagonal[i];
+            }
         }
     }
     if(E->parallel.me==owner) {
-        numerator=sqrt(numerator/max(denominator,1.0e-300));
+        forensic->valid=1;
+        forensic->incident_elements=snapshot->incident_elements;
+        forensic->completed_relative_defect=
+            sqrt(numerator/max(denominator,1.0e-300));
+        forensic->element_sum_relative_defect=
+            sqrt(element_numerator/max(denominator,1.0e-300));
+        forensic->diagonal_completion_action_relative=
+            sqrt(completion_norm2/max(denominator,1.0e-300));
+        forensic->actual_action_norm=sqrt(denominator);
+        forensic->completed_action_norm=sqrt(completed_norm2);
+        forensic->element_sum_action_norm=sqrt(element_norm2);
+        forensic->maximum_absolute_error=maximum_error;
+        forensic->maximum_error_relative_to_action_rms=
+            maximum_error/max(forensic->actual_action_norm/sqrt((double)nv),
+                              1.0e-300);
+        numerator=forensic->completed_relative_defect;
+        fprintf(stderr,"STRICT_ALA_STAGE_F1B_K_REPLAY_FORENSIC "
+            "category=%s completed_defect=%.17e element_sum_defect=%.17e "
+            "diagonal_completion_action_relative=%.17e "
+            "actual_action_norm=%.17e completed_action_norm=%.17e "
+            "element_sum_action_norm=%.17e incident_elements=%d "
+            "max_error_row=%d component=%d x=%.17e y=%.17e z=%.17e "
+            "max_abs_error=%.17e max_error_action_rms_relative=%.17e "
+            "actual=%.17e completed=%.17e element_sum=%.17e "
+            "completed_diagonal=%.17e element_diagonal=%.17e\n",
+            replay_category==0 ? "LOCAL" : "INTERFACE",
+            forensic->completed_relative_defect,
+            forensic->element_sum_relative_defect,
+            forensic->diagonal_completion_action_relative,
+            forensic->actual_action_norm,forensic->completed_action_norm,
+            forensic->element_sum_action_norm,forensic->incident_elements,
+            forensic->row,forensic->component,forensic->coordinate[0],
+            forensic->coordinate[1],forensic->coordinate[2],
+            forensic->maximum_absolute_error,
+            forensic->maximum_error_relative_to_action_rms,
+            forensic->actual_at_maximum,forensic->completed_at_maximum,
+            forensic->element_sum_at_maximum,
+            forensic->completed_diagonal_at_maximum,
+            forensic->element_diagonal_at_maximum);
+        fflush(stderr);
     }
     MPI_Bcast(&numerator,1,MPI_DOUBLE,owner,E->parallel.world);
+    MPI_Bcast(forensic,sizeof(*forensic),MPI_BYTE,owner,E->parallel.world);
 
     /* B_i x = R_p B E_v x, using the production continuity operator. */
     assemble_div_rho_u(E,u,pressure_action,lev);
@@ -1565,6 +1641,34 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
         "  \"new_mpi_payload_bytes_max_per_rank\": %.17e,\n"
         "  \"diagonal_completion_relative_max\": %.17e,\n"
         "  \"Kgamma_replay_relative_defect\": %.17e,\n"
+        "  \"Kgamma_replay_forensics\": {\n"
+        "    \"LOCAL\": {\"valid\": %s, \"incident_elements\": %d, "
+        "\"completed_relative_defect\": %.17e, "
+        "\"element_sum_relative_defect\": %.17e, "
+        "\"diagonal_completion_action_relative\": %.17e, "
+        "\"actual_action_norm\": %.17e, \"completed_action_norm\": %.17e, "
+        "\"element_sum_action_norm\": %.17e, \"maximum_error_row\": %d, "
+        "\"component\": %d, \"x\": %.17e, \"y\": %.17e, \"z\": %.17e, "
+        "\"maximum_absolute_error\": %.17e, "
+        "\"maximum_error_relative_to_action_rms\": %.17e, "
+        "\"actual_at_maximum\": %.17e, \"completed_at_maximum\": %.17e, "
+        "\"element_sum_at_maximum\": %.17e, "
+        "\"completed_diagonal_at_maximum\": %.17e, "
+        "\"element_diagonal_at_maximum\": %.17e},\n"
+        "    \"INTERFACE\": {\"valid\": %s, \"incident_elements\": %d, "
+        "\"completed_relative_defect\": %.17e, "
+        "\"element_sum_relative_defect\": %.17e, "
+        "\"diagonal_completion_action_relative\": %.17e, "
+        "\"actual_action_norm\": %.17e, \"completed_action_norm\": %.17e, "
+        "\"element_sum_action_norm\": %.17e, \"maximum_error_row\": %d, "
+        "\"component\": %d, \"x\": %.17e, \"y\": %.17e, \"z\": %.17e, "
+        "\"maximum_absolute_error\": %.17e, "
+        "\"maximum_error_relative_to_action_rms\": %.17e, "
+        "\"actual_at_maximum\": %.17e, \"completed_at_maximum\": %.17e, "
+        "\"element_sum_at_maximum\": %.17e, "
+        "\"completed_diagonal_at_maximum\": %.17e, "
+        "\"element_diagonal_at_maximum\": %.17e}\n"
+        "  },\n"
         "  \"production_output_replica_relative_difference\": %.17e,\n"
         "  \"production_output_replica_tolerance\": %.17e,\n"
         "  \"B_restriction_relative_defect\": %.17e,\n"
@@ -1589,6 +1693,46 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
         global_max[9],global_max[3],retained_cache_bytes,
         retained_cache_bytes,1.0,projected_ratio,global_max[4],global_max[2],
         global_max[5],
+        cache->f1b_k_replay_forensic[0].valid ? "true" : "false",
+        cache->f1b_k_replay_forensic[0].incident_elements,
+        cache->f1b_k_replay_forensic[0].completed_relative_defect,
+        cache->f1b_k_replay_forensic[0].element_sum_relative_defect,
+        cache->f1b_k_replay_forensic[0].diagonal_completion_action_relative,
+        cache->f1b_k_replay_forensic[0].actual_action_norm,
+        cache->f1b_k_replay_forensic[0].completed_action_norm,
+        cache->f1b_k_replay_forensic[0].element_sum_action_norm,
+        cache->f1b_k_replay_forensic[0].row,
+        cache->f1b_k_replay_forensic[0].component,
+        cache->f1b_k_replay_forensic[0].coordinate[0],
+        cache->f1b_k_replay_forensic[0].coordinate[1],
+        cache->f1b_k_replay_forensic[0].coordinate[2],
+        cache->f1b_k_replay_forensic[0].maximum_absolute_error,
+        cache->f1b_k_replay_forensic[0].maximum_error_relative_to_action_rms,
+        cache->f1b_k_replay_forensic[0].actual_at_maximum,
+        cache->f1b_k_replay_forensic[0].completed_at_maximum,
+        cache->f1b_k_replay_forensic[0].element_sum_at_maximum,
+        cache->f1b_k_replay_forensic[0].completed_diagonal_at_maximum,
+        cache->f1b_k_replay_forensic[0].element_diagonal_at_maximum,
+        cache->f1b_k_replay_forensic[1].valid ? "true" : "false",
+        cache->f1b_k_replay_forensic[1].incident_elements,
+        cache->f1b_k_replay_forensic[1].completed_relative_defect,
+        cache->f1b_k_replay_forensic[1].element_sum_relative_defect,
+        cache->f1b_k_replay_forensic[1].diagonal_completion_action_relative,
+        cache->f1b_k_replay_forensic[1].actual_action_norm,
+        cache->f1b_k_replay_forensic[1].completed_action_norm,
+        cache->f1b_k_replay_forensic[1].element_sum_action_norm,
+        cache->f1b_k_replay_forensic[1].row,
+        cache->f1b_k_replay_forensic[1].component,
+        cache->f1b_k_replay_forensic[1].coordinate[0],
+        cache->f1b_k_replay_forensic[1].coordinate[1],
+        cache->f1b_k_replay_forensic[1].coordinate[2],
+        cache->f1b_k_replay_forensic[1].maximum_absolute_error,
+        cache->f1b_k_replay_forensic[1].maximum_error_relative_to_action_rms,
+        cache->f1b_k_replay_forensic[1].actual_at_maximum,
+        cache->f1b_k_replay_forensic[1].completed_at_maximum,
+        cache->f1b_k_replay_forensic[1].element_sum_at_maximum,
+        cache->f1b_k_replay_forensic[1].completed_diagonal_at_maximum,
+        cache->f1b_k_replay_forensic[1].element_diagonal_at_maximum,
         global_max[6],ALA_F1B_OUTPUT_REPLICA_TOLERANCE,
         global_max[7],global_max[8],global_max[10],
         ALA_F1B_K_RESTRICTION_TOLERANCE,
