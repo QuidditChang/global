@@ -16,6 +16,18 @@
 #define ALA_F1B_RECORD_GLOBAL_DIAG (ALA_F1B_RECORD_FIXED+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_K (ALA_F1B_RECORD_GLOBAL_DIAG+ALA_VANKA_DOF)
 #define ALA_F1B_RECORD_DOUBLES (ALA_F1B_RECORD_K+ALA_VANKA_DOF*ALA_VANKA_DOF)
+#define ALA_F1B_NODE_STENCIL 42
+#define ALA_F1B_NODE_RECORD_KEY 1
+#define ALA_F1B_NODE_RECORD_COORD (ALA_F1B_NODE_RECORD_KEY+4)
+#define ALA_F1B_NODE_RECORD_COLUMN_KEY (ALA_F1B_NODE_RECORD_COORD+3)
+#define ALA_F1B_NODE_RECORD_COLUMN_COORD \
+    (ALA_F1B_NODE_RECORD_COLUMN_KEY+4*ALA_F1B_NODE_STENCIL)
+#define ALA_F1B_NODE_RECORD_COLUMN_COMPONENT \
+    (ALA_F1B_NODE_RECORD_COLUMN_COORD+3*ALA_F1B_NODE_STENCIL)
+#define ALA_F1B_NODE_RECORD_COEFFICIENT \
+    (ALA_F1B_NODE_RECORD_COLUMN_COMPONENT+ALA_F1B_NODE_STENCIL)
+#define ALA_F1B_NODE_RECORD_DOUBLES \
+    (ALA_F1B_NODE_RECORD_COEFFICIENT+3*ALA_F1B_NODE_STENCIL)
 /* Absolute diagnostic workspace bound over two completely disjoint strips.
  * A conforming interface is smaller: (2*overlap+1)*(width+1)*(radial+1)*3.
  * The active 6/3/2 case therefore expects 7*7*3*3=441. */
@@ -35,6 +47,10 @@ struct ala_f1b_element_pool {
     int support_layers;
     double *local_records;
     double *remote_records;
+    int local_node_count;
+    int remote_node_count;
+    double *local_node_records;
+    double *remote_node_records;
     double temporary_bytes;
     double resident_bytes;
     double mpi_payload_bytes;
@@ -59,6 +75,7 @@ struct ala_f1b_replay_snapshot {
     int vdim;
     int pdim;
     double *matrix;
+    double *element_matrix;
     double *B;
     double coordinates[3*ALA_F1B_MAX_VELOCITY_DOF];
     double element_diagonal[ALA_F1B_MAX_VELOCITY_DOF];
@@ -660,10 +677,99 @@ static int ala_f1b_send_record_to(struct All_variables *E,
 }
 
 
+static void ala_f1b_fill_node_record(struct All_variables *E,int lev,int m,
+    int node,const int *eq_node,const unsigned char *eq_component,
+    double *record)
+{
+    int d,i,column_eq,column_node,ix,iy,iz;
+    int *columns;
+    higher_precision *coefficient[3];
+    const int neq=E->lmesh.NEQ[lev];
+
+    memset(record,0,ALA_F1B_NODE_RECORD_DOUBLES*sizeof(double));
+    iz=(node-1)%E->lmesh.NOZ[lev]+1;
+    ix=((node-1)/E->lmesh.NOZ[lev])%E->lmesh.NOX[lev]+1;
+    iy=(node-1)/(E->lmesh.NOZ[lev]*E->lmesh.NOX[lev])+1;
+    record[0]=(double)E->parallel.me;
+    record[ALA_F1B_NODE_RECORD_KEY]=(double)E->sphere.capid[m];
+    record[ALA_F1B_NODE_RECORD_KEY+1]=(double)(E->lmesh.EXS[lev]+ix);
+    record[ALA_F1B_NODE_RECORD_KEY+2]=(double)(E->lmesh.EYS[lev]+iy);
+    record[ALA_F1B_NODE_RECORD_KEY+3]=(double)(E->lmesh.EZS[lev]+iz);
+    for(d=0;d<3;d++)
+        record[ALA_F1B_NODE_RECORD_COORD+d]=E->X[lev][m][d+1][node];
+    columns=E->Node_map[lev][m]+(node-1)*ALA_F1B_NODE_STENCIL;
+    coefficient[0]=E->Eqn_k1[lev][m]
+        +(node-1)*ALA_F1B_NODE_STENCIL;
+    coefficient[1]=E->Eqn_k2[lev][m]
+        +(node-1)*ALA_F1B_NODE_STENCIL;
+    coefficient[2]=E->Eqn_k3[lev][m]
+        +(node-1)*ALA_F1B_NODE_STENCIL;
+    for(i=0;i<ALA_F1B_NODE_STENCIL;i++) {
+        column_eq=columns[i];
+        record[ALA_F1B_NODE_RECORD_COLUMN_COMPONENT+i]=-1.0;
+        if(column_eq>=0 && column_eq<neq && eq_node[column_eq]>0) {
+            column_node=eq_node[column_eq];
+            iz=(column_node-1)%E->lmesh.NOZ[lev]+1;
+            ix=((column_node-1)/E->lmesh.NOZ[lev])
+                %E->lmesh.NOX[lev]+1;
+            iy=(column_node-1)/(E->lmesh.NOZ[lev]
+                *E->lmesh.NOX[lev])+1;
+            record[ALA_F1B_NODE_RECORD_COLUMN_KEY+4*i]=
+                (double)E->sphere.capid[m];
+            record[ALA_F1B_NODE_RECORD_COLUMN_KEY+4*i+1]=
+                (double)(E->lmesh.EXS[lev]+ix);
+            record[ALA_F1B_NODE_RECORD_COLUMN_KEY+4*i+2]=
+                (double)(E->lmesh.EYS[lev]+iy);
+            record[ALA_F1B_NODE_RECORD_COLUMN_KEY+4*i+3]=
+                (double)(E->lmesh.EZS[lev]+iz);
+            for(d=0;d<3;d++)
+                record[ALA_F1B_NODE_RECORD_COLUMN_COORD+3*i+d]=
+                    E->X[lev][m][d+1][column_node];
+            record[ALA_F1B_NODE_RECORD_COLUMN_COMPONENT+i]=
+                (double)eq_component[column_eq];
+        }
+        for(d=0;d<3;d++)
+            record[ALA_F1B_NODE_RECORD_COEFFICIENT
+                   +d*ALA_F1B_NODE_STENCIL+i]=(double)coefficient[d][i];
+    }
+}
+
+
+static int ala_f1b_send_node_record_to(struct All_variables *E,
+    const double *record,int lev,int target,const int *neighbors,int overlap,
+    int nox,int noy)
+{
+    int f,g,direct=0,two_hop=0;
+    int ix=(int)(record[ALA_F1B_NODE_RECORD_KEY+1]+0.5)
+        -E->lmesh.EXS[lev];
+    int iy=(int)(record[ALA_F1B_NODE_RECORD_KEY+2]+0.5)
+        -E->lmesh.EYS[lev];
+    int face_hit[4];
+    face_hit[0]=(ix<=overlap+1);
+    face_hit[1]=(ix>nox-overlap-1);
+    face_hit[2]=(iy<=overlap+1);
+    face_hit[3]=(iy>noy-overlap-1);
+    for(f=0;f<4;f++)
+        if(neighbors[E->parallel.me*4+f]==target && face_hit[f])
+            direct=1;
+    if(direct)
+        return(1);
+    for(f=0;f<4;f++)
+        for(g=0;g<4;g++)
+            if(neighbors[neighbors[E->parallel.me*4+f]*4+g]==target)
+                two_hop=1;
+    if(!two_hop || target==E->parallel.me)
+        return(0);
+    return((face_hit[0]||face_hit[1]) && (face_hit[2]||face_hit[3]));
+}
+
+
 static void ala_f1b_build_element_pool(struct All_variables *E,int lev,int m,
     int shallow_min_ez,struct ala_f1b_element_pool *pool)
 {
     int ex,ey,ez,e,i,t,f,nproc,elx,ely,elz,overlap;
+    int node,nox,noy,noz,neq,*eq_node;
+    unsigned char *eq_component;
     int *neighbors,*send_records,*recv_records,*send_counts,*recv_counts;
     int *send_displs,*recv_displs,total_send,total_recv,cursor;
     double *send_buffer;
@@ -760,6 +866,101 @@ static void ala_f1b_build_element_pool(struct All_variables *E,int lev,int m,
         *ALA_F1B_RECORD_DOUBLES*sizeof(double);
     pool->mpi_payload_bytes=(double)total_send*sizeof(double);
     free(send_buffer);
+
+    /* Preserve the exact sparse nodal operator used by
+     * n_assemble_del2_u.  Element records remain the pressure/B source and
+     * an independent replay control, but no longer approximate K_gamma. */
+    nox=E->lmesh.NOX[lev];
+    noy=E->lmesh.NOY[lev];
+    noz=E->lmesh.NOZ[lev];
+    neq=E->lmesh.NEQ[lev];
+    eq_node=(int *)calloc(max(neq,1),sizeof(int));
+    eq_component=(unsigned char *)calloc(max(neq,1),sizeof(unsigned char));
+    if(eq_node==NULL || eq_component==NULL)
+        myerror(E,"Unable to allocate F1b nodal equation map");
+    for(node=1;node<=E->lmesh.NNO[lev];node++)
+        for(i=0;i<3;i++) {
+            e=E->ID[lev][m][node].doff[i+1];
+            if(e>=0 && e<neq) {
+                eq_node[e]=node;
+                eq_component[e]=(unsigned char)i;
+            }
+        }
+    pool->local_node_count=nox*noy*(noz-pool->support_min_ez+1);
+    pool->local_node_records=(double *)calloc(
+        (size_t)max(pool->local_node_count,1)*ALA_F1B_NODE_RECORD_DOUBLES,
+        sizeof(double));
+    if(pool->local_node_records==NULL)
+        myerror(E,"Unable to allocate F1b local nodal records");
+    i=0;
+    for(ey=1;ey<=noy;ey++)
+        for(ex=1;ex<=nox;ex++)
+            for(ez=pool->support_min_ez;ez<=noz;ez++) {
+                node=ez+(ex-1)*noz+(ey-1)*noz*nox;
+                ala_f1b_fill_node_record(E,lev,m,node,eq_node,eq_component,
+                    pool->local_node_records
+                      +(size_t)i*ALA_F1B_NODE_RECORD_DOUBLES);
+                i++;
+            }
+    memset(send_records,0,(size_t)nproc*sizeof(int));
+    memset(recv_records,0,(size_t)nproc*sizeof(int));
+    memset(send_counts,0,(size_t)nproc*sizeof(int));
+    memset(recv_counts,0,(size_t)nproc*sizeof(int));
+    memset(send_displs,0,(size_t)nproc*sizeof(int));
+    memset(recv_displs,0,(size_t)nproc*sizeof(int));
+    for(t=0;t<nproc;t++)
+        if(t!=E->parallel.me)
+            for(i=0;i<pool->local_node_count;i++) {
+                record=pool->local_node_records
+                    +(size_t)i*ALA_F1B_NODE_RECORD_DOUBLES;
+                if(ala_f1b_send_node_record_to(E,record,lev,t,neighbors,
+                                                overlap,nox,noy))
+                    send_records[t]++;
+            }
+    MPI_Alltoall(send_records,1,MPI_INT,recv_records,1,MPI_INT,
+                 E->parallel.world);
+    total_send=total_recv=0;
+    for(t=0;t<nproc;t++) {
+        send_displs[t]=total_send;
+        recv_displs[t]=total_recv;
+        send_counts[t]=send_records[t]*ALA_F1B_NODE_RECORD_DOUBLES;
+        recv_counts[t]=recv_records[t]*ALA_F1B_NODE_RECORD_DOUBLES;
+        total_send += send_counts[t];
+        total_recv += recv_counts[t];
+    }
+    send_buffer=(double *)calloc(max(total_send,1),sizeof(double));
+    pool->remote_node_records=(double *)calloc(max(total_recv,1),
+                                                sizeof(double));
+    if(send_buffer==NULL || pool->remote_node_records==NULL)
+        myerror(E,"Unable to allocate F1b nodal halo records");
+    for(t=0;t<nproc;t++) {
+        cursor=send_displs[t];
+        for(i=0;i<pool->local_node_count;i++) {
+            record=pool->local_node_records
+                +(size_t)i*ALA_F1B_NODE_RECORD_DOUBLES;
+            if(ala_f1b_send_node_record_to(E,record,lev,t,neighbors,
+                                            overlap,nox,noy)) {
+                memcpy(send_buffer+cursor,record,
+                       ALA_F1B_NODE_RECORD_DOUBLES*sizeof(double));
+                cursor += ALA_F1B_NODE_RECORD_DOUBLES;
+            }
+        }
+    }
+    MPI_Alltoallv(send_buffer,send_counts,send_displs,MPI_DOUBLE,
+                  pool->remote_node_records,recv_counts,recv_displs,
+                  MPI_DOUBLE,E->parallel.world);
+    pool->remote_node_count=total_recv/ALA_F1B_NODE_RECORD_DOUBLES;
+    pool->temporary_bytes +=
+        (double)(pool->local_node_count+pool->remote_node_count)
+        *ALA_F1B_NODE_RECORD_DOUBLES*sizeof(double)
+        +(double)total_send*sizeof(double);
+    pool->resident_bytes +=
+        (double)(pool->local_node_count+pool->remote_node_count)
+        *ALA_F1B_NODE_RECORD_DOUBLES*sizeof(double);
+    pool->mpi_payload_bytes += (double)total_send*sizeof(double);
+    free(send_buffer);
+    free(eq_node);
+    free(eq_component);
     free(neighbors);
     free(send_records);
     free(recv_records);
@@ -959,12 +1160,13 @@ static int ala_f1b_build_operator_consistent_patch(
     int interface_face,int interface_tangent,int interface_radial_element)
 {
     int p,a,d,i,j,k,r,nv,nused,map[ALA_VANKA_DOF];
+    int row_index,column_index,column_component;
     int used[1024][4],vkey[4*ALA_F1B_MAX_VELOCITY_DOF];
     unsigned char vcomp[ALA_F1B_MAX_VELOCITY_DOF];
     double vcoord[3*ALA_F1B_MAX_VELOCITY_DOF];
     double vdiag[ALA_F1B_MAX_VELOCITY_DOF];
     double element_diagonal[ALA_F1B_MAX_VELOCITY_DOF];
-    double *K,*factor,*B,*rhs,*solution;
+    double *K,*element_K,*factor,*B,*rhs,*solution;
     double bnorm2,rnorm2,sum,numerator,denominator,symmetry,min_pivot;
     double diagonal_completion;
     const double *record,*coord;
@@ -1054,11 +1256,13 @@ static int ala_f1b_build_operator_consistent_patch(
         return(0);
     }
     K=(double *)calloc((size_t)nv*nv,sizeof(double));
+    element_K=(double *)calloc((size_t)nv*nv,sizeof(double));
     factor=(double *)calloc((size_t)nv*nv,sizeof(double));
     B=(double *)calloc((size_t)np*nv,sizeof(double));
     rhs=(double *)calloc(nv,sizeof(double));
     solution=(double *)calloc(nv,sizeof(double));
-    if(K==NULL || factor==NULL || B==NULL || rhs==NULL || solution==NULL)
+    if(K==NULL || element_K==NULL || factor==NULL || B==NULL ||
+       rhs==NULL || solution==NULL)
         myerror(E,"Unable to allocate F1b dense patch workspace");
     for(p=0;p<np;p++) {
         record=pressure_records[p];
@@ -1098,7 +1302,8 @@ static int ala_f1b_build_operator_consistent_patch(
         if(nused>=1024) {
             failure->reason=ALA_F1B_FAILURE_INCIDENT_ELEMENT_BOUND;
             failure->incident_elements=nused+1;
-            free(K); free(factor); free(B); free(rhs); free(solution);
+            free(K); free(element_K); free(factor); free(B); free(rhs);
+            free(solution);
             return(0);
         }
         for(d=0;d<4;d++)
@@ -1113,23 +1318,64 @@ static int ala_f1b_build_operator_consistent_patch(
     }
 
     failure->incident_elements=nused;
+    memcpy(element_K,K,(size_t)nv*nv*sizeof(double));
     diagonal_completion=0.0;
     failure->diagonal_difference_min=1.0e300;
     failure->diagonal_difference_max=-1.0e300;
     for(i=0;i<nv;i++) {
-        double difference=K[i*nv+i]-vdiag[i];
         element_diagonal[i]=K[i*nv+i];
+    }
+
+    /* Rebuild the candidate K_gamma from the exact sparse nodal storage used
+     * by n_assemble_del2_u.  A nodal record contains the half-stencil update
+     * performed by that routine: slots >=3 update the stored row, and every
+     * slot updates the symmetric column.  Contributions from MPI replicas
+     * are intentionally summed because production exchange_id_d performs the
+     * same additive assembly. */
+    memset(K,0,(size_t)nv*nv*sizeof(double));
+    for(r=0;r<pool->local_node_count+pool->remote_node_count;r++) {
+        record=(r<pool->local_node_count)
+            ? pool->local_node_records
+                +(size_t)r*ALA_F1B_NODE_RECORD_DOUBLES
+            : pool->remote_node_records
+                +(size_t)(r-pool->local_node_count)
+                  *ALA_F1B_NODE_RECORD_DOUBLES;
+        for(d=0;d<3;d++) {
+            row_index=ala_f1b_velocity_index(
+                record+ALA_F1B_NODE_RECORD_COORD,
+                record+ALA_F1B_NODE_RECORD_KEY,d,
+                vcoord,vkey,vcomp,nv);
+            if(row_index<0)
+                continue;
+            for(i=0;i<ALA_F1B_NODE_STENCIL;i++) {
+                column_component=(int)
+                    record[ALA_F1B_NODE_RECORD_COLUMN_COMPONENT+i];
+                if(column_component<0 || column_component>=3)
+                    continue;
+                column_index=ala_f1b_velocity_index(
+                    record+ALA_F1B_NODE_RECORD_COLUMN_COORD+3*i,
+                    record+ALA_F1B_NODE_RECORD_COLUMN_KEY+4*i,
+                    column_component,vcoord,vkey,vcomp,nv);
+                if(column_index<0)
+                    continue;
+                if(i>=3)
+                    K[row_index*nv+column_index] +=
+                        record[ALA_F1B_NODE_RECORD_COEFFICIENT
+                               +d*ALA_F1B_NODE_STENCIL+i];
+                K[column_index*nv+row_index] +=
+                    record[ALA_F1B_NODE_RECORD_COEFFICIENT
+                           +d*ALA_F1B_NODE_STENCIL+i];
+            }
+        }
+    }
+    for(i=0;i<nv;i++) {
+        double difference=K[i*nv+i]-vdiag[i];
         diagonal_completion=max(diagonal_completion,
             fabs(difference)/max(vdiag[i],1.0e-300));
         failure->diagonal_difference_min=min(
             failure->diagonal_difference_min,difference);
         failure->diagonal_difference_max=max(
             failure->diagonal_difference_max,difference);
-        /* This is the exact assembled principal diagonal already used by
-         * the production K_gamma operator.  Element records supply every
-         * retained-retained off-diagonal; BI closes contributions from
-         * incident elements outside the pressure patch. */
-        K[i*nv+i]=vdiag[i];
     }
     failure->diagonal_completion_relative=diagonal_completion;
     numerator=denominator=0.0;
@@ -1143,7 +1389,8 @@ static int ala_f1b_build_operator_consistent_patch(
     memcpy(factor,K,(size_t)nv*nv*sizeof(double));
     min_pivot=1.0e300;
     if(!ala_f1b_factor(factor,nv,&min_pivot,failure)) {
-        free(K); free(factor); free(B); free(rhs); free(solution);
+        free(K); free(element_K); free(factor); free(B); free(rhs);
+        free(solution);
         return(0);
     }
     stats->max_k_solve_residual=max(stats->max_k_solve_residual,0.0);
@@ -1189,13 +1436,18 @@ static int ala_f1b_build_operator_consistent_patch(
        !ala_f1b_replay_snapshot[replay_category].valid) {
         ala_f1b_replay_snapshot[replay_category].matrix=(double *)calloc(
             (size_t)nv*nv,sizeof(double));
+        ala_f1b_replay_snapshot[replay_category].element_matrix=
+            (double *)calloc((size_t)nv*nv,sizeof(double));
         ala_f1b_replay_snapshot[replay_category].B=(double *)calloc(
             (size_t)np*nv,sizeof(double));
         if(ala_f1b_replay_snapshot[replay_category].matrix==NULL ||
+           ala_f1b_replay_snapshot[replay_category].element_matrix==NULL ||
            ala_f1b_replay_snapshot[replay_category].B==NULL)
             myerror(E,"Unable to allocate F1b replay snapshot");
         memcpy(ala_f1b_replay_snapshot[replay_category].matrix,K,
                (size_t)nv*nv*sizeof(double));
+        memcpy(ala_f1b_replay_snapshot[replay_category].element_matrix,
+               element_K,(size_t)nv*nv*sizeof(double));
         memcpy(ala_f1b_replay_snapshot[replay_category].coordinates,vcoord,
                (size_t)3*nv*sizeof(double));
         memcpy(ala_f1b_replay_snapshot[replay_category].element_diagonal,
@@ -1212,7 +1464,8 @@ static int ala_f1b_build_operator_consistent_patch(
         ala_f1b_replay_snapshot[replay_category].incident_elements=nused;
         ala_f1b_replay_snapshot[replay_category].valid=1;
     }
-    free(K); free(factor); free(B); free(rhs); free(solution);
+    free(K); free(element_K); free(factor); free(B); free(rhs);
+    free(solution);
     return(1);
 }
 
@@ -1221,6 +1474,8 @@ static void ala_f1b_free_element_pool(struct ala_f1b_element_pool *pool)
 {
     free(pool->local_records);
     free(pool->remote_records);
+    free(pool->local_node_records);
+    free(pool->remote_node_records);
     memset(pool,0,sizeof(*pool));
 }
 
@@ -1374,11 +1629,11 @@ static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
         }
         if(E->parallel.me==owner) {
             sum=0.0;
-            for(j=0;j<nv;j++)
+            element_sum=0.0;
+            for(j=0;j<nv;j++) {
                 sum += snapshot->matrix[i*nv+j]*x[j];
-            element_sum=sum+
-                (snapshot->element_diagonal[i]
-                 -snapshot->matrix[i*nv+i])*x[i];
+                element_sum += snapshot->element_matrix[i*nv+j]*x[j];
+            }
             numerator += (sum-actual)*(sum-actual);
             element_numerator +=
                 (element_sum-actual)*(element_sum-actual);
@@ -1547,6 +1802,7 @@ static double ala_f1b_replay_global_k(struct All_variables *E,int lev,
     }
     free(u); free(Au); free(pressure_action); free(pressure_input); free(gradient);
     free(snapshot->matrix);
+    free(snapshot->element_matrix);
     free(snapshot->B);
     memset(snapshot,0,sizeof(*snapshot));
     return(numerator);
@@ -1623,6 +1879,7 @@ static void ala_f1b_write_candidate_evidence(struct All_variables *E,
     fprintf(fp,
         "{\n"
         "  \"schema\": \"strict-ala-stage-F1b-feasibility-v1\",\n"
+        "  \"Kgamma_candidate_source\": \"production_nodal_Eqn_k\",\n"
         "  \"collective_manifest_sha256\": \"%s\",\n"
         "  \"factorization_phase\": \"%s\",\n"
         "  \"candidate_isolatable\": %s,\n"
