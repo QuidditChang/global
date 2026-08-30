@@ -33,6 +33,11 @@ class F1cContractTests(unittest.TestCase):
         self.assertIn("fine_rhs,fine_z,work,aux,lev,3,cache", source)
         self.assertIn("value-=Sq[i][m][e]*c[i]", source)
         self.assertIn("value+=q[i][m][e]*(c[i]-d[i])", source)
+        self.assertIn("strict_ala_stage_F1c_decomposition.csv", source)
+        self.assertIn("strict_ala_stage_F1c_alpha_scan.csv", source)
+        self.assertIn("STRICT_ALA_STAGE_F1C_CAUSAL_REVIEW_V2", source)
+        self.assertIn("alpha_b/alpha_c", source)
+        self.assertEqual(source.count("ala_f1a_true_action("), 2)
         self.assertIn('#include "Strict_ala_stage_f1c.inc"', driver)
         self.assertIn("strict_ala_stage_f1c_run", driver)
         self.assertIn("production_default_change_authorized", source)
@@ -48,6 +53,10 @@ class F1cContractTests(unittest.TestCase):
         self.assertIn("balanced_coarse_completion.json", text)
         self.assertIn("analysis_completion.json", text)
         self.assertIn("final_audit_completion.json", text)
+        self.assertIn("export STRICT_ALA_CASE=F1C", text)
+        self.assertIn("strict_ala_stage_F1c_decomposition.csv", text)
+        self.assertIn("strict_ala_stage_F1c_alpha_scan.csv", text)
+        self.assertIn("STRICT_ALA_STAGE_F1C_CAUSAL_REVIEW_V2", text)
         self.assertEqual(text.count("CitcomS.SimpleApp:SimpleApp"), 1)
         self.assertIn("! -path '*/DATA/0/*'", text)
         self.assertIn("strict_ala_stage_F1c_final_audit.json", text)
@@ -96,6 +105,9 @@ class F1cContractTests(unittest.TestCase):
                 "coarse_matrix_minimum_pivot_ratio": 0.2,
                 "tight_solve_count": 4,
                 "candidate": "balanced_actual_mode_coarse",
+                "causal_review":
+                    "coarse_only_conditioned_fine_right_additive_left_balance_alpha_family",
+                "fixed_alpha_count": 6,
                 "production_default_change_authorized": False}))
             projected = []
             for matrix in ("T", "M_balanced", "H_balanced"):
@@ -116,10 +128,39 @@ class F1cContractTests(unittest.TestCase):
                 "target_residual": "1e-10",
                 "achieved_relative_residual": "9e-11", "cycles": "5",
                 "max_cycles": "2000", "converged": "1"} for i in range(4)])
+            decomposition_fields = (
+                "POD_mode", "POD_energy_weight", "E_coarse_only",
+                "E_conditioned_fine", "E_right_additive", "E_balanced",
+                "conditioned_rhs_relative", "conditioned_fine_action_relative",
+                "left_balance_action_relative", "coarse_projection_max",
+                "right_projection_max", "balanced_projection_max", "valid")
+            write_csv(td/"decomposition.csv", decomposition_fields, [{
+                "POD_mode": str(mode), "POD_energy_weight": "0.5",
+                "E_coarse_only": "0.3", "E_conditioned_fine": "0.2",
+                "E_right_additive": "0.06", "E_balanced": "0.2",
+                "conditioned_rhs_relative": "0.3",
+                "conditioned_fine_action_relative": "0.1",
+                "left_balance_action_relative": "0.05",
+                "coarse_projection_max": "1e-10",
+                "right_projection_max": "1e-10",
+                "balanced_projection_max": "1e-10", "valid": "1"}
+                for mode in (1, 2)])
+            write_csv(td/"alpha.csv",
+                      ("alpha", "E_P_RMS", "is_clipped_optimum", "valid"),
+                      [{"alpha": value, "E_P_RMS": rms,
+                        "is_clipped_optimum": "0", "valid": "1"}
+                       for value, rms in (("0", "0.3"), ("0.125", "0.27"),
+                                          ("0.25", "0.24"), ("0.5", "0.21"),
+                                          ("0.75", "0.205"), ("1", "0.2"))] +
+                      [{"alpha": "1", "E_P_RMS": "0.2",
+                        "is_clipped_optimum": "1", "valid": "1"}])
             args = Args(f1b_true_mode=td/"f1b.csv",
                         candidate_true_mode=td/"candidate.csv",
                         runtime=td/"runtime.json", projected=td/"projected.csv",
-                        tight=td/"tight.csv", output=td/"decision.json")
+                        tight=td/"tight.csv",
+                        decomposition=td/"decomposition.csv",
+                        alpha_scan=td/"alpha.csv",
+                        output=td/"decision.json")
             F1C.analyze(args)
             result = json.loads((td/"decision.json").read_text())
             self.assertEqual(result["decision"],
@@ -138,6 +179,39 @@ class F1cContractTests(unittest.TestCase):
             self.assertEqual(rejected["decision"],
                              "F1C_BALANCED_COARSE_REJECTED")
             self.assertFalse(rejected["gates"]["coarse_residual_projection"])
+
+            for row in rows:
+                row["coarse_residual_projection_max"] = "1e-10"
+                row["E_P"] = "2.0"
+            write_csv(td/"candidate.csv", candidate_fields, rows)
+            with (td/"decomposition.csv").open() as stream:
+                decomposed = list(csv.DictReader(stream))
+            for row in decomposed:
+                row["E_coarse_only"] = "1.5"
+                row["E_right_additive"] = "0.3"
+                row["E_balanced"] = "2.0"
+                row["conditioned_rhs_relative"] = "1.5"
+            write_csv(td/"decomposition.csv", decomposition_fields, decomposed)
+            with (td/"alpha.csv").open() as stream:
+                alpha_rows = list(csv.DictReader(stream))
+            fixed_rms = {"0": "1.5", "0.125": "1.6", "0.25": "1.7",
+                         "0.5": "1.8", "0.75": "1.9", "1": "2.0"}
+            for row in alpha_rows:
+                if row["is_clipped_optimum"] == "1":
+                    row["alpha"] = "0"
+                    row["E_P_RMS"] = "1.5"
+                else:
+                    row["E_P_RMS"] = fixed_rms[row["alpha"]]
+            write_csv(td/"alpha.csv",
+                      ("alpha", "E_P_RMS", "is_clipped_optimum", "valid"),
+                      alpha_rows)
+            args.output = td/"classified.json"
+            F1C.analyze(args)
+            classified = json.loads((td/"classified.json").read_text())
+            self.assertTrue(classified["causal_findings"]
+                            ["coarse_basis_or_Galerkin_insufficient"])
+            self.assertEqual(classified["next_authorized_task"],
+                             "F1D_COARSE_BASIS_REDESIGN")
 
 
 if __name__ == "__main__": unittest.main()

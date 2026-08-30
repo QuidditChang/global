@@ -74,9 +74,11 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
     double factor[ALA_F1A_MAX_MODES*ALA_F1A_MAX_MODES];
     double M[ALA_F1A_MAX_MODES*ALA_F1A_MAX_MODES];
     double H[ALA_F1A_MAX_MODES*ALA_F1A_MAX_MODES];
-    FILE *metrics=NULL,*projected=NULL,*tight=NULL,*summary=NULL;
+    FILE *metrics=NULL,*projected=NULL,*tight=NULL,*decomposition=NULL;
+    FILE *alpha_scan=NULL,*summary=NULL;
     int i,j,m,e,n=2*ALA_E2_LATE_COUNT,selected,call_id=0;
     double symmetry=0.0,scale=0.0,min_pivot=0.0,weight;
+    double alpha_a=0.0,alpha_b=0.0,alpha_c=0.0,weight_sum=0.0;
 
     if(getenv("STRICT_ALA_STAGE_F1C_REQUIRED")==NULL) return 0;
     if(executed) return 1;
@@ -136,6 +138,16 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
             "strict_ala_stage_F1c_tight_solves.csv","w");
         fprintf(tight,"call_id,role,POD_mode,rhs_norm,requested_relative_tolerance,"
                 "target_residual,achieved_relative_residual,cycles,max_cycles,converged\n");
+        decomposition=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1c_decomposition.csv","w");
+        fprintf(decomposition,"POD_mode,POD_energy_weight,E_coarse_only,"
+                "E_conditioned_fine,E_right_additive,E_balanced,"
+                "conditioned_rhs_relative,conditioned_fine_action_relative,"
+                "left_balance_action_relative,coarse_projection_max,"
+                "right_projection_max,balanced_projection_max,valid\n");
+        alpha_scan=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1c_alpha_scan.csv","w");
+        fprintf(alpha_scan,"alpha,E_P_RMS,is_clipped_optimum,valid\n");
     }
     memset(T,0,sizeof(T)); memset(M,0,sizeof(M)); memset(H,0,sizeof(H));
     for(i=0;i<selected;i++) {
@@ -173,6 +185,11 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
         double rhs_c[ALA_F1A_MAX_MODES]={0},c[ALA_F1A_MAX_MODES]={0};
         double rhs_d[ALA_F1A_MAX_MODES]={0},d[ALA_F1A_MAX_MODES]={0};
         double qq,yy,qy,qz,ep,cosine,projection=0.0,achieved;
+        double yc2,qyc,rf2,yf2,rfyf,right2,qright,left2;
+        double coarse_ep,fine_ep,right_ep,conditioned_rhs_relative;
+        double conditioned_action_relative,left_action_relative;
+        double coarse_projection=0.0,right_projection=0.0;
+        double delta2,rc_delta,rc2;
         for(i=0;i<selected;i++) rhs_c[i]=global_pdot(E,q[i],q[j],lev);
         ala_f1c_solve(factor,rhs_c,c,selected);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -198,17 +215,70 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
         qz=global_pdot(E,q[j],z[j],lev);
         ep=sqrt(max(qq+yy-2.0*qy,0.0)/max(qq,1.0e-300));
         cosine=qy/sqrt(max(qq*yy,1.0e-300));
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+                double yc=0.0,yd=0.0;
+                for(i=0;i<selected;i++) {
+                    yc+=Sq[i][m][e]*c[i];
+                    yd+=Sq[i][m][e]*d[i];
+                }
+                work[m][e]=yc;
+                aux[m][e]=Sz[j][m][e]-yc+yd;
+            }
+        yc2=global_pdot(E,work,work,lev);
+        qyc=global_pdot(E,q[j],work,lev);
+        rf2=global_pdot(E,fine_rhs,fine_rhs,lev);
+        yf2=global_pdot(E,aux,aux,lev);
+        rfyf=global_pdot(E,fine_rhs,aux,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++)
+                fine_z[m][e]=work[m][e]+aux[m][e];
+        right2=global_pdot(E,fine_z,fine_z,lev);
+        qright=global_pdot(E,q[j],fine_z,lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[lev];e++) {
+                fine_rhs[m][e]=Sz[j][m][e]-work[m][e];
+                aux[m][e]=Sz[j][m][e]-fine_z[m][e];
+            }
+        delta2=global_pdot(E,fine_rhs,fine_rhs,lev);
+        rc_delta=global_pdot(E,q[j],fine_rhs,lev)
+            -global_pdot(E,work,fine_rhs,lev);
+        left2=global_pdot(E,aux,aux,lev);
+        rc2=max(qq+yc2-2.0*qyc,0.0);
+        coarse_ep=sqrt(rc2/max(qq,1.0e-300));
+        fine_ep=sqrt(max(rf2+yf2-2.0*rfyf,0.0)/max(rf2,1.0e-300));
+        right_ep=sqrt(max(qq+right2-2.0*qright,0.0)/max(qq,1.0e-300));
+        conditioned_rhs_relative=sqrt(max(rf2,0.0)/max(qq,1.0e-300));
+        conditioned_action_relative=sqrt(max(yf2,0.0)/max(qq,1.0e-300));
+        left_action_relative=sqrt(max(left2,0.0)/max(qq,1.0e-300));
         for(i=0;i<selected;i++) {
             double residual=global_pdot(E,q[i],q[j],lev)
                 -global_pdot(E,q[i],Sz[j],lev);
+            double coarse_residual=global_pdot(E,q[i],q[j],lev)
+                -global_pdot(E,q[i],work,lev);
+            double right_residual=global_pdot(E,q[i],q[j],lev)
+                -global_pdot(E,q[i],fine_z,lev);
             projection=max(projection,fabs(residual));
+            coarse_projection=max(coarse_projection,fabs(coarse_residual));
+            right_projection=max(right_projection,fabs(right_residual));
         }
         weight=values[j]/max(total,1.0e-300);
+        alpha_a+=weight*rc2/max(qq,1.0e-300);
+        alpha_b+=weight*rc_delta/max(qq,1.0e-300);
+        alpha_c+=weight*delta2/max(qq,1.0e-300);
+        weight_sum+=weight;
         if(E->parallel.me==0) {
             fprintf(metrics,"%d,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,1\n",
                 j+1,weight,ep,cosine,qz,qy,
                 projection,achieved);
             fflush(metrics);
+            fprintf(decomposition,"%d,%.17e,%.17e,%.17e,%.17e,%.17e,"
+                "%.17e,%.17e,%.17e,%.17e,%.17e,%.17e,1\n",
+                j+1,weight,coarse_ep,fine_ep,right_ep,ep,
+                conditioned_rhs_relative,conditioned_action_relative,
+                left_action_relative,coarse_projection,right_projection,
+                projection);
+            fflush(decomposition);
         }
     }
     for(i=0;i<selected;i++)
@@ -225,6 +295,22 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
             }
         }
     if(E->parallel.me==0) {
+        static const double fixed_alpha[]={0.0,0.125,0.25,0.5,0.75,1.0};
+        double optimum=alpha_c>0.0?alpha_b/alpha_c:0.0;
+        int a;
+        optimum=max(0.0,min(1.0,optimum));
+        for(a=0;a<6;a++) {
+            double alpha=fixed_alpha[a];
+            double rms=sqrt(max(alpha_a-2.0*alpha*alpha_b+
+                                alpha*alpha*alpha_c,0.0)
+                            /max(weight_sum,1.0e-300));
+            fprintf(alpha_scan,"%.17e,%.17e,0,1\n",alpha,rms);
+        }
+        fprintf(alpha_scan,"%.17e,%.17e,1,1\n",optimum,
+            sqrt(max(alpha_a-2.0*optimum*alpha_b+
+                     optimum*optimum*alpha_c,0.0)
+                 /max(weight_sum,1.0e-300)));
+        fflush(alpha_scan);
         fflush(projected);
         summary=ala_f1a_open_root(E,output_dir,
             "strict_ala_stage_F1c_runtime.json","w");
@@ -234,15 +320,20 @@ static int strict_ala_stage_f1c_run(struct All_variables *E,
             "  \"coarse_matrix_minimum_pivot_ratio\": %.17e,\n"
             "  \"tight_solve_count\": %d,\n"
             "  \"candidate\": \"balanced_actual_mode_coarse\",\n"
+            "  \"causal_review\": \"coarse_only_conditioned_fine_right_additive_left_balance_alpha_family\",\n"
+            "  \"fixed_alpha_count\": 6,\n"
             "  \"production_default_change_authorized\": false\n}\n",
             selected,selected_energy,symmetry,min_pivot,call_id);
         fclose(summary);
+        fprintf(E->fp,"STRICT_ALA_STAGE_F1C_CAUSAL_REVIEW_V2 "
+                "modes=%d tight_solves=%d\n",selected,call_id);
         fprintf(E->fp,"STRICT_ALA_STAGE_F1C_COMPLETE modes=%d tight_solves=%d "
                 "candidate=balanced_actual_mode_coarse\n",selected,call_id);
         fflush(E->fp);
     }
     if(metrics) fclose(metrics); if(projected) fclose(projected);
-    if(tight) fclose(tight);
+    if(tight) fclose(tight); if(decomposition) fclose(decomposition);
+    if(alpha_scan) fclose(alpha_scan);
     for(i=0;i<selected;i++) {
         ala_schur_free_field(E,q[i]); ala_schur_free_field(E,Sq[i]);
         ala_schur_free_field(E,z[i]); ala_schur_free_field(E,Sz[i]);
