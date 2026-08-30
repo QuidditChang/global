@@ -348,6 +348,74 @@ def weighted_rms(rows, error_field, weight_field):
     return math.sqrt(weighted / total)
 
 
+def uniform_scalar_rescaling_bound(rows, legacy_rms, ratio_limit):
+    """Return the best possible true-mode RMS from one scalar rescaling.
+
+    The frozen mode normalization is ||q||=1.  With a=S_gamma P q,
+    E_P^2=1+||a||^2-2 q^T a reconstructs the action norm without another
+    tight solve.  This is a diagnostic impossibility bound only; F1b does not
+    authorize changing W or any other scaling.
+    """
+    total_weight = sum(finite(row["POD_energy_weight"], "POD weight")
+                       for row in rows)
+    if total_weight <= 0.0:
+        raise ValueError("nonpositive POD weight sum")
+    weighted_dot = 0.0
+    weighted_norm2 = 0.0
+    modes = []
+    for row in rows:
+        weight = finite(row["POD_energy_weight"], "POD weight")
+        error = finite(row["E_P"], "E_P")
+        dot = finite(row["qTSPq"], "qTSPq")
+        cosine = finite(row["cosine"], "cosine")
+        action_norm2 = error * error - 1.0 + 2.0 * dot
+        roundoff = 1.0e-12 * max(1.0, error * error, abs(2.0 * dot))
+        if action_norm2 < -roundoff:
+            raise ValueError("true-mode metrics imply negative action norm")
+        action_norm2 = max(action_norm2, 0.0)
+        action_norm = math.sqrt(action_norm2)
+        if action_norm > 0.0:
+            reconstructed_cosine = dot / action_norm
+            if not math.isclose(reconstructed_cosine, cosine,
+                                rel_tol=1.0e-8, abs_tol=1.0e-10):
+                raise ValueError("true-mode E_P/cosine/qTSPq are inconsistent")
+            individual_floor = math.sqrt(max(
+                0.0, 1.0 - dot * dot / action_norm2))
+            individual_alpha = max(dot / action_norm2, 0.0)
+        else:
+            individual_floor = 1.0
+            individual_alpha = 0.0
+        weighted_dot += weight * dot
+        weighted_norm2 += weight * action_norm2
+        modes.append({
+            "POD_mode": row["POD_mode"],
+            "POD_energy_weight": weight,
+            "action_norm": action_norm,
+            "qTSPq": dot,
+            "individual_optimal_nonnegative_scalar": individual_alpha,
+            "individual_residual_lower_bound": individual_floor,
+        })
+    alpha = max(weighted_dot / weighted_norm2, 0.0) \
+        if weighted_norm2 > 0.0 else 0.0
+    minimum_squared = sum(
+        mode["POD_energy_weight"] * (
+            1.0 + alpha * alpha * mode["action_norm"] ** 2
+            - 2.0 * alpha * mode["qTSPq"])
+        for mode in modes) / total_weight
+    minimum_rms = math.sqrt(max(minimum_squared, 0.0))
+    minimum_ratio = minimum_rms / max(legacy_rms, SCALE_FLOOR)
+    return {
+        "diagnostic_only": True,
+        "changes_frozen_scaling": False,
+        "optimal_common_nonnegative_scalar": alpha,
+        "minimum_candidate_E_P_RMS": minimum_rms,
+        "minimum_candidate_to_legacy_E_P_RMS_ratio": minimum_ratio,
+        "frozen_ratio_limit": ratio_limit,
+        "can_reach_frozen_gate": minimum_ratio <= ratio_limit,
+        "modes": modes,
+    }
+
+
 def keyed(rows, fields):
     result = {}
     for row in rows:
@@ -574,6 +642,10 @@ def offline(args):
                                  "operator": label})
     ep_legacy = weighted_rms(legacy_cfg, "E_P", "POD_energy_weight")
     ep_cand = weighted_rms(cand_cfg, "E_P", "POD_energy_weight")
+    scalar_bound = uniform_scalar_rescaling_bound(
+        cand_cfg, ep_legacy,
+        finite(frozen_thresholds["true_mode_EP_RMS_ratio_limit"],
+               "true-mode RMS ratio limit"))
     ep_heavy_guard = True; positive_weight = 0.0
     total_pod = sum(finite(row["POD_energy_weight"], "POD weight")
                     for row in legacy_cfg)
@@ -628,9 +700,15 @@ def offline(args):
         "true_mode_heavy": ep_heavy_guard,
         "dominant_mode_positivity": positive_weight >= 0.95 * total_pod,
         "H_RAW": metrics["H_RAW_ratio"] <= 0.50}
+    failed_gates = [name for name, passed in gates.items() if not passed]
     result = {"schema": "strict-ala-stage-F1b-offline-gate-v1",
               "experiment_evidence_valid": True, "metrics": metrics,
               "gates": gates, "offline_gate_pass": all(gates.values()),
+              "independent_failed_gates": failed_gates,
+              "uniform_scalar_rescaling_bound": scalar_bound,
+              "candidate_rejected_even_if_memory_repaired":
+                  (not gates["memory"] and any(
+                      not gates[name] for name in gates if name != "memory")),
               "restriction_tolerance_review_required": replay_review_required,
               "maximum_restriction_identity_relative_defect": maximum_replay,
               "thresholds_sha256": sha256(args.thresholds),
@@ -838,10 +916,28 @@ def final_audit(args):
     provenance_valid = all(item["unchanged"] for item in provenance.values())
     experiment_valid = (offline_result.get("experiment_evidence_valid") is True
                         and provenance_valid)
+    gates = offline_result.get("gates", {})
+    independent_rejections = []
+    if experiment_valid and not offline_result.get("offline_gate_pass"):
+        rejection_map = (
+            ("candidate_isolatable", "CANDIDATE_NOT_ISOLATABLE"),
+            ("memory", "CANDIDATE_REJECTED_MEMORY"),
+            ("startup", "F1B_STARTUP_COST_REVIEW"),
+            ("assembly", "CANDIDATE_REJECTED_ASSEMBLY"),
+            ("tight_solves", "CANDIDATE_REJECTED_ASSEMBLY"),
+            ("local_RMS", "CANDIDATE_REJECTED_LOCAL_OPERATOR"),
+            ("local_heavy_mode", "CANDIDATE_REJECTED_LOCAL_OPERATOR"),
+            ("H_RAW", "CANDIDATE_REJECTED_RAW_LOCAL"),
+            ("true_mode_RMS", "CANDIDATE_REJECTED_ACTUAL_MODES"),
+            ("true_mode_heavy", "CANDIDATE_REJECTED_ACTUAL_MODES"),
+            ("dominant_mode_positivity", "CANDIDATE_REJECTED_ACTUAL_MODES"),
+        )
+        for gate, rejection in rejection_map:
+            if gates.get(gate, True) is False and rejection not in independent_rejections:
+                independent_rejections.append(rejection)
     if not experiment_valid:
         decision = "INVALID_EXPERIMENT"
     elif not offline_result.get("offline_gate_pass"):
-        gates = offline_result["gates"]
         if offline_result.get("restriction_tolerance_review_required"):
             decision = "F1B_RESTRICTION_TOLERANCE_REVIEW"
         elif not gates.get("candidate_isolatable"): decision = "CANDIDATE_NOT_ISOLATABLE"
@@ -877,6 +973,13 @@ def final_audit(args):
               "provenance": provenance,
               "offline": offline_result, "short_AB": short_result,
               "decision": decision,
+              "independent_rejections": independent_rejections,
+              "candidate_rejected_even_if_memory_repaired":
+                  offline_result.get(
+                      "candidate_rejected_even_if_memory_repaired", False),
+              "uniform_scalar_rescaling_can_reach_true_mode_gate":
+                  offline_result.get("uniform_scalar_rescaling_bound", {}).get(
+                      "can_reach_frozen_gate"),
               "production_default_change_authorized": False,
               "production_freeze_authorized": False,
               "production_freeze_requires": [

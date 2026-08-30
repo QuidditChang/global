@@ -336,9 +336,9 @@ class F1bContractTests(unittest.TestCase):
             write_dict_csv(td/"legacy_local.csv", local)
             write_dict_csv(td/"cand_local.csv", cand_local)
             tel = [{"POD_mode":"0", "stage":"CONFIGURED",
-                    "POD_energy_weight":"1", "E_P":"1", "cosine":"1",
-                    "qTPq":"1", "qTSPq":"1", "tight_solve_achieved":"1"}]
-            cand_tel = [dict(tel[0], E_P="0.5")]
+                    "POD_energy_weight":"1", "E_P":"0.5", "cosine":"1",
+                    "qTPq":"1", "qTSPq":"0.5", "tight_solve_achieved":"1"}]
+            cand_tel = [dict(tel[0], E_P="0.2", qTSPq="0.8")]
             write_dict_csv(td/"legacy_tel.csv", tel)
             write_dict_csv(td/"cand_tel.csv", cand_tel)
             (td/"legacy_decision.json").write_text(json.dumps(
@@ -558,6 +558,56 @@ class F1bContractTests(unittest.TestCase):
             self.assertTrue(result["experiment_valid"])
             self.assertFalse(result["candidate_valid"])
             self.assertEqual(result["decision"], "CANDIDATE_REJECTED_RAW_LOCAL")
+
+    def test_true_mode_scalar_bound_proves_local_candidate_not_recoverable(self):
+        # These are the three operator-consistent modes from HPC 12130214.
+        rows = [
+            {"POD_mode": "1", "POD_energy_weight": "0.8484079389891522",
+             "E_P": "1.027763934067153", "cosine": "0.117681645147864",
+             "qTSPq": "0.0450174312596513"},
+            {"POD_mode": "2", "POD_energy_weight": "0.0954381543078490",
+             "E_P": "1.124641602656281", "cosine": "0.441939819235453",
+             "qTSPq": "0.495091173396416"},
+            {"POD_mode": "3", "POD_energy_weight": "0.0170727558926232",
+             "E_P": "0.973793218907532", "cosine": "0.537538515701203",
+             "qTSPq": "0.550757548366896"},
+        ]
+        bound = F1B.uniform_scalar_rescaling_bound(
+            rows, legacy_rms=1.120020186188089, ratio_limit=0.80)
+        self.assertAlmostEqual(
+            bound["optimal_common_nonnegative_scalar"], 0.362223, places=5)
+        self.assertAlmostEqual(
+            bound["minimum_candidate_E_P_RMS"], 0.981960, places=5)
+        self.assertGreater(
+            bound["minimum_candidate_to_legacy_E_P_RMS_ratio"], 0.80)
+        self.assertFalse(bound["can_reach_frozen_gate"])
+        self.assertFalse(bound["changes_frozen_scaling"])
+
+    def test_final_audit_preserves_all_independent_rejections(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            offline = {
+                "experiment_evidence_valid": True,
+                "offline_gate_pass": False,
+                "candidate_rejected_even_if_memory_repaired": True,
+                "uniform_scalar_rescaling_bound": {"can_reach_frozen_gate": False},
+                "gates": {"candidate_isolatable": True, "memory": False,
+                          "startup": True, "assembly": True,
+                          "tight_solves": True, "local_RMS": True,
+                          "local_heavy_mode": True, "H_RAW": True,
+                          "true_mode_RMS": False, "true_mode_heavy": True,
+                          "dominant_mode_positivity": True}}
+            (td/"offline.json").write_text(json.dumps(offline))
+            F1B.final_audit(self.audit_args(
+                td, td/"offline.json", td/"audit.json"))
+            result = json.loads((td/"audit.json").read_text())
+            self.assertEqual(result["decision"], "CANDIDATE_REJECTED_MEMORY")
+            self.assertEqual(result["independent_rejections"], [
+                "CANDIDATE_REJECTED_MEMORY",
+                "CANDIDATE_REJECTED_ACTUAL_MODES"])
+            self.assertTrue(result["candidate_rejected_even_if_memory_repaired"])
+            self.assertFalse(
+                result["uniform_scalar_rescaling_can_reach_true_mode_gate"])
 
     def test_provenance_drift_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
