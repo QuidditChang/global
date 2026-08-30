@@ -367,7 +367,8 @@ def replay_tolerances(linearity):
     return {"BPI": REPLAY_RELATIVE, "CONFIGURED": configured}
 
 
-def validate_operator_replay(rows, e2_true_mode, linearity):
+def validate_operator_replay(rows, e2_true_mode, linearity,
+                             allow_configured_change=False):
     archived = read_csv(e2_true_mode, ("mode", "map", "mode_energy_fraction",
         "cumulative_energy", "E_P", "cosine", "alpha_opt", "Pq_norm",
         "SPq_norm", "qTPq", "qTSPq", "positive_qTPq", "positive_qTSPq",
@@ -381,15 +382,22 @@ def validate_operator_replay(rows, e2_true_mode, linearity):
             continue
         row = current[mode, old["map"]]
         differences = {}
+        identity_required = old["map"] == "BPI" or not allow_configured_change
         for field in ("E_P", "cosine", "qTSPq"):
             expected = finite(old[field], f"archived {field}")
             actual = finite(row[field], f"replayed {field}")
             relative = abs(actual - expected) / max(abs(expected), 1e-300)
             differences[field] = relative
-            if relative > tolerances[old["map"]]:
+            if identity_required and relative > tolerances[old["map"]]:
                 raise ValueError(f"OPERATOR_REPLAY_IDENTITY_FAIL {mode} {old['map']} {field}")
         checked.append({"mode": mode, "map": old["map"],
                         "relative_differences": differences,
+                        "comparison_role": ("identity" if identity_required
+                            else "authorized_experimental_change"),
+                        "identity_required": identity_required,
+                        "within_identity_tolerance": all(
+                            value <= tolerances[old["map"]]
+                            for value in differences.values()),
                         "base_relative_tolerance": REPLAY_RELATIVE,
                         "effective_relative_tolerance": tolerances[old["map"]],
                         "tolerance_basis": ("fixed_identity" if old["map"] == "BPI"
@@ -457,14 +465,16 @@ def validate_tight_solves(rows, model_log=None):
             "maximum_cycles": max(cycles) if cycles else max(int(row["cycles"]) for row in rows)}
 
 
-def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis, model_log=None):
+def analyze(input_dir, output_dir, e2_true_mode, e2_reanalysis, model_log=None,
+            allow_configured_replay_change=False):
     root = Path(input_dir); output = Path(output_dir); output.mkdir(parents=True, exist_ok=True)
     freeze_contract(output)
     rows = read_csv(root / "strict_ala_stage_F1a_telescoping.csv", TELESCOPING_COLUMNS)
     linearity_rows = read_csv(root / "strict_ala_stage_F1a_linearity.csv",
                               LINEARITY_COLUMNS)
     linearity = validate_linearity(linearity_rows)
-    replay = validate_operator_replay(rows, e2_true_mode, linearity)
+    replay = validate_operator_replay(rows, e2_true_mode, linearity,
+                                      allow_configured_replay_change)
     e2 = json.loads(Path(e2_reanalysis).read_text())
     if e2.get("next_authorized_path") != "LOCAL_SCHWARZ_PATH" or not \
             e2.get("forensic_path_authorized") or \
@@ -701,6 +711,8 @@ def main():
     run = sub.add_parser("analyze"); run.add_argument("--input-dir", required=True); run.add_argument("--output-dir", required=True)
     run.add_argument("--e2-true-mode", required=True); run.add_argument("--e2-reanalysis", required=True)
     run.add_argument("--model-log")
+    run.add_argument("--allow-configured-replay-change", action="store_true",
+                     help="retain strict BPI identity while treating CONFIGURED as the F1b experimental variable")
     cfg = sub.add_parser("check-cfg"); cfg.add_argument("--c0", required=True)
     cfg.add_argument("--c1", required=True); cfg.add_argument("--diff", required=True)
     check = sub.add_parser("audit")
@@ -726,7 +738,7 @@ def main():
     if args.command == "freeze-contract": freeze_contract(args.output_dir)
     elif args.command == "analyze":
         analyze(args.input_dir, args.output_dir, args.e2_true_mode, args.e2_reanalysis,
-                args.model_log)
+                args.model_log, args.allow_configured_replay_change)
     elif args.command == "check-cfg":
         check_cfg_contract(args.c0, args.c1, args.diff)
     elif args.command == "postprocess-audit":

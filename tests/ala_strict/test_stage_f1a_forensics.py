@@ -120,10 +120,22 @@ class StaticContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 f1a.validate_operator_replay(current, archived,
                     {"relative_defect": "1e-9", "hard_limit": "1e-5"})
+            replay = f1a.validate_operator_replay(
+                current, archived,
+                {"relative_defect": "1e-9", "hard_limit": "1e-5"},
+                allow_configured_change=True)
+            configured = [row for row in replay if row["map"] == "CONFIGURED"]
+            self.assertTrue(all(not row["identity_required"] for row in configured))
+            self.assertTrue(all(row["comparison_role"] ==
+                                "authorized_experimental_change"
+                                for row in configured))
+            self.assertTrue(all(not row["within_identity_tolerance"]
+                                for row in configured))
             for row in current:
                 if row["stage"] == "BPI": row["cosine"] = "1.00000002"
             with self.assertRaises(ValueError):
-                f1a.validate_operator_replay(current, archived, linearity)
+                f1a.validate_operator_replay(
+                    current, archived, linearity, allow_configured_change=True)
 
     def test_rank0_log_supplies_missing_tight_solve_cycles(self):
         with tempfile.TemporaryDirectory() as directory:
