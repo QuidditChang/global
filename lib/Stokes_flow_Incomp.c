@@ -4410,6 +4410,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
 #include "Strict_ala_stage_f1a.inc"
 #include "Strict_ala_stage_f1b.inc"
 #include "Strict_ala_stage_f1c.inc"
+#include "Strict_ala_stage_f1d.inc"
 
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
@@ -10241,6 +10242,21 @@ static float solve_Ahat_p_fhat_ALA_PCG(struct All_variables *E,
             myerror(E,"Stage-F1c requires the pressure-map preconditioner path");
         if(!strict_ala_stage_f1c_run(E,&preconditioner_cache,lev))
             myerror(E,"Stage-F1c runtime gate did not execute");
+        for(m=1;m<=E->sphere.caps_per_proc;m++) {
+            free((void *)F[m]); free((void *)r[m]); free((void *)z[m]);
+            free((void *)p[m]); free((void *)q[m]);
+            free((void *)explicit_r[m]); free((void *)div_u[m]);
+            free((void *)preconditioner_work[m]);
+        }
+        free_ala_pressure_preconditioner_cache(E,&preconditioner_cache);
+        *steps_max=0;
+        return 0.0;
+    }
+    if(getenv("STRICT_ALA_STAGE_F1D_REQUIRED")!=NULL) {
+        if(coupled_self_contained_preconditioner)
+            myerror(E,"Stage-F1d requires the pressure-map preconditioner path");
+        if(!strict_ala_stage_f1d_run(E,&preconditioner_cache,lev))
+            myerror(E,"Stage-F1d runtime gate did not execute");
         for(m=1;m<=E->sphere.caps_per_proc;m++) {
             free((void *)F[m]); free((void *)r[m]); free((void *)z[m]);
             free((void *)p[m]); free((void *)q[m]);
