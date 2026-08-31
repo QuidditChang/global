@@ -35,6 +35,10 @@ class F1dContractTests(unittest.TestCase):
         self.assertIn("ala_schur_preconditioner_action(", source)
         self.assertIn("fine_rhs,fine_z,work,aux,lev,3,cache", source)
         self.assertIn("F1b_operator_consistent_frozen", source)
+        self.assertIn("FULL_RAW", source)
+        self.assertIn("SELECTED_SYMMETRIZED", source)
+        self.assertIn("ala_f1d_popcount", source)
+        self.assertNotIn("enriched coarse matrix failed SPD contract", source)
         self.assertIn("production_default_change_authorized", source)
         self.assertIn('#include "Strict_ala_stage_f1d.inc"', driver)
         self.assertIn("strict_ala_stage_f1d_run", driver)
@@ -50,7 +54,11 @@ class F1dContractTests(unittest.TestCase):
         self.assertIn("numerical_completion.json", text)
         self.assertIn("analysis_completion.json", text)
         self.assertIn("final_audit_completion.json", text)
-        self.assertIn("STRICT_ALA_STAGE_F1D_RESIDUAL_CLOSURE_V1", text)
+        self.assertIn("STRICT_ALA_STAGE_F1D_MAXIMAL_SPD_SUBSPACE_V2", text)
+        self.assertIn("strict_ala_stage_F1d_coarse_matrix.csv", text)
+        self.assertIn("strict_ala_stage_F1d_cholesky_pivots.csv", text)
+        self.assertIn("strict_ala_stage_F1d_coarse_spectrum.csv", text)
+        self.assertIn("strict_ala_stage_F1d_selected_basis.csv", text)
         self.assertEqual(text.count("CitcomS.SimpleApp:SimpleApp"), 1)
         self.assertIn("! -path '*/DATA/0/*'", text)
         checked = subprocess.run(["bash", "-n", str(lsf)],
@@ -74,6 +82,13 @@ class F1dContractTests(unittest.TestCase):
                 "call_id", "role", "POD_mode", "rhs_norm",
                 "requested_relative_tolerance", "target_residual",
                 "achieved_relative_residual", "cycles", "max_cycles", "converged")
+            matrix_fields = ("scope", "row_basis", "column_basis", "value")
+            pivot_fields = ("scope", "step", "pivot", "pivot_ratio",
+                            "evaluated", "passed")
+            spectrum_fields = ("eigen_index", "eigenvalue",
+                               "relative_to_max", "positive")
+            selected_fields = ("selected_index", "full_basis_index",
+                               "basis_type", "source_mode", "retained")
             weights = (0.85, 0.10, 0.05)
             write_csv(td/"baseline.csv", baseline_fields, [
                 {"POD_mode": i+1, "POD_energy_weight": weights[i], "E_P": 1.0,
@@ -92,7 +107,7 @@ class F1dContractTests(unittest.TestCase):
                  "maximum_orthogonality": 1e-12, "S_energy": 1.0, "valid": 1}
                 for i in range(3)])
             projected = []
-            for matrix, size in (("T_enriched", 6), ("M_balanced", 3),
+            for matrix, size in (("T_enriched", 5), ("M_balanced", 3),
                                  ("H_balanced", 3)):
                 for i in range(size):
                     for j in range(size):
@@ -106,14 +121,52 @@ class F1dContractTests(unittest.TestCase):
                  "target_residual": 1e-10, "achieved_relative_residual": 1e-11,
                  "cycles": 10, "max_cycles": 2000, "converged": 1}
                 for i in range(9)])
+            matrices = []
+            for scope, size in (("FULL_RAW", 6), ("FULL_SYMMETRIZED", 6),
+                                ("SELECTED_RAW", 5),
+                                ("SELECTED_SYMMETRIZED", 5)):
+                for i in range(size):
+                    for j in range(size):
+                        matrices.append({"scope": scope, "row_basis": i+1,
+                                         "column_basis": j+1,
+                                         "value": 1.0 if i == j else 0.0})
+            write_csv(td/"coarse.csv", matrix_fields, matrices)
+            pivot_rows = [
+                {"scope": "FULL", "step": i+1,
+                 "pivot": -0.1 if i == 5 else 1.0,
+                 "pivot_ratio": -0.1 if i == 5 else 1.0,
+                 "evaluated": 1, "passed": 0 if i == 5 else 1}
+                for i in range(6)]
+            pivot_rows.extend([
+                {"scope": "SELECTED", "step": i+1, "pivot": 1.0,
+                 "pivot_ratio": 1.0, "evaluated": 1, "passed": 1}
+                for i in range(5)])
+            write_csv(td/"pivots.csv", pivot_fields, pivot_rows)
+            write_csv(td/"spectrum.csv", spectrum_fields, [
+                {"eigen_index": i+1, "eigenvalue": -0.1 if i == 0 else 1.0,
+                 "relative_to_max": -0.1 if i == 0 else 1.0,
+                 "positive": 0 if i == 0 else 1}
+                for i in range(6)])
+            write_csv(td/"selected.csv", selected_fields, [
+                {"selected_index": i+1, "full_basis_index": i+1,
+                 "basis_type": "POD" if i < 3 else "coarse_residual",
+                 "source_mode": i+1 if i < 3 else i-2, "retained": 1}
+                for i in range(5)])
             (td/"runtime.json").write_text(json.dumps({
-                "candidate": "residual_closed_balanced_actual_mode_coarse",
+                "candidate": "maximal_spd_residual_closed_balanced_actual_mode_coarse",
                 "fine_map": "F1b_operator_consistent_frozen",
                 "production_default_change_authorized": False,
                 "selected_modes": 3, "selected_energy": 1.0,
-                "accepted_residual_modes": 3, "enriched_basis_dimension": 6,
+                "accepted_residual_modes": 3, "retained_residual_modes": 2,
+                "full_enriched_basis_dimension": 6,
+                "enriched_basis_dimension": 5,
+                "full_matrix_symmetry_defect": 0.0,
+                "full_matrix_cholesky_pass": False,
+                "full_matrix_failure_step": 5,
+                "full_matrix_eigenvalue_minimum": -0.1,
+                "full_matrix_eigenvalue_maximum": 1.0,
                 "enriched_matrix_minimum_pivot_ratio": 0.5,
-                "enriched_matrix_symmetry_defect": 1e-12,
+                "enriched_matrix_symmetry_defect": 0.0,
                 "tight_solve_count": 9}))
             (td/"f1c.json").write_text(json.dumps({
                 "experiment_evidence_valid": True,
@@ -125,7 +178,10 @@ class F1dContractTests(unittest.TestCase):
                         f1c_decision=td/"f1c.json",
                         candidate_true_mode=td/"candidate.csv",
                         basis=td/"basis.csv", projected=td/"projected.csv",
-                        tight=td/"tight.csv", runtime=td/"runtime.json",
+                        tight=td/"tight.csv", coarse_matrix=td/"coarse.csv",
+                        pivots=td/"pivots.csv", spectrum=td/"spectrum.csv",
+                        selected_basis=td/"selected.csv",
+                        runtime=td/"runtime.json",
                         output=td/"decision.json")
             self.assertEqual(F1D.analyze(args), 0)
             result = json.loads((td/"decision.json").read_text())

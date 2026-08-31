@@ -17,12 +17,18 @@
 #define ALA_F1D_PIVOT_TOLERANCE 1.0e-12
 #define ALA_F1D_BASIS_TOLERANCE 1.0e-8
 
-static int ala_f1d_factor(double *matrix,int n,double *minimum_ratio)
+static int ala_f1d_factor(double *matrix,int n,double *minimum_ratio,
+                          double *pivots,int *failure_step)
 {
     int i,j,k;
     double diagonal_max=0.0,sum,pivot;
+    *failure_step=-1;
+    for(i=0;i<n;i++) pivots[i]=0.0;
     for(i=0;i<n;i++) diagonal_max=max(diagonal_max,matrix[i*n+i]);
-    if(!isfinite(diagonal_max) || diagonal_max<=0.0) return 0;
+    if(!isfinite(diagonal_max) || diagonal_max<=0.0) {
+        *failure_step=0;
+        return 0;
+    }
     *minimum_ratio=1.0e300;
     for(i=0;i<n;i++)
         for(j=0;j<=i;j++) {
@@ -30,8 +36,12 @@ static int ala_f1d_factor(double *matrix,int n,double *minimum_ratio)
             for(k=0;k<j;k++) sum-=matrix[i*n+k]*matrix[j*n+k];
             if(i==j) {
                 pivot=sum;
+                pivots[i]=pivot;
                 if(!isfinite(pivot) ||
-                   pivot<=ALA_F1D_PIVOT_TOLERANCE*diagonal_max) return 0;
+                   pivot<=ALA_F1D_PIVOT_TOLERANCE*diagonal_max) {
+                    *failure_step=i;
+                    return 0;
+                }
                 *minimum_ratio=min(*minimum_ratio,pivot/diagonal_max);
                 matrix[i*n+j]=sqrt(pivot);
             }
@@ -39,6 +49,38 @@ static int ala_f1d_factor(double *matrix,int n,double *minimum_ratio)
         }
     for(i=0;i<n;i++) for(j=i+1;j<n;j++) matrix[i*n+j]=0.0;
     return 1;
+}
+
+static int ala_f1d_popcount(int value)
+{
+    int count=0;
+    while(value) { count+=value&1; value>>=1; }
+    return count;
+}
+
+static double ala_f1d_submatrix_symmetry(const double *raw,
+    const int *active,int n,int leading)
+{
+    int i,j;
+    double defect=0.0,scale=0.0;
+    for(i=0;i<n;i++)
+        for(j=0;j<n;j++)
+            scale=max(scale,fabs(raw[active[i]*leading+active[j]]));
+    for(i=0;i<n;i++)
+        for(j=0;j<i;j++)
+            defect=max(defect,fabs(raw[active[i]*leading+active[j]]-
+                                  raw[active[j]*leading+active[i]])/
+                               max(scale,1.0e-300));
+    return defect;
+}
+
+static void ala_f1d_extract_symmetric(const double *symmetric,
+    const int *active,int n,int leading,double *result)
+{
+    int i,j;
+    for(i=0;i<n;i++)
+        for(j=0;j<n;j++)
+            result[i*n+j]=symmetric[active[i]*leading+active[j]];
 }
 
 static void ala_f1d_solve(const double *factor,const double *rhs,double *x,int n)
@@ -84,13 +126,28 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
     double **velocity_rhs=0,**velocity=0,**velocity_work=0;
     double original[ALA_F1A_MAX_MODES*ALA_F1A_MAX_MODES];
     double original_factor[ALA_F1A_MAX_MODES*ALA_F1A_MAX_MODES];
+    double original_pivots[ALA_F1A_MAX_MODES];
+    int original_failure_step=-1;
+    double coarse_raw[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
     double coarse[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
     double factor[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
+    double full_factor[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
+    double full_pivots[ALA_F1D_MAX_BASIS],selected_pivots[ALA_F1D_MAX_BASIS];
+    double eigen_work[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
+    double eigenvectors[ALA_F1D_MAX_BASIS*ALA_F1D_MAX_BASIS];
+    double eigenvalues[ALA_F1D_MAX_BASIS];
+    int active_index[ALA_F1D_MAX_BASIS];
+    int basis_source[ALA_F1D_MAX_BASIS];
     FILE *metrics=NULL,*basis_log=NULL,*projected=NULL,*tight=NULL,*summary=NULL;
+    FILE *matrix_log=NULL,*pivot_log=NULL,*spectrum_log=NULL,*subset_log=NULL;
     int i,j,m,e,pass,n=2*ALA_E2_LATE_COUNT,selected,coarse_dim,accepted=0;
-    int call_id=0;
+    int call_id=0,full_factor_pass=0,full_failure_step=-1;
+    int selected_factor_pass=0,selected_failure_step=-1;
+    int selected_mask=0,retained=0,active_dim=0,mask,target_count;
     double original_symmetry=0.0,coarse_symmetry=0.0,scale=0.0;
-    double original_pivot=0.0,coarse_pivot=0.0,weight;
+    double original_pivot=0.0,full_pivot=0.0,selected_pivot=0.0,weight;
+    double selected_symmetry=0.0,eigen_min=0.0,eigen_max=0.0,condition=0.0;
+    double full_diagonal_scale=0.0,selected_diagonal_scale=0.0;
 
     if(getenv("STRICT_ALA_STAGE_F1D_REQUIRED")==NULL) return 0;
     if(executed) return 1;
@@ -155,6 +212,19 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             "strict_ala_stage_F1d_tight_solves.csv","w");
         fprintf(tight,"call_id,role,POD_mode,rhs_norm,requested_relative_tolerance,"
                 "target_residual,achieved_relative_residual,cycles,max_cycles,converged\n");
+        matrix_log=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1d_coarse_matrix.csv","w");
+        fprintf(matrix_log,"scope,row_basis,column_basis,value\n");
+        pivot_log=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1d_cholesky_pivots.csv","w");
+        fprintf(pivot_log,"scope,step,pivot,pivot_ratio,evaluated,passed\n");
+        spectrum_log=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1d_coarse_spectrum.csv","w");
+        fprintf(spectrum_log,"eigen_index,eigenvalue,relative_to_max,positive\n");
+        subset_log=ala_f1a_open_root(E,output_dir,
+            "strict_ala_stage_F1d_selected_basis.csv","w");
+        fprintf(subset_log,"selected_index,full_basis_index,basis_type,"
+                "source_mode,retained\n");
     }
 
     memset(original,0,sizeof(original));
@@ -171,7 +241,7 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             myerror(E,"Stage-F1d zero original basis vector");
         ala_f1d_scale_pressure(E,q[i],1.0/qnorm,lev);
         ala_f1d_scale_pressure(E,Sq[i],1.0/qnorm,lev);
-        basis[i]=q[i]; Sbasis[i]=Sq[i];
+        basis[i]=q[i]; Sbasis[i]=Sq[i]; basis_source[i]=i+1;
     }
     for(i=0;i<selected;i++)
         for(j=0;j<selected;j++) {
@@ -188,7 +258,8 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
         }
     memcpy(original_factor,original,(size_t)selected*selected*sizeof(double));
     if(original_symmetry>ALA_F1D_SYMMETRY_TOLERANCE ||
-       !ala_f1d_factor(original_factor,selected,&original_pivot))
+       !ala_f1d_factor(original_factor,selected,&original_pivot,
+                       original_pivots,&original_failure_step))
         myerror(E,"Stage-F1d original coarse matrix failed SPD contract");
 
     coarse_dim=selected;
@@ -220,6 +291,7 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             basis_index=coarse_dim+1;
             basis[coarse_dim]=ala_schur_alloc_pressure(E,lev);
             Sbasis[coarse_dim]=ala_schur_alloc_pressure(E,lev);
+            basis_source[coarse_dim]=j+1;
             ala_f1a_copy_pressure(E,basis[coarse_dim],fine_rhs,lev);
             ala_f1d_scale_pressure(E,basis[coarse_dim],1.0/postnorm,lev);
             for(i=0;i<coarse_dim;i++)
@@ -241,13 +313,14 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             fflush(basis_log);
         }
     }
-    if(accepted<=0) myerror(E,"Stage-F1d produced no independent closure basis");
-
+    memset(coarse_raw,0,sizeof(coarse_raw));
     memset(coarse,0,sizeof(coarse)); scale=0.0;
     for(i=0;i<coarse_dim;i++)
         for(j=0;j<coarse_dim;j++) {
-            coarse[i*coarse_dim+j]=global_pdot(E,basis[i],Sbasis[j],lev);
-            scale=max(scale,fabs(coarse[i*coarse_dim+j]));
+            coarse_raw[i*coarse_dim+j]=
+                global_pdot(E,basis[i],Sbasis[j],lev);
+            coarse[i*coarse_dim+j]=coarse_raw[i*coarse_dim+j];
+            scale=max(scale,fabs(coarse_raw[i*coarse_dim+j]));
         }
     for(i=0;i<coarse_dim;i++)
         for(j=0;j<i;j++) {
@@ -257,32 +330,125 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             coarse[i*coarse_dim+j]=coarse[j*coarse_dim+i]=
                 0.5*(coarse[i*coarse_dim+j]+coarse[j*coarse_dim+i]);
         }
-    memcpy(factor,coarse,(size_t)coarse_dim*coarse_dim*sizeof(double));
-    if(coarse_symmetry>ALA_F1D_SYMMETRY_TOLERANCE ||
-       !ala_f1d_factor(factor,coarse_dim,&coarse_pivot))
-        myerror(E,"Stage-F1d enriched coarse matrix failed SPD contract");
+    if(E->parallel.me==0) {
+        for(i=0;i<coarse_dim;i++)
+            for(j=0;j<coarse_dim;j++) {
+                fprintf(matrix_log,"FULL_RAW,%d,%d,%.17e\n",i+1,j+1,
+                        coarse_raw[i*coarse_dim+j]);
+                fprintf(matrix_log,"FULL_SYMMETRIZED,%d,%d,%.17e\n",i+1,j+1,
+                        coarse[i*coarse_dim+j]);
+            }
+        fflush(matrix_log);
+    }
+
+    memcpy(full_factor,coarse,(size_t)coarse_dim*coarse_dim*sizeof(double));
+    for(i=0;i<coarse_dim;i++)
+        full_diagonal_scale=max(full_diagonal_scale,
+                                coarse[i*coarse_dim+i]);
+    full_factor_pass=ala_f1d_factor(full_factor,coarse_dim,&full_pivot,
+                                    full_pivots,&full_failure_step);
+    if(scale>0.0 && isfinite(scale)) {
+        for(i=0;i<coarse_dim*coarse_dim;i++) eigen_work[i]=coarse[i]/scale;
+        ala_geneo_jacobi_eigensolve(eigen_work,eigenvectors,eigenvalues,
+                                    coarse_dim);
+        for(i=0;i<coarse_dim;i++) eigenvalues[i]*=scale;
+        for(i=0;i<coarse_dim;i++)
+            for(j=i+1;j<coarse_dim;j++)
+                if(eigenvalues[j]<eigenvalues[i]) {
+                    double swap=eigenvalues[i];
+                    eigenvalues[i]=eigenvalues[j]; eigenvalues[j]=swap;
+                }
+        eigen_min=eigenvalues[0]; eigen_max=eigenvalues[coarse_dim-1];
+        condition=eigen_min>0.0 ? eigen_max/eigen_min : 0.0;
+    }
+    if(E->parallel.me==0) {
+        for(i=0;i<coarse_dim;i++) {
+            int evaluated=full_factor_pass || i<=full_failure_step;
+            int pivot_pass=evaluated &&
+                (full_factor_pass || i<full_failure_step);
+            fprintf(pivot_log,"FULL,%d,%.17e,%.17e,%d,%d\n",i+1,
+                    full_pivots[i],
+                    full_pivots[i]/max(full_diagonal_scale,1.0e-300),
+                    evaluated,pivot_pass);
+            fprintf(spectrum_log,"%d,%.17e,%.17e,%d\n",i+1,
+                    eigenvalues[i],eigenvalues[i]/max(fabs(eigen_max),1.0e-300),
+                    eigenvalues[i]>0.0);
+        }
+        fflush(pivot_log); fflush(spectrum_log);
+    }
+
+    /* Retain all original POD modes and choose the largest deterministic
+     * residual subset whose raw Galerkin defect and symmetrized Cholesky
+     * factor both satisfy the frozen contract.  A full-space failure is a
+     * scientific result, not an MPI-fatal instrumentation failure. */
+    selected_mask=-1;
+    for(target_count=accepted;target_count>=0 && selected_mask<0;target_count--)
+        for(mask=0;mask<(1<<accepted);mask++) {
+            if(ala_f1d_popcount(mask)!=target_count) continue;
+            active_dim=0;
+            for(i=0;i<selected;i++) active_index[active_dim++]=i;
+            for(i=0;i<accepted;i++)
+                if(mask&(1<<i)) active_index[active_dim++]=selected+i;
+            selected_symmetry=ala_f1d_submatrix_symmetry(coarse_raw,
+                active_index,active_dim,coarse_dim);
+            ala_f1d_extract_symmetric(coarse,active_index,active_dim,
+                                     coarse_dim,factor);
+            selected_factor_pass=ala_f1d_factor(factor,active_dim,
+                &selected_pivot,selected_pivots,&selected_failure_step);
+            if(selected_symmetry<=ALA_F1D_SYMMETRY_TOLERANCE &&
+               selected_factor_pass) { selected_mask=mask; break; }
+        }
+    if(selected_mask<0)
+        myerror(E,"Stage-F1d original POD subspace lost SPD contract");
+    retained=ala_f1d_popcount(selected_mask);
+    for(i=0;i<active_dim;i++)
+        selected_diagonal_scale=max(selected_diagonal_scale,
+            coarse[active_index[i]*coarse_dim+active_index[i]]);
+
+    if(E->parallel.me==0) {
+        for(i=0;i<active_dim;i++) {
+            int full_i=active_index[i];
+            fprintf(subset_log,"%d,%d,%s,%d,1\n",i+1,full_i+1,
+                    full_i<selected ? "POD" : "coarse_residual",
+                    basis_source[full_i]);
+            fprintf(pivot_log,"SELECTED,%d,%.17e,%.17e,1,1\n",i+1,
+                    selected_pivots[i],
+                    selected_pivots[i]/max(selected_diagonal_scale,1.0e-300));
+            for(j=0;j<active_dim;j++) {
+                int full_j=active_index[j];
+                fprintf(matrix_log,"SELECTED_RAW,%d,%d,%.17e\n",i+1,j+1,
+                        coarse_raw[full_i*coarse_dim+full_j]);
+                fprintf(matrix_log,"SELECTED_SYMMETRIZED,%d,%d,%.17e\n",
+                        i+1,j+1,coarse[full_i*coarse_dim+full_j]);
+            }
+        }
+        fflush(subset_log); fflush(pivot_log); fflush(matrix_log);
+    }
 
     for(j=0;j<selected;j++) {
         double rhs_c[ALA_F1D_MAX_BASIS]={0},c[ALA_F1D_MAX_BASIS]={0};
         double rhs_d[ALA_F1D_MAX_BASIS]={0},d[ALA_F1D_MAX_BASIS]={0};
         double qq,yy,qy,qz,ep,cosine,achieved;
         double original_projection=0.0,enriched_projection=0.0;
-        for(i=0;i<coarse_dim;i++) rhs_c[i]=global_pdot(E,basis[i],q[j],lev);
-        ala_f1d_solve(factor,rhs_c,c,coarse_dim);
+        for(i=0;i<active_dim;i++)
+            rhs_c[i]=global_pdot(E,basis[active_index[i]],q[j],lev);
+        ala_f1d_solve(factor,rhs_c,c,active_dim);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[lev];e++) {
                 double value=q[j][m][e];
-                for(i=0;i<coarse_dim;i++) value-=Sbasis[i][m][e]*c[i];
+                for(i=0;i<active_dim;i++)
+                    value-=Sbasis[active_index[i]][m][e]*c[i];
                 fine_rhs[m][e]=value;
             }
         ala_schur_preconditioner_action(E,fine_rhs,fine_z,work,aux,lev,3,cache);
-        for(i=0;i<coarse_dim;i++)
-            rhs_d[i]=global_pdot(E,Sbasis[i],fine_z,lev);
-        ala_f1d_solve(factor,rhs_d,d,coarse_dim);
+        for(i=0;i<active_dim;i++)
+            rhs_d[i]=global_pdot(E,Sbasis[active_index[i]],fine_z,lev);
+        ala_f1d_solve(factor,rhs_d,d,active_dim);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[lev];e++) {
                 double value=fine_z[m][e];
-                for(i=0;i<coarse_dim;i++) value+=basis[i][m][e]*(c[i]-d[i]);
+                for(i=0;i<active_dim;i++)
+                    value+=basis[active_index[i]][m][e]*(c[i]-d[i]);
                 z[j][m][e]=value;
             }
         achieved=ala_f1a_true_action(E,z[j],Sz[j],velocity_rhs,velocity,
@@ -293,12 +459,15 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
         qz=global_pdot(E,q[j],z[j],lev);
         ep=sqrt(max(qq+yy-2.0*qy,0.0)/max(qq,1.0e-300));
         cosine=qy/sqrt(max(qq*yy,1.0e-300));
-        for(i=0;i<coarse_dim;i++) {
-            double residual=global_pdot(E,basis[i],q[j],lev)-
-                            global_pdot(E,basis[i],Sz[j],lev);
+        for(i=0;i<selected;i++) {
+            double residual=global_pdot(E,q[i],q[j],lev)-
+                            global_pdot(E,q[i],Sz[j],lev);
+            original_projection=max(original_projection,fabs(residual));
+        }
+        for(i=0;i<active_dim;i++) {
+            double residual=global_pdot(E,basis[active_index[i]],q[j],lev)-
+                global_pdot(E,basis[active_index[i]],Sz[j],lev);
             enriched_projection=max(enriched_projection,fabs(residual));
-            if(i<selected) original_projection=max(original_projection,
-                                                    fabs(residual));
         }
         weight=values[j]/max(total,1.0e-300);
         if(E->parallel.me==0) {
@@ -308,11 +477,11 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
             fflush(metrics);
         }
     }
-    for(i=0;i<coarse_dim;i++)
-        for(j=0;j<coarse_dim;j++)
+    for(i=0;i<active_dim;i++)
+        for(j=0;j<active_dim;j++)
             if(E->parallel.me==0)
                 fprintf(projected,"T_enriched,%d,%d,%.17e\n",i+1,j+1,
-                        coarse[i*coarse_dim+j]);
+                        coarse[active_index[i]*coarse_dim+active_index[j]]);
     for(i=0;i<selected;i++)
         for(j=0;j<selected;j++) {
             double map=global_pdot(E,q[i],z[j],lev);
@@ -326,31 +495,49 @@ static int strict_ala_stage_f1d_run(struct All_variables *E,
         fflush(projected);
         summary=ala_f1a_open_root(E,output_dir,
             "strict_ala_stage_F1d_runtime.json","w");
-        fprintf(summary,"{\n  \"schema\": \"strict-ala-stage-F1d-runtime-v1\",\n"
+        fprintf(summary,"{\n  \"schema\": \"strict-ala-stage-F1d-runtime-v2\",\n"
             "  \"selected_modes\": %d,\n  \"selected_energy\": %.17e,\n"
             "  \"original_basis_dimension\": %d,\n"
             "  \"accepted_residual_modes\": %d,\n"
+            "  \"retained_residual_modes\": %d,\n"
+            "  \"full_enriched_basis_dimension\": %d,\n"
             "  \"enriched_basis_dimension\": %d,\n"
             "  \"original_matrix_symmetry_defect\": %.17e,\n"
             "  \"original_matrix_minimum_pivot_ratio\": %.17e,\n"
+            "  \"full_matrix_symmetry_defect\": %.17e,\n"
+            "  \"full_matrix_cholesky_pass\": %s,\n"
+            "  \"full_matrix_failure_step\": %d,\n"
+            "  \"full_matrix_minimum_pivot_ratio\": %.17e,\n"
+            "  \"full_matrix_eigenvalue_minimum\": %.17e,\n"
+            "  \"full_matrix_eigenvalue_maximum\": %.17e,\n"
+            "  \"full_matrix_spectral_condition\": %.17e,\n"
+            "  \"selected_residual_mask\": %d,\n"
             "  \"enriched_matrix_symmetry_defect\": %.17e,\n"
             "  \"enriched_matrix_minimum_pivot_ratio\": %.17e,\n"
+            "  \"structural_fallback\": %s,\n"
             "  \"tight_solve_count\": %d,\n"
-            "  \"candidate\": \"residual_closed_balanced_actual_mode_coarse\",\n"
+            "  \"candidate\": \"maximal_spd_residual_closed_balanced_actual_mode_coarse\",\n"
             "  \"fine_map\": \"F1b_operator_consistent_frozen\",\n"
             "  \"production_default_change_authorized\": false\n}\n",
-            selected,selected_energy,selected,accepted,coarse_dim,
-            original_symmetry,original_pivot,coarse_symmetry,coarse_pivot,call_id);
+            selected,selected_energy,selected,accepted,retained,coarse_dim,
+            active_dim,original_symmetry,original_pivot,coarse_symmetry,
+            full_factor_pass ? "true" : "false",full_failure_step,
+            full_pivot,eigen_min,eigen_max,condition,selected_mask,
+            selected_symmetry,selected_pivot,
+            retained<accepted ? "true" : "false",call_id);
         fclose(summary);
-        fprintf(E->fp,"STRICT_ALA_STAGE_F1D_RESIDUAL_CLOSURE_V1 "
-                "modes=%d residual_modes=%d coarse_dim=%d tight_solves=%d\n",
-                selected,accepted,coarse_dim,call_id);
+        fprintf(E->fp,"STRICT_ALA_STAGE_F1D_MAXIMAL_SPD_SUBSPACE_V2 "
+                "modes=%d accepted=%d retained=%d full_dim=%d selected_dim=%d "
+                "tight_solves=%d\n",selected,accepted,retained,coarse_dim,
+                active_dim,call_id);
         fprintf(E->fp,"STRICT_ALA_STAGE_F1D_COMPLETE candidate="
-                "residual_closed_balanced_actual_mode_coarse\n");
+                "maximal_spd_residual_closed_balanced_actual_mode_coarse\n");
         fflush(E->fp);
     }
     if(metrics) fclose(metrics); if(basis_log) fclose(basis_log);
     if(projected) fclose(projected); if(tight) fclose(tight);
+    if(matrix_log) fclose(matrix_log); if(pivot_log) fclose(pivot_log);
+    if(spectrum_log) fclose(spectrum_log); if(subset_log) fclose(subset_log);
     for(i=selected;i<coarse_dim;i++) {
         ala_schur_free_field(E,basis[i]); ala_schur_free_field(E,Sbasis[i]);
     }

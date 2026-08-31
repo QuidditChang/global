@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed Stage-F1d residual-closed coarse-space qualification."""
+"""Fail-closed Stage-F1d maximal-SPD residual coarse qualification."""
 
 import argparse
 import csv
@@ -69,6 +69,28 @@ def relative_symmetry(rows, matrix):
     return defect / max(scale, 1.0e-300)
 
 
+def complete_scope(rows, scope, size):
+    selected = [row for row in rows if row["scope"] == scope]
+    keys = {(int(row["row_basis"]), int(row["column_basis"]))
+            for row in selected}
+    expected = {(i, j) for i in range(1, size + 1)
+                for j in range(1, size + 1)}
+    if len(selected) != size * size or keys != expected:
+        raise ValueError(f"incomplete coarse matrix scope {scope}")
+    for row in selected:
+        finite(row["value"], f"{scope} value")
+    return True
+
+
+def scope_symmetry(rows, scope):
+    selected = [row for row in rows if row["scope"] == scope]
+    values = {(int(row["row_basis"]), int(row["column_basis"])):
+              finite(row["value"], f"{scope} value") for row in selected}
+    scale = max(abs(value) for value in values.values())
+    return max(abs(values[i, j] - values[j, i]) for i, j in values) / \
+        max(scale, 1.0e-300)
+
+
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
@@ -92,6 +114,15 @@ def analyze(args):
         "call_id", "role", "POD_mode", "rhs_norm",
         "requested_relative_tolerance", "target_residual",
         "achieved_relative_residual", "cycles", "max_cycles", "converged"))
+    coarse_matrix = read_csv(args.coarse_matrix,
+        ("scope", "row_basis", "column_basis", "value"))
+    pivots = read_csv(args.pivots,
+        ("scope", "step", "pivot", "pivot_ratio", "evaluated", "passed"))
+    spectrum = read_csv(args.spectrum,
+        ("eigen_index", "eigenvalue", "relative_to_max", "positive"))
+    selected_basis = read_csv(args.selected_basis,
+        ("selected_index", "full_basis_index", "basis_type", "source_mode",
+         "retained"))
     runtime = load_json(args.runtime)
     if not baseline:
         raise ValueError("missing operator-consistent F1b baseline")
@@ -108,6 +139,9 @@ def analyze(args):
 
     selected = len(candidate)
     accepted = sum(row["accepted"] == "1" for row in basis)
+    retained = int(runtime.get("retained_residual_modes", -1))
+    full_dimension = selected + accepted
+    active_dimension = selected + retained
     expected_tight = 2 * selected + accepted
     baseline_rms = weighted_rms(baseline)
     candidate_rms = weighted_rms(candidate)
@@ -129,16 +163,33 @@ def analyze(args):
         for mode in baseline_by_mode
         if finite(baseline_by_mode[mode]["POD_energy_weight"], "weight") >=
         0.05 * total_weight)
+    selected_indices = [int(row["selected_index"]) for row in selected_basis]
+    selected_full_indices = [int(row["full_basis_index"])
+                             for row in selected_basis]
+    selected_original = [row for row in selected_basis
+                         if row["basis_type"] == "POD"]
+    selected_residual = [row for row in selected_basis
+                         if row["basis_type"] == "coarse_residual"]
     basis_valid = (
-        len(basis) == selected and accepted > 0 and
+        len(basis) == selected and accepted >= 0 and
         accepted == runtime.get("accepted_residual_modes") and
-        runtime.get("enriched_basis_dimension") == selected + accepted and
+        0 <= retained <= accepted and
+        runtime.get("full_enriched_basis_dimension") == full_dimension and
+        runtime.get("enriched_basis_dimension") == active_dimension and
         all(row["basis_type"] == "coarse_residual" and row["valid"] == "1"
             for row in basis) and
         all(finite(row["postorthogonal_norm"], "basis norm") > 0.0 and
             finite(row["maximum_orthogonality"], "basis orthogonality") <=
             1.0e-8 and finite(row["S_energy"], "basis S energy") > 0.0
-            for row in basis if row["accepted"] == "1"))
+            for row in basis if row["accepted"] == "1") and
+        len(selected_basis) == active_dimension and
+        selected_indices == list(range(1, active_dimension + 1)) and
+        len(set(selected_full_indices)) == active_dimension and
+        len(selected_original) == selected and
+        sorted(int(row["full_basis_index"]) for row in selected_original) ==
+            list(range(1, selected + 1)) and
+        len(selected_residual) == retained and
+        all(row["retained"] == "1" for row in selected_basis))
     tight_pass = (
         runtime.get("tight_solve_count") == len(tight) == expected_tight and
         len(tight) <= MAX_TIGHT_SOLVES and
@@ -149,6 +200,64 @@ def analyze(args):
     t_symmetry = relative_symmetry(projected, "T_enriched")
     m_symmetry = relative_symmetry(projected, "M_balanced")
     h_symmetry = relative_symmetry(projected, "H_balanced")
+    matrix_valid = (
+        complete_scope(coarse_matrix, "FULL_RAW", full_dimension) and
+        complete_scope(coarse_matrix, "FULL_SYMMETRIZED", full_dimension) and
+        complete_scope(coarse_matrix, "SELECTED_RAW", active_dimension) and
+        complete_scope(coarse_matrix, "SELECTED_SYMMETRIZED", active_dimension))
+    full_pivots = [row for row in pivots if row["scope"] == "FULL"]
+    selected_pivots = [row for row in pivots if row["scope"] == "SELECTED"]
+    pivot_valid = (
+        len(full_pivots) == full_dimension and
+        len(selected_pivots) == active_dimension and
+        [int(row["step"]) for row in full_pivots] ==
+            list(range(1, full_dimension + 1)) and
+        [int(row["step"]) for row in selected_pivots] ==
+            list(range(1, active_dimension + 1)) and
+        all(row["evaluated"] == "1" and row["passed"] == "1" and
+            finite(row["pivot"], "selected pivot") > 0.0 and
+            finite(row["pivot_ratio"], "selected pivot ratio") > 0.0
+            for row in selected_pivots) and
+        all(row["evaluated"] in ("0", "1") and row["passed"] in ("0", "1")
+            for row in full_pivots))
+    spectrum_valid = (
+        len(spectrum) == full_dimension and
+        [int(row["eigen_index"]) for row in spectrum] ==
+            list(range(1, full_dimension + 1)) and
+        all(math.isfinite(finite(row["eigenvalue"], "coarse eigenvalue")) and
+            row["positive"] in ("0", "1") for row in spectrum))
+    full_symmetry = scope_symmetry(coarse_matrix, "FULL_RAW")
+    selected_symmetry = scope_symmetry(coarse_matrix, "SELECTED_RAW")
+    spectral_values = [finite(row["eigenvalue"], "coarse eigenvalue")
+                       for row in spectrum]
+    full_factor_pass = runtime.get("full_matrix_cholesky_pass")
+    full_failure_step = runtime.get("full_matrix_failure_step")
+    full_factor_consistent = (
+        isinstance(full_factor_pass, bool) and
+        isinstance(full_failure_step, int) and
+        ((full_factor_pass and full_failure_step == -1 and
+          all(row["evaluated"] == "1" and row["passed"] == "1"
+              for row in full_pivots)) or
+         (not full_factor_pass and 0 <= full_failure_step < full_dimension and
+          full_pivots[full_failure_step]["evaluated"] == "1" and
+          full_pivots[full_failure_step]["passed"] == "0")))
+    runtime_diagnostics_consistent = (
+        math.isclose(full_symmetry,
+            finite(runtime.get("full_matrix_symmetry_defect"),
+                   "full matrix symmetry"), rel_tol=1.0e-12,
+            abs_tol=1.0e-15) and
+        math.isclose(selected_symmetry,
+            finite(runtime.get("enriched_matrix_symmetry_defect"),
+                   "selected matrix symmetry"), rel_tol=1.0e-12,
+            abs_tol=1.0e-15) and
+        math.isclose(min(spectral_values),
+            finite(runtime.get("full_matrix_eigenvalue_minimum"),
+                   "minimum eigenvalue"), rel_tol=1.0e-12,
+            abs_tol=1.0e-300) and
+        math.isclose(max(spectral_values),
+            finite(runtime.get("full_matrix_eigenvalue_maximum"),
+                   "maximum eigenvalue"), rel_tol=1.0e-12,
+            abs_tol=1.0e-300))
     lineage_valid = (
         f1c.get("experiment_evidence_valid") is True and
         f1c.get("decision") == "F1C_BALANCED_COARSE_REJECTED" and
@@ -157,7 +266,7 @@ def analyze(args):
     structural_gates = {
         "F1c_lineage": lineage_valid,
         "runtime_candidate": runtime.get("candidate") ==
-            "residual_closed_balanced_actual_mode_coarse",
+            "maximal_spd_residual_closed_balanced_actual_mode_coarse",
         "fine_map_frozen": runtime.get("fine_map") ==
             "F1b_operator_consistent_frozen",
         "production_freeze":
@@ -166,6 +275,9 @@ def analyze(args):
         "runtime_selected_energy":
             finite(runtime.get("selected_energy"), "selected energy") >= 0.95,
         "basis_residual_closure": basis_valid,
+        "full_matrix_diagnostics": matrix_valid and spectrum_valid and
+            runtime_diagnostics_consistent,
+        "cholesky_diagnostics": pivot_valid and full_factor_consistent,
         "coarse_SPD": finite(
             runtime.get("enriched_matrix_minimum_pivot_ratio"),
             "enriched pivot ratio") > 0.0,
@@ -177,6 +289,7 @@ def analyze(args):
         "rows_valid": all(row["valid"] == "1" for row in candidate),
     }
     performance_gates = {
+        "retains_residual_mode": retained > 0,
         "enriched_residual_projection": projection <= PROJECTION_LIMIT,
         "improves_F1c": candidate_rms < f1c_rms,
         "true_mode_RMS": ratio <= RMS_RATIO_LIMIT,
@@ -196,9 +309,9 @@ def analyze(args):
         decision = "F1D_INVALID_STRUCTURAL_EVIDENCE"
         next_task = "REPEAT_F1D_VALID_EXPERIMENT"
     result = {
-        "schema": "strict-ala-stage-F1d-decision-v1",
+        "schema": "strict-ala-stage-F1d-decision-v2",
         "experiment_evidence_valid": structural_pass,
-        "candidate": "residual_closed_balanced_actual_mode_coarse",
+        "candidate": "maximal_spd_residual_closed_balanced_actual_mode_coarse",
         "metrics": {
             "E_P_RMS_F1b": baseline_rms,
             "E_P_RMS_F1c": f1c_rms,
@@ -208,7 +321,22 @@ def analyze(args):
             "original_projection_max": original_projection,
             "enriched_projection_max": projection,
             "accepted_residual_modes": accepted,
-            "enriched_basis_dimension": selected + accepted,
+            "retained_residual_modes": retained,
+            "full_enriched_basis_dimension": full_dimension,
+            "enriched_basis_dimension": active_dimension,
+            "full_matrix_symmetry_defect": finite(
+                runtime.get("full_matrix_symmetry_defect"),
+                "full matrix symmetry"),
+            "full_matrix_cholesky_pass":
+                runtime.get("full_matrix_cholesky_pass"),
+            "full_matrix_failure_step":
+                runtime.get("full_matrix_failure_step"),
+            "full_matrix_eigenvalue_minimum": finite(
+                runtime.get("full_matrix_eigenvalue_minimum"),
+                "minimum eigenvalue"),
+            "full_matrix_eigenvalue_maximum": finite(
+                runtime.get("full_matrix_eigenvalue_maximum"),
+                "maximum eigenvalue"),
             "T_enriched_symmetry_defect": t_symmetry,
             "M_balanced_symmetry_defect": m_symmetry,
             "H_balanced_symmetry_defect": h_symmetry,
@@ -264,7 +392,8 @@ def parser():
     commands = root.add_subparsers(required=True)
     p = commands.add_parser("analyze")
     for name in ("f1b-true-mode", "f1c-decision", "candidate-true-mode",
-                 "basis", "projected", "tight", "runtime", "output"):
+                 "basis", "projected", "tight", "coarse-matrix", "pivots",
+                 "spectrum", "selected-basis", "runtime", "output"):
         p.add_argument(f"--{name}", required=True)
     p.set_defaults(fn=analyze)
     p = commands.add_parser("audit")
