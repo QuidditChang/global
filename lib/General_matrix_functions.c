@@ -396,6 +396,42 @@ static int ala_f2b_observer_enabled(void)
   return value!=NULL && strcmp(value,"1")==0;
 }
 
+static int ala_f2c_active(void)
+{
+  const char *value=getenv("STRICT_ALA_STAGE_F2C_ACTIVE");
+  return value!=NULL && strcmp(value,"1")==0;
+}
+
+static int ala_f2c_finest_sweeps(struct All_variables *E,int configured,
+                                int level)
+{
+  const char *value;
+  char *end;
+  long result;
+  if(!ala_f2c_active() || level!=E->mesh.levmax) return configured;
+  value=getenv("STRICT_ALA_STAGE_F2C_FINEST_SWEEPS");
+  if(value==NULL) myerror(E,"Incomplete strict-ALA Stage-F2c sweep contract");
+  result=strtol(value,&end,10);
+  if(*value=='\0' || *end!='\0' || result<1 || result>1000)
+    myerror(E,"Invalid strict-ALA Stage-F2c finest sweep count");
+  return (int)result;
+}
+
+static double ala_f2c_finest_damping(struct All_variables *E,double configured,
+                                     int level)
+{
+  const char *value;
+  char *end;
+  double result;
+  if(!ala_f2c_active() || level!=E->mesh.levmax) return configured;
+  value=getenv("STRICT_ALA_STAGE_F2C_FINEST_DAMPING");
+  if(value==NULL) myerror(E,"Incomplete strict-ALA Stage-F2c damping contract");
+  result=strtod(value,&end);
+  if(*value=='\0' || *end!='\0' || !isfinite(result) || result<=0.0 || result>1.0)
+    myerror(E,"Invalid strict-ALA Stage-F2c finest damping");
+  return result;
+}
+
 static void ala_f2b_write_level_row(struct All_variables *E,
                                     const char *phase,int top_level,int level,
                                     double input2,double output2,double alpha)
@@ -404,6 +440,7 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   const char *mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   const char *weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   const char *cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
+  const char *candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
   double input_rms,output_rms,ratio;
   char path[1024];
   FILE *fp;
@@ -416,11 +453,13 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   output_rms=sqrt(output2/max((double)E->mesh.NEQ[level],1.0));
   ratio=output_rms/max(input_rms,1.0e-300);
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/strict_ala_stage_F2b_level_transfer.csv",
-             directory);
+    snprintf(path,sizeof(path),"%s/%s",directory,candidate!=NULL ?
+             "strict_ala_stage_F2c_level_transfer.csv" :
+             "strict_ala_stage_F2b_level_transfer.csv");
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b level output");
+    if(candidate!=NULL) fprintf(fp,"%s,",candidate);
     fprintf(fp,"%s,%s,%s,%d,%d,%s,%.17e,%.17e,%.17e,%.17e,1\n",
             mode,weight,cycle,top_level,level,phase,input_rms,output_rms,
             ratio,alpha);
@@ -450,6 +489,7 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   double fine2,coarse2,fine_rms,coarse_rms;
   double global_vdot();
   const char *directory,*mode,*weight,*cycle;
+  const char *candidate;
   char path[1024];
   FILE *fp;
   if(!ala_f2b_observer_enabled()) return;
@@ -463,14 +503,17 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
+  candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
   if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
     myerror(E,"Incomplete strict-ALA Stage-F2b restriction environment");
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/strict_ala_stage_F2b_level_transfer.csv",
-             directory);
+    snprintf(path,sizeof(path),"%s/%s",directory,candidate!=NULL ?
+             "strict_ala_stage_F2c_level_transfer.csv" :
+             "strict_ala_stage_F2b_level_transfer.csv");
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b restriction output");
+    if(candidate!=NULL) fprintf(fp,"%s,",candidate);
     fprintf(fp,"%s,%s,%s,%d,%d,RESTRICTION,%.17e,%.17e,%.17e,0,1\n",
             mode,weight,cycle,top_level,fine_level,fine_rms,coarse_rms,
             coarse_rms/max(fine_rms,1.0e-300));
@@ -569,6 +612,7 @@ double multi_grid(E,d1,F,acc,hl)
 
                                       /* Pre-smoothing  */
           cycles=((dlev==levmax)?E->control.v_steps_high:E->control.down_heavy);
+          cycles=ala_f2c_finest_sweeps(E,cycles,dlev);
           ic = ((dlev==lev)?1:0);
           gauss_seidel(E,vel[dlev],res[dlev],AU[dlev],0.01,&cycles,dlev,ic);
 
@@ -597,6 +641,7 @@ double multi_grid(E,d1,F,acc,hl)
                                         /*    Upward stoke of the V    */
         for (ulev=levmin+1;ulev<=lev;ulev++)   {
             cycles=((ulev==levmax)?E->control.v_steps_high:E->control.up_heavy);
+            cycles=ala_f2c_finest_sweeps(E,cycles,ulev);
 
             interp_vector(E,ulev-1,vel[ulev-1],del_vel[ulev]);
             strip_bcs_from_residual(E,del_vel[ulev],ulev);
@@ -980,7 +1025,8 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
 
     (void)acc;
     steps=*cycles;
-    damping=E->control.ala_element_vanka_damping;
+    damping=ala_f2c_finest_damping(E,
+        E->control.ala_element_vanka_damping,level);
     if(E->parallel.me==0 && !announced[level]) {
         fprintf(E->fp,
                 "ALA full element-Vanka active level=%d local_elements=%d "
