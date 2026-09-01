@@ -432,6 +432,27 @@ static double ala_f2c_finest_damping(struct All_variables *E,double configured,
   return result;
 }
 
+/* Stage F2d changes the composition of the existing local K_gamma blocks,
+ * never their factors or the assembled operator.  Eight global-parity colors
+ * make same-color element corrections additive and introduce a true residual
+ * update between colors.  Mode 2 reverses the color order on alternate
+ * sweeps, testing order sensitivity without a second cache. */
+static int ala_f2d_finest_coloring(struct All_variables *E,int level)
+{
+  const char *active=getenv("STRICT_ALA_STAGE_F2D_ACTIVE");
+  const char *mode;
+  if(active==NULL || strcmp(active,"1")!=0 || level!=E->mesh.levmax)
+    return 0;
+  mode=getenv("STRICT_ALA_STAGE_F2D_L4_MODE");
+  if(mode==NULL)
+    myerror(E,"Incomplete strict-ALA Stage-F2d coloring contract");
+  if(strcmp(mode,"configured")==0) return 0;
+  if(strcmp(mode,"colored_forward")==0) return 1;
+  if(strcmp(mode,"colored_alternating")==0) return 2;
+  myerror(E,"Invalid strict-ALA Stage-F2d L4 mode");
+  return 0;
+}
+
 static void ala_f2b_write_level_row(struct All_variables *E,
                                     const char *phase,int top_level,int level,
                                     double input2,double output2,double alpha)
@@ -440,7 +461,8 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   const char *mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   const char *weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   const char *cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  const char *candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
+  const char *candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
+  int f2d=candidate!=NULL;
   double input_rms,output_rms,ratio;
   char path[1024];
   FILE *fp;
@@ -453,9 +475,11 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   output_rms=sqrt(output2/max((double)E->mesh.NEQ[level],1.0));
   ratio=output_rms/max(input_rms,1.0e-300);
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/%s",directory,candidate!=NULL ?
-             "strict_ala_stage_F2c_level_transfer.csv" :
-             "strict_ala_stage_F2b_level_transfer.csv");
+    if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
+    snprintf(path,sizeof(path),"%s/%s",directory,f2d ?
+             "strict_ala_stage_F2d_level_transfer.csv" :
+             (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
+              "strict_ala_stage_F2b_level_transfer.csv"));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b level output");
@@ -490,6 +514,7 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   double global_vdot();
   const char *directory,*mode,*weight,*cycle;
   const char *candidate;
+  int f2d;
   char path[1024];
   FILE *fp;
   if(!ala_f2b_observer_enabled()) return;
@@ -503,13 +528,16 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
+  candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
+  f2d=candidate!=NULL;
+  if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
   if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
     myerror(E,"Incomplete strict-ALA Stage-F2b restriction environment");
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/%s",directory,candidate!=NULL ?
-             "strict_ala_stage_F2c_level_transfer.csv" :
-             "strict_ala_stage_F2b_level_transfer.csv");
+    snprintf(path,sizeof(path),"%s/%s",directory,f2d ?
+             "strict_ala_stage_F2d_level_transfer.csv" :
+             (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
+              "strict_ala_stage_F2b_level_transfer.csv"));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b restriction output");
@@ -1009,6 +1037,7 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
                               int *cycles, int level, int guess)
 {
     int m,e,a,da,ia,j,eq,count,steps,node,fixed;
+    int coloring,colors,color,active_color,ex,ey,ez,element_color;
     int eqs[24];
     double rhs[24],forward[24],solution[24],sum,diagonal;
     double correction,damping,residual;
@@ -1025,6 +1054,8 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
 
     (void)acc;
     steps=*cycles;
+    coloring=ala_f2d_finest_coloring(E,level);
+    colors=coloring ? 8 : 1;
     damping=ala_f2c_finest_damping(E,
         E->control.ala_element_vanka_damping,level);
     if(E->parallel.me==0 && !announced[level]) {
@@ -1053,13 +1084,25 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
             for(eq=0;eq<neq;eq++)
                 d0[m][eq]=Ad[m][eq]=0.0;
 
-    for(count=0;count<steps;count++) {
+    for(count=0;count<steps;count++)
+      for(color=0;color<colors;color++) {
+        active_color=(coloring==2 && (count&1)) ? 7-color : color;
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(eq=0;eq<neq;eq++)
                 delta[m][eq]=0.0;
 
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=nel;e++) {
+                if(coloring) {
+                    ez=(e-1)%E->lmesh.ELZ[level];
+                    ex=((e-1)/E->lmesh.ELZ[level])%
+                        E->lmesh.ELX[level];
+                    ey=(e-1)/(E->lmesh.ELZ[level]*E->lmesh.ELX[level]);
+                    element_color=((E->lmesh.EXS[level]+ex)&1)
+                        +2*((E->lmesh.EYS[level]+ey)&1)
+                        +4*((E->lmesh.EZS[level]+ez)&1);
+                    if(element_color!=active_color) continue;
+                }
                 if(!E->ALA_vanka_valid[level][m][e])
                     myerror(E,"ALA element-Vanka factor cache is invalid");
                 chol=E->ALA_vanka_chol[level][m]
@@ -1120,7 +1163,7 @@ void ala_element_vanka_smooth(struct All_variables *E, double **d0,
                 d0[m][eq] += correction;
             }
         n_assemble_del2_u(E,d0,Ad,level,1);
-    }
+      }
 
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         free(delta[m]);
