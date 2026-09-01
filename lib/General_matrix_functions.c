@@ -26,6 +26,9 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
@@ -383,6 +386,98 @@ int solve_del2_u_bounded(struct All_variables *E, double **d0, double **F,
    recursive multigrid function ....
    ================================= */
 
+/* Stage F2b observes the existing velocity multigrid without changing its
+ * arithmetic.  The caller enables selected cycles through a process-local
+ * environment gate; every norm remains a collective over the normal world
+ * communicator. */
+static int ala_f2b_observer_enabled(void)
+{
+  const char *value=getenv("STRICT_ALA_STAGE_F2B_OBSERVE");
+  return value!=NULL && strcmp(value,"1")==0;
+}
+
+static void ala_f2b_write_level_row(struct All_variables *E,
+                                    const char *phase,int top_level,int level,
+                                    double input2,double output2,double alpha)
+{
+  const char *directory=getenv("STRICT_ALA_STAGE_F2B_OUTPUT_DIR");
+  const char *mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
+  const char *weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
+  const char *cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
+  double input_rms,output_rms,ratio;
+  char path[1024];
+  FILE *fp;
+
+  if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
+    myerror(E,"Incomplete strict-ALA Stage-F2b observer environment");
+  if(!isfinite(input2) || !isfinite(output2) || input2<0.0 || output2<0.0)
+    myerror(E,"Invalid strict-ALA Stage-F2b level norm");
+  input_rms=sqrt(input2/max((double)E->mesh.NEQ[level],1.0));
+  output_rms=sqrt(output2/max((double)E->mesh.NEQ[level],1.0));
+  ratio=output_rms/max(input_rms,1.0e-300);
+  if(E->parallel.me==0) {
+    snprintf(path,sizeof(path),"%s/strict_ala_stage_F2b_level_transfer.csv",
+             directory);
+    fp=fopen(path,"a");
+    if(fp==NULL)
+      myerror(E,"Unable to append strict-ALA Stage-F2b level output");
+    fprintf(fp,"%s,%s,%s,%d,%d,%s,%.17e,%.17e,%.17e,%.17e,1\n",
+            mode,weight,cycle,top_level,level,phase,input_rms,output_rms,
+            ratio,alpha);
+    fclose(fp);
+  }
+}
+
+static void ala_f2b_record_same_level(struct All_variables *E,
+    const char *phase,int top_level,int level,double **input,double **action,
+    double **scratch,double scale)
+{
+  int m,i;
+  double input2,output2;
+  double global_vdot();
+  if(!ala_f2b_observer_enabled()) return;
+  input2=global_vdot(E,input,input,level);
+  for(m=1;m<=E->sphere.caps_per_proc;m++)
+    for(i=0;i<E->lmesh.NEQ[level];i++)
+      scratch[m][i]=input[m][i]-scale*action[m][i];
+  output2=global_vdot(E,scratch,scratch,level);
+  ala_f2b_write_level_row(E,phase,top_level,level,input2,output2,scale);
+}
+
+static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
+    int fine_level,double **fine,int coarse_level,double **coarse)
+{
+  double fine2,coarse2,fine_rms,coarse_rms;
+  double global_vdot();
+  const char *directory,*mode,*weight,*cycle;
+  char path[1024];
+  FILE *fp;
+  if(!ala_f2b_observer_enabled()) return;
+  fine2=global_vdot(E,fine,fine,fine_level);
+  coarse2=global_vdot(E,coarse,coarse,coarse_level);
+  if(!isfinite(fine2) || !isfinite(coarse2) || fine2<0.0 || coarse2<0.0)
+    myerror(E,"Invalid strict-ALA Stage-F2b restriction norm");
+  fine_rms=sqrt(fine2/max((double)E->mesh.NEQ[fine_level],1.0));
+  coarse_rms=sqrt(coarse2/max((double)E->mesh.NEQ[coarse_level],1.0));
+  directory=getenv("STRICT_ALA_STAGE_F2B_OUTPUT_DIR");
+  mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
+  weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
+  cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
+  if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
+    myerror(E,"Incomplete strict-ALA Stage-F2b restriction environment");
+  if(E->parallel.me==0) {
+    snprintf(path,sizeof(path),"%s/strict_ala_stage_F2b_level_transfer.csv",
+             directory);
+    fp=fopen(path,"a");
+    if(fp==NULL)
+      myerror(E,"Unable to append strict-ALA Stage-F2b restriction output");
+    fprintf(fp,"%s,%s,%s,%d,%d,RESTRICTION,%.17e,%.17e,%.17e,0,1\n",
+            mode,weight,cycle,top_level,fine_level,fine_rms,coarse_rms,
+            coarse_rms/max(fine_rms,1.0e-300));
+    fclose(fp);
+  }
+}
+
 double multi_grid(E,d1,F,acc,hl)
      struct All_variables *E;
      double **d1;
@@ -393,7 +488,7 @@ double multi_grid(E,d1,F,acc,hl)
     double residual,AudotAu,Audotres;
     void interp_vector();
     void project_vector();
-    int m,i,j,Vn,Vnmax,cycles;
+    int m,i,j,Vn,Vnmax,cycles,f2b_observe;
     double alpha,beta;
     void gauss_seidel();
     void element_gauss_seidel();
@@ -417,12 +512,16 @@ double multi_grid(E,d1,F,acc,hl)
 				/* because it's recursive, need a copy at
 				    each level */
 
+    f2b_observe=ala_f2b_observer_enabled();
+
     for(i=E->mesh.levmin;i<=E->mesh.levmax;i++)
       for(m=1;m<=E->sphere.caps_per_proc;m++)    {
 	del_vel[i][m]=(double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
 	AU[i][m] = (double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
 	vel[i][m]=(double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
 	res[i][m]=(double *)malloc((E->lmesh.NEQ[i])*sizeof(double));
+	if(f2b_observe)
+	  rhs[i][m]=(double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
 	if (i<E->mesh.levmax)
 	  fl[i][m]=(double *)malloc((E->lmesh.NEQ[i])*sizeof(double));
       }
@@ -444,6 +543,9 @@ double multi_grid(E,d1,F,acc,hl)
     cycles = E->control.v_steps_low;
 
     gauss_seidel(E,vel[levmin],fl[levmin],AU[levmin],acc*0.01,&cycles,levmin,0);
+    if(f2b_observe)
+      ala_f2b_record_same_level(E,"INITIAL_BOTTOM_SOLVE",levmin,levmin,
+          fl[levmin],AU[levmin],rhs[levmin],1.0);
 
     for(lev=levmin+1;lev<=levmax;lev++) {
       time=CPU_time0();
@@ -470,6 +572,10 @@ double multi_grid(E,d1,F,acc,hl)
           ic = ((dlev==lev)?1:0);
           gauss_seidel(E,vel[dlev],res[dlev],AU[dlev],0.01,&cycles,dlev,ic);
 
+          if(f2b_observe)
+            ala_f2b_record_same_level(E,"DOWN_SMOOTH",lev,dlev,
+                res[dlev],AU[dlev],rhs[dlev],1.0);
+
           for(m=1;m<=E->sphere.caps_per_proc;m++)
              for(i=0;i<E->lmesh.NEQ[dlev];i++)  {
                res[dlev][m][i]  = res[dlev][m][i] - AU[dlev][m][i];
@@ -477,11 +583,17 @@ double multi_grid(E,d1,F,acc,hl)
 
           project_vector(E,dlev,res[dlev],res[dlev-1],1);
           strip_bcs_from_residual(E,res[dlev-1],dlev-1);
+          if(f2b_observe)
+            ala_f2b_record_restriction(E,lev,dlev,res[dlev],dlev-1,
+                                       res[dlev-1]);
           }
 
                                         /*    Bottom of the V    */
        cycles = E->control.v_steps_low;
        gauss_seidel(E,vel[levmin],res[levmin],AU[levmin],acc*0.01,&cycles,levmin,0);
+       if(f2b_observe)
+         ala_f2b_record_same_level(E,"BOTTOM_SOLVE",lev,levmin,
+             res[levmin],AU[levmin],rhs[levmin],1.0);
                                         /*    Upward stoke of the V    */
         for (ulev=levmin+1;ulev<=lev;ulev++)   {
             cycles=((ulev==levmax)?E->control.v_steps_high:E->control.up_heavy);
@@ -503,6 +615,10 @@ double multi_grid(E,d1,F,acc,hl)
               if(!isfinite(alpha))
                 myerror(E,"Invalid multigrid upward correction scale");
             }
+
+            if(f2b_observe)
+              ala_f2b_record_same_level(E,"UP_CORRECTION",lev,ulev,
+                  res[ulev],AU[ulev],rhs[ulev],alpha);
 
             for(m=1;m<=E->sphere.caps_per_proc;m++)
               for(i=0;i<E->lmesh.NEQ[ulev];i++)   {
@@ -533,6 +649,7 @@ double multi_grid(E,d1,F,acc,hl)
 	  free((double*) AU[i][m]);
 	  free((double*) vel[i][m]);
 	  free((double*) res[i][m]);
+	  if(f2b_observe) free((double*) rhs[i][m]);
 	  if (i<E->mesh.levmax)
 	    free((double*) fl[i][m]);
 	  }
