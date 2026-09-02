@@ -420,15 +420,21 @@ static int ala_f2c_finest_sweeps(struct All_variables *E,int configured,
 static double ala_f2c_finest_damping(struct All_variables *E,double configured,
                                      int level)
 {
-  const char *value;
+  const char *value,*f2g;
   char *end;
   double result;
-  if(!ala_f2c_active() || level!=E->mesh.levmax) return configured;
-  value=getenv("STRICT_ALA_STAGE_F2C_FINEST_DAMPING");
-  if(value==NULL) myerror(E,"Incomplete strict-ALA Stage-F2c damping contract");
+  f2g=getenv("STRICT_ALA_STAGE_F2G_ACTIVE");
+  if(level!=E->mesh.levmax) return configured;
+  if(ala_f2c_active())
+    value=getenv("STRICT_ALA_STAGE_F2C_FINEST_DAMPING");
+  else if(f2g!=NULL && strcmp(f2g,"1")==0)
+    value=getenv("STRICT_ALA_STAGE_F2G_FINEST_DAMPING");
+  else return configured;
+  if(value==NULL)
+    myerror(E,"Incomplete strict-ALA Stage-F2 damping contract");
   result=strtod(value,&end);
   if(*value=='\0' || *end!='\0' || !isfinite(result) || result<=0.0 || result>1.0)
-    myerror(E,"Invalid strict-ALA Stage-F2c finest damping");
+    myerror(E,"Invalid strict-ALA Stage-F2 finest damping");
   return result;
 }
 
@@ -476,9 +482,19 @@ static struct ala_f2e_face_cache ala_f2e_cache;
 
 static int ala_f2e_finest_orientation(struct All_variables *E,int level)
 {
+  const char *f2g_active=getenv("STRICT_ALA_STAGE_F2G_ACTIVE");
   const char *f2f_active=getenv("STRICT_ALA_STAGE_F2F_ACTIVE");
   const char *active=getenv("STRICT_ALA_STAGE_F2E_ACTIVE");
   const char *mode;
+  if(f2g_active!=NULL && strcmp(f2g_active,"1")==0 &&
+     level==E->mesh.levmax) {
+    mode=getenv("STRICT_ALA_STAGE_F2G_L4_MODE");
+    if(mode==NULL)
+      myerror(E,"Incomplete strict-ALA Stage-F2g calibration contract");
+    if(strcmp(mode,"configured")==0) return 0;
+    if(strcmp(mode,"overlap_face_z")==0) return 4;
+    myerror(E,"Invalid strict-ALA Stage-F2g calibration mode");
+  }
   if(f2f_active!=NULL && strcmp(f2f_active,"1")==0 &&
      level==E->mesh.levmax) {
     mode=getenv("STRICT_ALA_STAGE_F2F_L4_MODE");
@@ -594,6 +610,7 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   FILE *fp;
   char path[1024];
   const char *output_dir;
+  int stage_f2g;
   void get_elt_k(),get_ala_aug_k();
   double CPU_time0();
   const int dims=E->mesh.nsd;
@@ -769,22 +786,26 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   MPI_Allreduce(&local_min_ratio,&global_min_ratio,1,MPI_DOUBLE,MPI_MIN,
                 E->parallel.world);
   if(E->parallel.me==0) {
+    stage_f2g=getenv("STRICT_ALA_STAGE_F2G_ACTIVE")!=NULL;
     fprintf(E->fp,"%s orientation=%s "
         "patches_per_cap=%d dof=36 cache_mb_max=%.17e "
         "build_seconds_max=%.17e min_pivot_ratio=%.17e "
         "active_missing_overlap_sum=%d constrained_zero_overlap_sum=%d\n",
-        overlapping ? "STRICT_ALA_STAGE_F2F_FACE_CACHE" :
-                      "STRICT_ALA_STAGE_F2E_FACE_CACHE",
+        stage_f2g ? "STRICT_ALA_STAGE_F2G_FACE_CACHE" :
+        (overlapping ? "STRICT_ALA_STAGE_F2F_FACE_CACHE" :
+                       "STRICT_ALA_STAGE_F2E_FACE_CACHE"),
         ala_f2e_orientation_name(request),patches,global_mb,seconds_max,
         global_min_ratio,global_missing_active,global_constrained_zero);
     fflush(E->fp);
-    output_dir=getenv(overlapping ? "STRICT_ALA_STAGE_F2F_OUTPUT_DIR" :
-                                    "STRICT_ALA_STAGE_F2E_OUTPUT_DIR");
+    output_dir=getenv(stage_f2g ? "STRICT_ALA_STAGE_F2G_OUTPUT_DIR" :
+                      (overlapping ? "STRICT_ALA_STAGE_F2F_OUTPUT_DIR" :
+                                     "STRICT_ALA_STAGE_F2E_OUTPUT_DIR"));
     if(output_dir==NULL)
       myerror(E,"Missing Stage-F2 face-patch output directory");
-    snprintf(path,sizeof(path),"%s/%s",output_dir,overlapping ?
+    snprintf(path,sizeof(path),"%s/%s",output_dir,stage_f2g ?
+        "strict_ala_stage_F2g_cache.csv" : (overlapping ?
         "strict_ala_stage_F2f_cache.csv" :
-        "strict_ala_stage_F2e_cache.csv");
+        "strict_ala_stage_F2e_cache.csv"));
     fp=fopen(path,"a");
     if(fp==NULL) myerror(E,"Unable to append Stage-F2 face-patch cache output");
     fprintf(fp,"%s,%d,36,%.17e,%.17e,%.17e,1\n",
@@ -802,8 +823,9 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   const char *mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   const char *weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   const char *cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  const char *candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
-  int f2f=candidate!=NULL;
+  const char *candidate=getenv("STRICT_ALA_STAGE_F2G_CANDIDATE");
+  int f2g=candidate!=NULL;
+  int f2f;
   int f2e;
   int f2d;
   double input_rms,output_rms,ratio;
@@ -818,17 +840,20 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   output_rms=sqrt(output2/max((double)E->mesh.NEQ[level],1.0));
   ratio=output_rms/max(input_rms,1.0e-300);
   if(E->parallel.me==0) {
+    if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
+    f2f=candidate!=NULL && !f2g;
     if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
-    f2e=candidate!=NULL && !f2f;
+    f2e=candidate!=NULL && !f2g && !f2f;
     if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
-    f2d=candidate!=NULL && !f2f && !f2e;
+    f2d=candidate!=NULL && !f2g && !f2f && !f2e;
     if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
-    snprintf(path,sizeof(path),"%s/%s",directory,f2f ?
+    snprintf(path,sizeof(path),"%s/%s",directory,f2g ?
+             "strict_ala_stage_F2g_level_transfer.csv" : (f2f ?
              "strict_ala_stage_F2f_level_transfer.csv" : (f2e ?
              "strict_ala_stage_F2e_level_transfer.csv" : (f2d ?
              "strict_ala_stage_F2d_level_transfer.csv" :
              (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
-              "strict_ala_stage_F2b_level_transfer.csv"))));
+              "strict_ala_stage_F2b_level_transfer.csv")))));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b level output");
@@ -863,7 +888,7 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   double global_vdot();
   const char *directory,*mode,*weight,*cycle;
   const char *candidate;
-  int f2d,f2e,f2f;
+  int f2d,f2e,f2f,f2g;
   char path[1024];
   FILE *fp;
   if(!ala_f2b_observer_enabled()) return;
@@ -877,22 +902,25 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
-  f2f=candidate!=NULL;
+  candidate=getenv("STRICT_ALA_STAGE_F2G_CANDIDATE");
+  f2g=candidate!=NULL;
+  if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
+  f2f=candidate!=NULL && !f2g;
   if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
-  f2e=candidate!=NULL && !f2f;
+  f2e=candidate!=NULL && !f2g && !f2f;
   if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
-  f2d=candidate!=NULL && !f2f && !f2e;
+  f2d=candidate!=NULL && !f2g && !f2f && !f2e;
   if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
   if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
     myerror(E,"Incomplete strict-ALA Stage-F2b restriction environment");
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/%s",directory,f2f ?
+    snprintf(path,sizeof(path),"%s/%s",directory,f2g ?
+             "strict_ala_stage_F2g_level_transfer.csv" : (f2f ?
              "strict_ala_stage_F2f_level_transfer.csv" : (f2e ?
              "strict_ala_stage_F2e_level_transfer.csv" : (f2d ?
              "strict_ala_stage_F2d_level_transfer.csv" :
              (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
-              "strict_ala_stage_F2b_level_transfer.csv"))));
+              "strict_ala_stage_F2b_level_transfer.csv")))));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b restriction output");
