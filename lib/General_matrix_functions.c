@@ -556,6 +556,9 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
                                      int orientation)
 {
   int m,p,e,which,a,da,i,j,k,node,node_count,match,eq;
+  int local_invalid_overlap=0,global_invalid_overlap;
+  int local_missing_active=0,global_missing_active;
+  int local_constrained_zero=0,global_constrained_zero;
   int elements[2],nodes[ALA_F2E_FACE_NODES],fixed[ALA_F2E_FACE_DOF];
   int map[ALA_VANKA_DOF],patches,paired_dimension,neq;
   double element_matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
@@ -706,10 +709,34 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(eq=0;eq<neq;eq++) {
       sum=ala_f2e_cache.overlap_inverse[m][eq];
-      if(!isfinite(sum) || sum<=0.0)
-        myerror(E,"Stage-F2e face-patch overlap is incomplete");
-      ala_f2e_cache.overlap_inverse[m][eq]=1.0/sum;
+      if(!isfinite(sum) || sum<0.0) {
+        local_invalid_overlap++;
+        ala_f2e_cache.overlap_inverse[m][eq]=0.0;
+      }
+      else if(sum>0.0)
+        ala_f2e_cache.overlap_inverse[m][eq]=1.0/sum;
+      else {
+        ala_f2e_cache.overlap_inverse[m][eq]=0.0;
+        /* The canonical element-Vanka overlap is the activity oracle.  Fixed
+           velocity equations are deliberately absent from every face patch
+           and retain a zero inverse; an active equation with zero face
+           overlap is a genuine construction error. */
+        if(E->ALA_vanka_overlap_BI[level][m][eq]>0.0)
+          local_missing_active++;
+        else
+          local_constrained_zero++;
+      }
     }
+  MPI_Allreduce(&local_invalid_overlap,&global_invalid_overlap,1,MPI_INT,
+                MPI_SUM,E->parallel.world);
+  MPI_Allreduce(&local_missing_active,&global_missing_active,1,MPI_INT,
+                MPI_SUM,E->parallel.world);
+  MPI_Allreduce(&local_constrained_zero,&global_constrained_zero,1,MPI_INT,
+                MPI_SUM,E->parallel.world);
+  if(global_invalid_overlap>0)
+    myerror(E,"Stage-F2e face-patch overlap is invalid");
+  if(global_missing_active>0)
+    myerror(E,"Stage-F2e active face-patch overlap is incomplete");
   seconds=CPU_time0()-start;
   MPI_Allreduce(&seconds,&seconds_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
   MPI_Allreduce(&local_mb,&global_mb,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
@@ -718,9 +745,10 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   if(E->parallel.me==0) {
     fprintf(E->fp,"STRICT_ALA_STAGE_F2E_FACE_CACHE orientation=%s "
         "patches_per_cap=%d dof=36 cache_mb_max=%.17e "
-        "build_seconds_max=%.17e min_pivot_ratio=%.17e\n",
+        "build_seconds_max=%.17e min_pivot_ratio=%.17e "
+        "active_missing_overlap_sum=%d constrained_zero_overlap_sum=%d\n",
         ala_f2e_orientation_name(orientation),patches,global_mb,seconds_max,
-        global_min_ratio);
+        global_min_ratio,global_missing_active,global_constrained_zero);
     fflush(E->fp);
     output_dir=getenv("STRICT_ALA_STAGE_F2E_OUTPUT_DIR");
     if(output_dir==NULL)

@@ -30,6 +30,13 @@ class F2eContractTests(unittest.TestCase):
         self.assertIn("#define ALA_F2E_FACE_CHOL_SIZE 666", matrix)
         self.assertIn("level!=E->mesh.levmax", matrix)
         self.assertIn("ala_f2e_free_face_cache()", matrix)
+        self.assertIn(
+            "E->ALA_vanka_overlap_BI[level][m][eq]>0.0", matrix)
+        self.assertIn(
+            'myerror(E,"Stage-F2e active face-patch overlap is incomplete")',
+            matrix)
+        self.assertIn("local_constrained_zero++", matrix)
+        self.assertIn("constrained_zero_overlap_sum=%d", matrix)
         self.assertIn("one temporary cache exists at a time", stage)
         self.assertIn('getenv("STRICT_ALA_STAGE_F2E_REQUIRED")', stage)
         self.assertIn('#include "Strict_ala_stage_f2e.inc"', driver)
