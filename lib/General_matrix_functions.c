@@ -464,6 +464,7 @@ static int ala_f2d_finest_coloring(struct All_variables *E,int level)
 
 struct ala_f2e_face_cache {
   int orientation;
+  int overlapping;
   int level;
   int patch_count[NCS];
   int *equations[NCS];
@@ -475,8 +476,20 @@ static struct ala_f2e_face_cache ala_f2e_cache;
 
 static int ala_f2e_finest_orientation(struct All_variables *E,int level)
 {
+  const char *f2f_active=getenv("STRICT_ALA_STAGE_F2F_ACTIVE");
   const char *active=getenv("STRICT_ALA_STAGE_F2E_ACTIVE");
   const char *mode;
+  if(f2f_active!=NULL && strcmp(f2f_active,"1")==0 &&
+     level==E->mesh.levmax) {
+    mode=getenv("STRICT_ALA_STAGE_F2F_L4_MODE");
+    if(mode==NULL)
+      myerror(E,"Incomplete strict-ALA Stage-F2f overlapping-patch contract");
+    if(strcmp(mode,"configured")==0) return 0;
+    if(strcmp(mode,"overlap_face_z")==0) return 4;
+    if(strcmp(mode,"overlap_face_x")==0) return 5;
+    if(strcmp(mode,"overlap_face_y")==0) return 6;
+    myerror(E,"Invalid strict-ALA Stage-F2f overlapping-patch mode");
+  }
   if(active==NULL || strcmp(active,"1")!=0 || level!=E->mesh.levmax)
     return 0;
   mode=getenv("STRICT_ALA_STAGE_F2E_L4_MODE");
@@ -495,6 +508,9 @@ static const char *ala_f2e_orientation_name(int orientation)
   if(orientation==1) return "face_z";
   if(orientation==2) return "face_x";
   if(orientation==3) return "face_y";
+  if(orientation==4) return "overlap_face_z";
+  if(orientation==5) return "overlap_face_x";
+  if(orientation==6) return "overlap_face_y";
   return "invalid";
 }
 
@@ -518,33 +534,37 @@ static int ala_f2e_element_number(struct All_variables *E,int level,
 }
 
 static void ala_f2e_patch_elements(struct All_variables *E,int level,
-                                   int orientation,int patch,
+                                   int orientation,int overlapping,int patch,
                                    int *first,int *second)
 {
   int nx=E->lmesh.ELX[level],ny=E->lmesh.ELY[level];
-  int nz=E->lmesh.ELZ[level],x,y,z,q;
-  if(patch<0 || patch>=E->lmesh.NEL[level]/2)
-    myerror(E,"Stage-F2e face-patch index is invalid");
+  int nz=E->lmesh.ELZ[level],x,y,z,q,patches;
+  patches=overlapping ?
+    (orientation==1 ? (nz-1)*nx*ny :
+     (orientation==2 ? (nx-1)*nz*ny : (ny-1)*nz*nx)) :
+    E->lmesh.NEL[level]/2;
+  if(patch<0 || patch>=patches)
+    myerror(E,"Stage-F2 face-patch index is invalid");
   if(orientation==1) {
-    z=2*(patch%(nz/2))+1;
-    q=patch/(nz/2);
+    z=overlapping ? patch%(nz-1)+1 : 2*(patch%(nz/2))+1;
+    q=patch/(overlapping ? nz-1 : nz/2);
     x=q%nx+1;
     y=q/nx+1;
   }
   else if(orientation==2) {
     z=patch%nz+1;
     q=patch/nz;
-    x=2*(q%(nx/2))+1;
-    y=q/(nx/2)+1;
+    x=overlapping ? q%(nx-1)+1 : 2*(q%(nx/2))+1;
+    y=q/(overlapping ? nx-1 : nx/2)+1;
   }
   else {
     z=patch%nz+1;
     q=patch/nz;
     x=q%nx+1;
-    y=2*(q/nx)+1;
+    y=overlapping ? q/nx+1 : 2*(q/nx)+1;
   }
   if(x<1 || x>nx || y<1 || y>ny || z<1 || z>nz)
-    myerror(E,"Stage-F2e face-patch coordinate is invalid");
+    myerror(E,"Stage-F2 face-patch coordinate is invalid");
   *first=ala_f2e_element_number(E,level,x,y,z);
   if(orientation==1) z++;
   else if(orientation==2) x++;
@@ -553,7 +573,7 @@ static void ala_f2e_patch_elements(struct All_variables *E,int level,
 }
 
 static void ala_f2e_build_face_cache(struct All_variables *E,int level,
-                                     int orientation)
+                                     int request)
 {
   int m,p,e,which,a,da,i,j,k,node,node_count,match,eq;
   int local_invalid_overlap=0,global_invalid_overlap;
@@ -561,6 +581,8 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   int local_constrained_zero=0,global_constrained_zero;
   int elements[2],nodes[ALA_F2E_FACE_NODES],fixed[ALA_F2E_FACE_DOF];
   int map[ALA_VANKA_DOF],patches,paired_dimension,neq;
+  int overlapping=request>3;
+  int orientation=overlapping ? request-3 : request;
   double element_matrix[ALA_VANKA_DOF*ALA_VANKA_DOF];
   double matrix[ALA_F2E_FACE_DOF*ALA_F2E_FACE_DOF];
   double L[ALA_F2E_FACE_DOF*ALA_F2E_FACE_DOF];
@@ -578,21 +600,24 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   const int ends=enodes[dims];
 
   if(dims!=3 || loc_mat_size[dims]!=ALA_VANKA_DOF)
-    myerror(E,"Stage-F2e requires 3-D Q1 velocity elements");
-  if(orientation<1 || orientation>3 || level!=E->mesh.levmax)
-    myerror(E,"Stage-F2e face-cache request is invalid");
+    myerror(E,"Stage-F2 face patches require 3-D Q1 velocity elements");
+  if(request<1 || request>6 || orientation<1 || orientation>3 ||
+     level!=E->mesh.levmax)
+    myerror(E,"Stage-F2 face-cache request is invalid");
   paired_dimension=orientation==1 ? E->lmesh.ELZ[level] :
                    (orientation==2 ? E->lmesh.ELX[level] :
                                       E->lmesh.ELY[level]);
-  if(paired_dimension<2 || (paired_dimension&1))
-    myerror(E,"Stage-F2e local paired element dimension must be positive and even");
-  patches=E->lmesh.NEL[level]/2;
+  if(paired_dimension<2 || (!overlapping && (paired_dimension&1)))
+    myerror(E,"Stage-F2 face-patch dimension is incompatible with pairing");
+  patches=overlapping ? E->lmesh.NEL[level]
+      *(paired_dimension-1)/paired_dimension : E->lmesh.NEL[level]/2;
   neq=E->lmesh.NEQ[level];
-  if(patches<=0 || 2*patches!=E->lmesh.NEL[level])
-    myerror(E,"Stage-F2e face-patch coverage is incomplete");
+  if(patches<=0 || (!overlapping && 2*patches!=E->lmesh.NEL[level]))
+    myerror(E,"Stage-F2 face-patch coverage is incomplete");
 
   ala_f2e_free_face_cache();
-  ala_f2e_cache.orientation=orientation;
+  ala_f2e_cache.orientation=request;
+  ala_f2e_cache.overlapping=overlapping;
   ala_f2e_cache.level=level;
   start=CPU_time0();
   local_mb=0.0;
@@ -605,14 +630,15 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
     ala_f2e_cache.overlap_inverse[m]=(double *)malloc(neq*sizeof(double));
     if(!ala_f2e_cache.equations[m] || !ala_f2e_cache.chol[m] ||
        !ala_f2e_cache.overlap_inverse[m])
-      myerror(E,"Unable to allocate Stage-F2e face-patch cache");
+      myerror(E,"Unable to allocate Stage-F2 face-patch cache");
     local_mb += (patches*(ALA_F2E_FACE_DOF*sizeof(int)
         +ALA_F2E_FACE_CHOL_SIZE*sizeof(higher_precision))
         +neq*sizeof(double))/(1024.0*1024.0);
     overlap=ala_f2e_cache.overlap_inverse[m];
     for(eq=0;eq<neq;eq++) overlap[eq]=0.0;
     for(p=0;p<patches;p++) {
-      ala_f2e_patch_elements(E,level,orientation,p,&elements[0],&elements[1]);
+      ala_f2e_patch_elements(E,level,orientation,overlapping,p,
+                             &elements[0],&elements[1]);
       node_count=0;
       for(which=0;which<2;which++) {
         e=elements[which];
@@ -622,7 +648,7 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
           for(i=0;i<node_count;i++) if(nodes[i]==node) { match=i; break; }
           if(match<0) {
             if(node_count>=ALA_F2E_FACE_NODES)
-              myerror(E,"Stage-F2e face patch has too many nodes");
+              myerror(E,"Stage-F2 face patch has too many nodes");
             nodes[node_count]=node;
             match=node_count++;
           }
@@ -638,7 +664,7 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
                 element_matrix[i*ALA_VANKA_DOF+j];
       }
       if(node_count!=ALA_F2E_FACE_NODES)
-        myerror(E,"Stage-F2e face patch does not have twelve unique nodes");
+        myerror(E,"Stage-F2 face patch does not have twelve unique nodes");
       maxdiag=0.0;
       for(a=0;a<ALA_F2E_FACE_NODES;a++)
         for(da=0;da<dims;da++) {
@@ -652,11 +678,11 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
           if(!fixed[i]) {
             if(eq<0 || eq>=neq || !isfinite(E->BI[level][m][eq]) ||
                E->BI[level][m][eq]<=0.0)
-              myerror(E,"Stage-F2e assembled diagonal is invalid");
+              myerror(E,"Stage-F2 face-patch assembled diagonal is invalid");
             global_diag=1.0/E->BI[level][m][eq];
             external=global_diag-matrix[i*ALA_F2E_FACE_DOF+i];
             if(external < -1.0e-8*max(global_diag,1.0e-300))
-              myerror(E,"Stage-F2e face-patch external diagonal is negative");
+              myerror(E,"Stage-F2 face-patch external diagonal is negative");
             matrix[i*ALA_F2E_FACE_DOF+i] +=
               E->control.ala_element_vanka_external_diagonal_weight*
               max(external,0.0);
@@ -665,7 +691,7 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
           }
         }
       if(!isfinite(maxdiag) || maxdiag<=0.0)
-        myerror(E,"Stage-F2e face-patch diagonal is invalid");
+        myerror(E,"Stage-F2 face-patch diagonal is invalid");
       shift=E->control.ala_element_vanka_regularization*maxdiag;
       for(i=0;i<ALA_F2E_FACE_DOF;i++) {
         if(fixed[i]) {
@@ -693,7 +719,7 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
           if(i==j) {
             pivot=sum;
             if(!isfinite(pivot) || pivot<=1.0e-14*maxdiag)
-              myerror(E,"Stage-F2e face-patch Cholesky failed");
+              myerror(E,"Stage-F2 face-patch Cholesky failed");
             L[i*ALA_F2E_FACE_DOF+j]=sqrt(pivot);
             local_min_ratio=min(local_min_ratio,pivot/maxdiag);
           }
@@ -734,30 +760,35 @@ static void ala_f2e_build_face_cache(struct All_variables *E,int level,
   MPI_Allreduce(&local_constrained_zero,&global_constrained_zero,1,MPI_INT,
                 MPI_SUM,E->parallel.world);
   if(global_invalid_overlap>0)
-    myerror(E,"Stage-F2e face-patch overlap is invalid");
+    myerror(E,"Stage-F2 face-patch overlap is invalid");
   if(global_missing_active>0)
-    myerror(E,"Stage-F2e active face-patch overlap is incomplete");
+    myerror(E,"Stage-F2 active face-patch overlap is incomplete");
   seconds=CPU_time0()-start;
   MPI_Allreduce(&seconds,&seconds_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
   MPI_Allreduce(&local_mb,&global_mb,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
   MPI_Allreduce(&local_min_ratio,&global_min_ratio,1,MPI_DOUBLE,MPI_MIN,
                 E->parallel.world);
   if(E->parallel.me==0) {
-    fprintf(E->fp,"STRICT_ALA_STAGE_F2E_FACE_CACHE orientation=%s "
+    fprintf(E->fp,"%s orientation=%s "
         "patches_per_cap=%d dof=36 cache_mb_max=%.17e "
         "build_seconds_max=%.17e min_pivot_ratio=%.17e "
         "active_missing_overlap_sum=%d constrained_zero_overlap_sum=%d\n",
-        ala_f2e_orientation_name(orientation),patches,global_mb,seconds_max,
+        overlapping ? "STRICT_ALA_STAGE_F2F_FACE_CACHE" :
+                      "STRICT_ALA_STAGE_F2E_FACE_CACHE",
+        ala_f2e_orientation_name(request),patches,global_mb,seconds_max,
         global_min_ratio,global_missing_active,global_constrained_zero);
     fflush(E->fp);
-    output_dir=getenv("STRICT_ALA_STAGE_F2E_OUTPUT_DIR");
+    output_dir=getenv(overlapping ? "STRICT_ALA_STAGE_F2F_OUTPUT_DIR" :
+                                    "STRICT_ALA_STAGE_F2E_OUTPUT_DIR");
     if(output_dir==NULL)
-      myerror(E,"Missing Stage-F2e output directory");
-    snprintf(path,sizeof(path),"%s/strict_ala_stage_F2e_cache.csv",output_dir);
+      myerror(E,"Missing Stage-F2 face-patch output directory");
+    snprintf(path,sizeof(path),"%s/%s",output_dir,overlapping ?
+        "strict_ala_stage_F2f_cache.csv" :
+        "strict_ala_stage_F2e_cache.csv");
     fp=fopen(path,"a");
-    if(fp==NULL) myerror(E,"Unable to append Stage-F2e cache output");
+    if(fp==NULL) myerror(E,"Unable to append Stage-F2 face-patch cache output");
     fprintf(fp,"%s,%d,36,%.17e,%.17e,%.17e,1\n",
-        ala_f2e_orientation_name(orientation),patches,global_mb,seconds_max,
+        ala_f2e_orientation_name(request),patches,global_mb,seconds_max,
         global_min_ratio);
     fclose(fp);
   }
@@ -771,8 +802,9 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   const char *mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   const char *weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   const char *cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  const char *candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
-  int f2e=candidate!=NULL;
+  const char *candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
+  int f2f=candidate!=NULL;
+  int f2e;
   int f2d;
   double input_rms,output_rms,ratio;
   char path[1024];
@@ -786,14 +818,17 @@ static void ala_f2b_write_level_row(struct All_variables *E,
   output_rms=sqrt(output2/max((double)E->mesh.NEQ[level],1.0));
   ratio=output_rms/max(input_rms,1.0e-300);
   if(E->parallel.me==0) {
+    if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
+    f2e=candidate!=NULL && !f2f;
     if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
-    f2d=candidate!=NULL && !f2e;
+    f2d=candidate!=NULL && !f2f && !f2e;
     if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
-    snprintf(path,sizeof(path),"%s/%s",directory,f2e ?
+    snprintf(path,sizeof(path),"%s/%s",directory,f2f ?
+             "strict_ala_stage_F2f_level_transfer.csv" : (f2e ?
              "strict_ala_stage_F2e_level_transfer.csv" : (f2d ?
              "strict_ala_stage_F2d_level_transfer.csv" :
              (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
-              "strict_ala_stage_F2b_level_transfer.csv")));
+              "strict_ala_stage_F2b_level_transfer.csv"))));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b level output");
@@ -828,7 +863,7 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   double global_vdot();
   const char *directory,*mode,*weight,*cycle;
   const char *candidate;
-  int f2d,f2e;
+  int f2d,f2e,f2f;
   char path[1024];
   FILE *fp;
   if(!ala_f2b_observer_enabled()) return;
@@ -842,19 +877,22 @@ static void ala_f2b_record_restriction(struct All_variables *E,int top_level,
   mode=getenv("STRICT_ALA_STAGE_F2B_MODE");
   weight=getenv("STRICT_ALA_STAGE_F2B_WEIGHT");
   cycle=getenv("STRICT_ALA_STAGE_F2B_CYCLE");
-  candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
-  f2e=candidate!=NULL;
+  candidate=getenv("STRICT_ALA_STAGE_F2F_CANDIDATE");
+  f2f=candidate!=NULL;
+  if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2E_CANDIDATE");
+  f2e=candidate!=NULL && !f2f;
   if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2D_CANDIDATE");
-  f2d=candidate!=NULL && !f2e;
+  f2d=candidate!=NULL && !f2f && !f2e;
   if(candidate==NULL) candidate=getenv("STRICT_ALA_STAGE_F2C_CANDIDATE");
   if(directory==NULL || mode==NULL || weight==NULL || cycle==NULL)
     myerror(E,"Incomplete strict-ALA Stage-F2b restriction environment");
   if(E->parallel.me==0) {
-    snprintf(path,sizeof(path),"%s/%s",directory,f2e ?
+    snprintf(path,sizeof(path),"%s/%s",directory,f2f ?
+             "strict_ala_stage_F2f_level_transfer.csv" : (f2e ?
              "strict_ala_stage_F2e_level_transfer.csv" : (f2d ?
              "strict_ala_stage_F2d_level_transfer.csv" :
              (candidate!=NULL ? "strict_ala_stage_F2c_level_transfer.csv" :
-              "strict_ala_stage_F2b_level_transfer.csv")));
+              "strict_ala_stage_F2b_level_transfer.csv"))));
     fp=fopen(path,"a");
     if(fp==NULL)
       myerror(E,"Unable to append strict-ALA Stage-F2b restriction output");
@@ -1346,7 +1384,7 @@ void element_gauss_seidel(E,d0,F,Ad,acc,cycles,level,guess)
 
 static void ala_f2e_face_patch_smooth(struct All_variables *E,double **d0,
                                       double **F,double **Ad,int *cycles,
-                                      int level,int guess,int orientation)
+                                      int level,int guess,int request)
 {
   int m,p,i,j,eq,count,steps,fixed;
   double rhs[ALA_F2E_FACE_DOF],forward[ALA_F2E_FACE_DOF];
@@ -1356,16 +1394,16 @@ static void ala_f2e_face_patch_smooth(struct All_variables *E,double **d0,
   void n_assemble_del2_u();
   const int neq=E->lmesh.NEQ[level];
 
-  if(ala_f2e_cache.orientation!=orientation ||
+  if(ala_f2e_cache.orientation!=request ||
      ala_f2e_cache.level!=level)
-    ala_f2e_build_face_cache(E,level,orientation);
+    ala_f2e_build_face_cache(E,level,request);
   steps=*cycles;
   damping=ala_f2c_finest_damping(E,
       E->control.ala_element_vanka_damping,level);
   for(m=1;m<=E->sphere.caps_per_proc;m++) {
     delta[m]=(double *)malloc(neq*sizeof(double));
     if(delta[m]==NULL)
-      myerror(E,"Unable to allocate Stage-F2e face-patch correction");
+      myerror(E,"Unable to allocate Stage-F2 face-patch correction");
   }
   if(guess) n_assemble_del2_u(E,d0,Ad,level,1);
   else
@@ -1388,7 +1426,7 @@ static void ala_f2e_face_patch_smooth(struct All_variables *E,double **d0,
           for(j=0;j<i;j++) sum-=chol[i*(i+1)/2+j]*forward[j];
           diagonal=chol[i*(i+1)/2+i];
           if(!isfinite(diagonal) || diagonal<=0.0)
-            myerror(E,"Stage-F2e face-patch factor diagonal is invalid");
+            myerror(E,"Stage-F2 face-patch factor diagonal is invalid");
           forward[i]=sum/diagonal;
         }
         for(i=ALA_F2E_FACE_DOF-1;i>=0;i--) {
@@ -1397,7 +1435,7 @@ static void ala_f2e_face_patch_smooth(struct All_variables *E,double **d0,
             sum-=chol[j*(j+1)/2+i]*solution[j];
           solution[i]=sum/chol[i*(i+1)/2+i];
           if(!isfinite(solution[i]))
-            myerror(E,"Non-finite Stage-F2e face-patch solve");
+            myerror(E,"Non-finite Stage-F2 face-patch solve");
         }
         for(i=0;i<ALA_F2E_FACE_DOF;i++) {
           eq=ala_f2e_cache.equations[m][p*ALA_F2E_FACE_DOF+i];
@@ -1409,7 +1447,7 @@ static void ala_f2e_face_patch_smooth(struct All_variables *E,double **d0,
       for(eq=0;eq<neq;eq++) {
         correction=damping*ala_f2e_cache.overlap_inverse[m][eq]*delta[m][eq];
         if(!isfinite(correction))
-          myerror(E,"Non-finite Stage-F2e face-patch correction");
+          myerror(E,"Non-finite Stage-F2 face-patch correction");
         d0[m][eq]+=correction;
       }
     n_assemble_del2_u(E,d0,Ad,level,1);

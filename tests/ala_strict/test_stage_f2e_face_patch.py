@@ -33,7 +33,7 @@ class F2eContractTests(unittest.TestCase):
         self.assertIn(
             "E->ALA_vanka_overlap_BI[level][m][eq]>0.0", matrix)
         self.assertIn(
-            'myerror(E,"Stage-F2e active face-patch overlap is incomplete")',
+            'myerror(E,"Stage-F2 active face-patch overlap is incomplete")',
             matrix)
         self.assertIn("local_constrained_zero++", matrix)
         self.assertIn("constrained_zero_overlap_sum=%d", matrix)
