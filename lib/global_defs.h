@@ -532,6 +532,8 @@ struct CONTROL {
     double ala_stage_abc_bpi_seconds;
     double ala_stage_abc_schwarz_seconds;
     int ala_stage_abc_outer_iteration;
+    int ala_stage_f3_last_inner_cycles;
+    double ala_stage_f3_last_inner_achieved_relative;
     char ala_stage_abc_inner_role[48];
     int ala_coupled_shallow_vanka_layers;
     int ala_coupled_shallow_vanka_core_layers;

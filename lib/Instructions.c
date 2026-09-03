@@ -1828,6 +1828,8 @@ void global_default_values(E)
     E->control.ala_stage_abc_bpi_seconds = 0.0;
     E->control.ala_stage_abc_schwarz_seconds = 0.0;
     E->control.ala_stage_abc_outer_iteration = -1;
+    E->control.ala_stage_f3_last_inner_cycles = 0;
+    E->control.ala_stage_f3_last_inner_achieved_relative = 0.0;
     strcpy(E->control.ala_stage_abc_inner_role,"unclassified");
     E->control.ala_coupled_shallow_vanka_layers = 0;
     E->control.ala_coupled_shallow_vanka_core_layers = -1;

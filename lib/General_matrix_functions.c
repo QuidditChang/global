@@ -299,7 +299,10 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
     /* Stage C treats reaching the limit as exhaustion even when the last
      * cycle happens to cross the target.  This makes the max-cycle contract
      * explicit and leaves one cycle of headroom for a valid solve. */
-    valid=(isfinite(residual) && residual<=acc && cycles<max_cycles);
+    valid=(isfinite(residual) && residual<=acc &&
+           (cycles<max_cycles ||
+            (getenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION")!=NULL &&
+             cycles<=max_cycles)));
     E->control.ala_stage_abc_inner_call_count++;
     E->control.ala_stage_abc_inner_cycle_count+=cycles;
     E->control.ala_stage_abc_inner_seconds+=elapsed;
@@ -331,6 +334,13 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
     }
   }
 
+  if(max_cycles>0 &&
+     getenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION")!=NULL) {
+    E->control.ala_stage_f3_last_inner_cycles=cycles;
+    E->control.ala_stage_f3_last_inner_achieved_relative=
+        residual/max(r0,1.0e-300);
+  }
+
   if(max_cycles>0 && E->parallel.me==0) {
     fprintf(E->fp,"ALA COUPLED INNER VELOCITY summary status=%s "
             "cycles=%d max_cycles=%d residual=%e initial=%e target=%e "
@@ -351,7 +361,8 @@ static int solve_del2_u_internal(struct All_variables *E, double **d0,
   E->control.total_iteration_cycles += count;
   E->control.total_v_solver_calls += 1;
 
-  if(max_cycles>0 && E->control.ala_stage_abc_production_logging && !valid)
+  if(max_cycles>0 && E->control.ala_stage_abc_production_logging && !valid &&
+     getenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION")==NULL)
     myerror(E,"Strict-ALA Stage-C K_gamma inverse contract failed");
 
   return(valid);

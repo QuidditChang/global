@@ -243,6 +243,20 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               int iteration,
                                               struct ala_pressure_preconditioner_cache
                                               *cache);
+static void *strict_ala_stage_f3_begin(
+    struct All_variables *E,int lev,int restart,int outer_budget);
+static void strict_ala_stage_f3_direction(
+    struct All_variables *E,void *state,double **v,double **z,double **s,
+    int iteration,int restart_cycle,double requested_inner_tolerance);
+static void strict_ala_stage_f3_residual(
+    struct All_variables *E,void *state,double **residual,int iteration,
+    double continuity_relative,double momentum_relative,
+    double krylov_recursive_absolute,double krylov_explicit_absolute);
+static void strict_ala_stage_f3_finalize(
+    struct All_variables *E,void *state,
+    struct ala_pressure_preconditioner_cache *cache,int iterations,
+    int joint_target_reached,double best_continuity,
+    double final_continuity,double continuity_target);
 static void strict_ala_depth_diagnostics(struct All_variables *E,
                                          double **r, double **div_u,
                                          int lev, int iteration);
@@ -3529,6 +3543,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
     struct ala_block_vector pressure_residual_view;
     struct ala_block_vector pressure_action_view;
     struct strict_ala_stage_e_observer stage_e_observer;
+    void *stage_f3_state;
     const char *acceptance_status;
 
     levnpno=E->lmesh.NPNO[lev];
@@ -3667,8 +3682,11 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
     }
     strict_ala_stage_e_begin(E,&stage_e_observer,r,lev,*steps_max);
+    stage_f3_state=strict_ala_stage_f3_begin(E,lev,restart,*steps_max);
     strict_ala_stage_e_sample(E,&stage_e_observer,r,0,cancellation_l2,
         momentum_relative,initial_rnorm,initial_rnorm,0);
+    strict_ala_stage_f3_residual(E,stage_f3_state,r,0,cancellation_l2,
+        momentum_relative,initial_rnorm,initial_rnorm);
 
     while(count<*steps_max && !converged) {
         for(j=0;j<65;j++) {
@@ -3920,6 +3938,10 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(e=0;e<neq;e++)
                         ub[j][m][e]=tmpU[m][e];
+            /* F3 must sample the physical production Schur image before the
+             * Arnoldi loop below orthogonalizes w in place. */
+            strict_ala_stage_f3_direction(E,stage_f3_state,vb[j],zb[j],w,
+                count+1,count/restart+1,E->control.ala_inner_accuracy_max);
             for(i=0;i<=j;i++) {
                 h[i][j]=global_pdot(E,w,vb[i],lev);
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -4060,6 +4082,9 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
                     count,cancellation_l2,stage_momentum_relative,
                     residual_est*initial_rnorm,explicit_norm,
                     (count%restart)==0);
+            strict_ala_stage_f3_residual(E,stage_f3_state,explicit_r,count,
+                cancellation_l2,stage_momentum_relative,
+                residual_est*initial_rnorm,explicit_norm);
             if((count%restart)==0)
                 strict_ala_stage_e_restart_pre(E,&stage_e_observer,
                     explicit_r,residual_est*initial_rnorm);
@@ -4143,6 +4168,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
              * a clean case result, but never advance the physical model with
              * an unaccepted pressure/velocity pair. */
             MPI_Barrier(E->parallel.world);
+            strict_ala_stage_f3_finalize(E,stage_f3_state,cache,count,0,
+                audit_best_cancellation,residual,E->control.tole_comp);
             strict_ala_stage_e_finalize(E,&stage_e_observer,cache);
             MPI_Finalize();
             exit(EXIT_SUCCESS);
@@ -4182,6 +4209,8 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         fflush(E->fp);
         fflush(stderr);
     }
+    strict_ala_stage_f3_finalize(E,stage_f3_state,cache,count,converged,
+        audit_best_cancellation,residual,E->control.tole_comp);
     strict_ala_stage_e_finalize(E,&stage_e_observer,cache);
     *steps_max=count;
     for(m=1;m<=E->sphere.caps_per_proc;m++) {
@@ -4418,6 +4447,7 @@ static void apply_ala_geneo_correction(struct All_variables *E,
 #include "Strict_ala_stage_f2e.inc"
 #include "Strict_ala_stage_f2f.inc"
 #include "Strict_ala_stage_f2g.inc"
+#include "Strict_ala_stage_f3.inc"
 
 
 static void apply_ala_pressure_preconditioner(struct All_variables *E,
