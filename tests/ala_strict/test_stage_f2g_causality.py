@@ -96,6 +96,11 @@ class CausalityTests(unittest.TestCase):
         self.assertIn("for index in 0 1 2", text)
         self.assertIn("STRICT_STAGE_F2G_CAUSALITY_${LSB_JOBID}", text)
         self.assertIn("F2G_POSTPROCESS_V2", text)
+        self.assertIn("python/pythia-0.8.1.15-py2.6.egg", text)
+        self.assertIn('export PYTHONPATH="${PYRE_START}" &&', text)
+        launch = text.rindex('"${CODE_DIR}/bin/pycitcoms"')
+        launch_prefix = text[max(0, launch - 250):launch]
+        self.assertIn('export PYTHONPATH="${PYRE_START}"', launch_prefix)
         self.assertNotIn("F2H_", text)
         self.assertEqual(thresholds["primary_late_window"], [20, 40])
         self.assertEqual(thresholds["reproduction_gate"]
