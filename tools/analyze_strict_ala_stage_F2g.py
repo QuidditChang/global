@@ -5,6 +5,7 @@ import argparse
 import csv
 import hashlib
 import importlib.util
+import json
 import math
 from pathlib import Path
 
@@ -53,9 +54,51 @@ def remap(rows, source, target):
 
 
 def weighted_rms(rows, field):
-    return math.sqrt(sum(
-        COMMON.finite(row["POD_energy_weight"], "weight") *
-        COMMON.finite(row[field], field) ** 2 for row in rows))
+    numerator = denominator = 0.0
+    for row in rows:
+        weight = COMMON.finite(row["POD_energy_weight"], "weight")
+        value = COMMON.finite(row[field], field)
+        if weight < 0.0:
+            raise ValueError("negative POD weight")
+        numerator += weight * value * value
+        denominator += weight
+    if denominator <= 0.0:
+        raise ValueError("nonpositive POD weight sum")
+    return math.sqrt(numerator / denominator)
+
+
+def weighted_mean(rows, field):
+    numerator = denominator = 0.0
+    for row in rows:
+        weight = COMMON.finite(row["POD_energy_weight"], "weight")
+        if weight < 0.0:
+            raise ValueError("negative POD weight")
+        numerator += weight * COMMON.finite(row[field], field)
+        denominator += weight
+    if denominator <= 0.0:
+        raise ValueError("nonpositive POD weight sum")
+    return numerator / denominator
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def pod_weight_sum(rows):
+    by_mode = {}
+    for row in rows:
+        mode = int(row["POD_mode"])
+        weight = COMMON.finite(row["POD_energy_weight"], "weight")
+        if weight < 0.0:
+            raise ValueError("negative POD weight")
+        if mode in by_mode and not math.isclose(
+                by_mode[mode], weight, rel_tol=0.0, abs_tol=1e-15):
+            raise ValueError("inconsistent POD weight for mode")
+        by_mode[mode] = weight
+    total = sum(by_mode.values())
+    if total <= 0.0:
+        raise ValueError("nonpositive POD weight sum")
+    return total
 
 
 def action_flag_consistent(row):
@@ -280,9 +323,7 @@ def analyze(args):
                 weighted_rms(actions, "residual_ratio_alpha_1"),
             "action_residual_ratio_alpha_opt_RMS":
                 weighted_rms(actions, "residual_ratio_alpha_opt"),
-            "alpha_opt_weighted_mean": sum(
-                COMMON.finite(row["POD_energy_weight"], "weight") *
-                COMMON.finite(row["alpha_opt"], "alpha") for row in actions),
+            "alpha_opt_weighted_mean": weighted_mean(actions, "alpha_opt"),
             "positive_action_all": all(
                 row["positive_action"] == "1" for row in actions),
             "per_mode_residual_64": {
@@ -330,7 +371,10 @@ def analyze(args):
         decision = "F2G_FACE_PATCH_SCALING_REJECTED"
         next_task = "F2H_CROSS_RANK_FACE_PATCH_FALSIFICATION"
     COMMON.write_json(args.output, {
-        "schema": "strict-ala-stage-F2g-decision-v1",
+        "schema": "strict-ala-stage-F2g-decision-v2",
+        "pod_weight_sum": pod_weight_sum(mode_rhs),
+        "normalized_weighted_rms": True,
+        "normalized_weighted_mean": True,
         "experiment_evidence_valid": structural_pass,
         "gates": gates,
         "metrics": metrics,
@@ -341,6 +385,132 @@ def analyze(args):
         "next_authorized_task": next_task,
     })
     return 0
+
+
+def postprocess_v2(args):
+    original = COMMON.load_json(args.original_decision)
+    final_audit = COMMON.load_json(args.original_final_audit)
+    completion = COMMON.load_json(args.numerical_completion)
+    trajectory = read_csv(args.trajectory, (
+        "candidate", "smoother_composition", "finest_sweeps",
+        "finest_damping", "POD_mode", "POD_energy_weight", "MG_cycles",
+        "momentum_residual_relative", "valid"))
+    mode_rhs = read_csv(args.mode_rhs,
+                        ("POD_mode", "POD_energy_weight", "rhs_norm", "valid"))
+    action = read_csv(args.action, (
+        "candidate", "finest_damping", "POD_mode", "POD_energy_weight",
+        "rhs_norm", "correction_norm", "rhs_dot_correction",
+        "rhs_dot_Kcorrection", "Kcorrection_norm", "alpha_opt",
+        "residual_ratio_alpha_1", "residual_ratio_alpha_opt",
+        "positive_action", "valid"))
+    artifacts = [Path(path) for path in args.numerical_artifact]
+    if not artifacts or any(not path.is_file() for path in artifacts):
+        raise ValueError("missing numerical artifact")
+    completion_by_name = {
+        Path(path).name: digest
+        for path, digest in completion.get("artifacts", {}).items()}
+    artifact_names = [path.name for path in artifacts]
+    completion_matches = (len(artifact_names) == len(set(artifact_names)) and
+        set(artifact_names) == set(completion_by_name) and all(
+        completion_by_name.get(path.name) == sha256(path) for path in artifacts)
+    )
+    if not (completion.get("complete") is True and
+            completion.get("valid") is True and
+            completion.get("exit_status") == 0 and completion_matches):
+        raise ValueError("original numerical completion does not match evidence")
+    if (original.get("decision") != "F2G_FACE_PATCH_SCALING_REJECTED" or
+            original.get("production_default_change_authorized") is not False or
+            final_audit.get("experiment_valid") is not True or
+            final_audit.get("decision") != original.get("decision") or
+            final_audit.get("production_default_change_authorized") is not False):
+        raise ValueError("original F2G decision/final audit is not authoritative")
+
+    corrected = json.loads(json.dumps(original))
+    total = pod_weight_sum(mode_rhs)
+    for candidate in CANDIDATES:
+        final = [row for row in trajectory if row["candidate"] == candidate and
+                 int(row["MG_cycles"]) == 64]
+        at32 = [row for row in trajectory if row["candidate"] == candidate and
+                int(row["MG_cycles"]) == 32]
+        actions = [row for row in action if row["candidate"] == candidate]
+        if len(final) != len(mode_rhs) or len(at32) != len(mode_rhs) or \
+                len(actions) != len(mode_rhs):
+            raise ValueError(f"incomplete POD coverage for {candidate}")
+        metric = corrected["metrics"][candidate]
+        metric["momentum_residual_RMS_32"] = weighted_rms(
+            at32, "momentum_residual_relative")
+        metric["momentum_residual_RMS_64"] = weighted_rms(
+            final, "momentum_residual_relative")
+        metric["effective_cycle_factor_32_64"] = (
+            metric["momentum_residual_RMS_64"] /
+            max(metric["momentum_residual_RMS_32"], 1e-300)) ** (1.0 / 32.0)
+        metric["action_residual_ratio_alpha_1_RMS"] = weighted_rms(
+            actions, "residual_ratio_alpha_1")
+        metric["action_residual_ratio_alpha_opt_RMS"] = weighted_rms(
+            actions, "residual_ratio_alpha_opt")
+        metric["alpha_opt_weighted_mean"] = weighted_mean(actions, "alpha_opt")
+    base = corrected["metrics"]["CONFIGURED"]
+    for candidate in CANDIDATES[1:]:
+        metric = corrected["metrics"][candidate]
+        old_ratio = metric["residual_ratio_to_configured"]
+        new_ratio = metric["momentum_residual_RMS_64"] / max(
+            base["momentum_residual_RMS_64"], 1e-300)
+        if not math.isclose(old_ratio, new_ratio, rel_tol=5e-14, abs_tol=0.0):
+            raise ValueError("normalization unexpectedly changed candidate/base ratio")
+        metric["residual_ratio_to_configured"] = new_ratio
+        metric["asymptotic_factor_ratio_to_configured"] = (
+            metric["effective_cycle_factor_32_64"] /
+            max(base["effective_cycle_factor_32_64"], 1e-300))
+
+    originals = [Path(args.numerical_completion), *artifacts,
+                 Path(args.original_decision), Path(args.original_final_audit)]
+    corrected.update({
+        "schema": "strict-ala-stage-F2g-decision-v2",
+        "pod_weight_sum": total,
+        "normalized_weighted_rms": True,
+        "normalized_weighted_mean": True,
+        "numerical_stage_reused": True,
+        "numerical_stage_rerun": False,
+        "analysis_normalization_corrected": True,
+        "original_evidence_sha256": {
+            str(path.resolve()): sha256(path) for path in originals},
+        "production_default_change_authorized": False,
+    })
+    COMMON.write_json(args.output, corrected)
+    return 0
+
+
+def postprocess_audit(args):
+    decision = COMMON.load_json(args.decision_v2)
+    expected = decision.get("original_evidence_sha256", {})
+    evidence_unchanged = bool(expected) and all(
+        Path(path).is_file() and sha256(path) == digest
+        for path, digest in expected.items())
+    valid = (
+        evidence_unchanged and
+        decision.get("schema") == "strict-ala-stage-F2g-decision-v2" and
+        decision.get("decision") == "F2G_FACE_PATCH_SCALING_REJECTED" and
+        decision.get("experiment_evidence_valid") is True and
+        decision.get("normalized_weighted_rms") is True and
+        decision.get("normalized_weighted_mean") is True and
+        decision.get("numerical_stage_reused") is True and
+        decision.get("numerical_stage_rerun") is False and
+        decision.get("analysis_normalization_corrected") is True and
+        decision.get("production_default_change_authorized") is False)
+    COMMON.write_json(args.output, {
+        "schema": "strict-ala-stage-F2g-postprocess-final-audit-v1",
+        "experiment_valid": valid,
+        "original_evidence_immutable": evidence_unchanged,
+        "numerical_stage_reused": True,
+        "numerical_stage_rerun": False,
+        "analysis_normalization_corrected": True,
+        "decision": decision.get("decision") if valid else "INVALID_EXPERIMENT",
+        "decision_v2_sha256": sha256(args.decision_v2),
+        "production_default_change_authorized": False,
+        "next_authorized_task": "STRICT_STAGE_F2G_CAUSALITY" if valid
+            else "REPAIR_F2G_POSTPROCESS_V2",
+    })
+    return 0 if valid else 1
 
 
 def audit(args):
@@ -385,6 +555,16 @@ def parser():
                  "source-pre", "source-post", "output"):
         command.add_argument(f"--{name}", required=True)
     command.set_defaults(fn=audit)
+    command = commands.add_parser("postprocess-v2")
+    for name in ("numerical-completion", "trajectory", "mode-rhs", "action",
+                 "original-decision", "original-final-audit", "output"):
+        command.add_argument(f"--{name}", required=True)
+    command.add_argument("--numerical-artifact", action="append", required=True)
+    command.set_defaults(fn=postprocess_v2)
+    command = commands.add_parser("postprocess-audit")
+    command.add_argument("--decision-v2", required=True)
+    command.add_argument("--output", required=True)
+    command.set_defaults(fn=postprocess_audit)
     return root
 
 

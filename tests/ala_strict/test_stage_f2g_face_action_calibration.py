@@ -78,7 +78,7 @@ class F2gContractTests(unittest.TestCase):
             "candidate": candidate,
             "smoother_composition": F2G.BLOCKS[candidate],
             "finest_sweeps": 3, "finest_damping": damping[candidate],
-            "POD_mode": mode, "POD_energy_weight": .5,
+            "POD_mode": mode, "POD_energy_weight": .3,
             "MG_cycles": cycle,
             "momentum_residual_relative": factors[candidate] ** cycle,
             "valid": 1}
@@ -94,7 +94,7 @@ class F2gContractTests(unittest.TestCase):
                 prior.append(item)
         write_csv(root / "prior_trajectory.csv", trajectory_fields, prior)
         rhs_fields = ("POD_mode", "POD_energy_weight", "rhs_norm", "valid")
-        rhs = [{"POD_mode": mode, "POD_energy_weight": .5,
+        rhs = [{"POD_mode": mode, "POD_energy_weight": .3,
                 "rhs_norm": 1, "valid": 1} for mode in (1, 2)]
         write_csv(root / "rhs.csv", rhs_fields, rhs)
         write_csv(root / "prior_rhs.csv", rhs_fields, rhs)
@@ -104,7 +104,7 @@ class F2gContractTests(unittest.TestCase):
             "reduction_ratio", "alpha", "valid")
         levels = [{
             "candidate": candidate, "POD_mode": mode,
-            "POD_energy_weight": .5, "MG_cycle": cycle,
+            "POD_energy_weight": .3, "MG_cycle": cycle,
             "top_level": 4, "level": 4, "phase": "DOWN_SMOOTH",
             "input_rms": 1, "output_rms": .9,
             "reduction_ratio": .9, "alpha": 1, "valid": 1}
@@ -126,7 +126,7 @@ class F2gContractTests(unittest.TestCase):
             "positive_action", "valid")
         write_csv(root / "action.csv", action_fields, [{
             "candidate": candidate, "finest_damping": damping[candidate],
-            "POD_mode": mode, "POD_energy_weight": .5, "rhs_norm": 1,
+            "POD_mode": mode, "POD_energy_weight": .3, "rhs_norm": 1,
             "correction_norm": 1, "rhs_dot_correction": .4,
             "rhs_dot_Kcorrection": .5, "Kcorrection_norm": 1,
             "alpha_opt": .5, "residual_ratio_alpha_1": .9,
@@ -166,6 +166,13 @@ class F2gContractTests(unittest.TestCase):
             self.assertTrue(result["experiment_evidence_valid"])
             self.assertEqual(result["selected_candidate"],
                              "L4_OVERLAP_FACE_Z_D0P5")
+            self.assertAlmostEqual(result["pod_weight_sum"], 0.6)
+            self.assertTrue(result["normalized_weighted_rms"])
+            self.assertTrue(result["normalized_weighted_mean"])
+            self.assertAlmostEqual(result["metrics"]["CONFIGURED"]
+                                   ["momentum_residual_RMS_64"], .9 ** 64)
+            self.assertAlmostEqual(result["metrics"]["CONFIGURED"]
+                                   ["alpha_opt_weighted_mean"], .5)
             self.assertFalse(result["production_default_change_authorized"])
 
     def test_nonpositive_candidate_is_scientifically_rejected(self):
