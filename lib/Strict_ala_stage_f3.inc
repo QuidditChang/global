@@ -6,6 +6,8 @@
  * global_pdot QR bases.  Reference actions are evaluated only after the
  * production trajectory has ended. */
 
+#include "strict_ala_stage_F3_thresholds_generated.h"
+
 #define ALA_F3_MAX_MODES ALA_E2_MAX_MODES
 #define ALA_F3_MAX_BASIS 64
 #define ALA_F3_SPACES 3
@@ -22,14 +24,101 @@ struct ala_f3_state {
     double weights[ALA_F3_MAX_MODES],selected_energy;
     unsigned long long mode_checksum[ALA_F3_MAX_MODES];
     double **mode[ALA_F3_MAX_MODES];
+    double **additivity_probe[3];
     struct ala_f3_basis basis[ALA_F3_SPACES][2];
     struct ala_e2_observer *e0,*e1;
     char output_dir[512];
     unsigned long long snapshot_hash;
     long long bytes_per_pressure_vector;
+    char manifest_sha256[65],threshold_contract_sha256[65];
+    double viscosity_min,viscosity_max,viscosity_contrast;
+    double viscosity_lower_fraction,viscosity_upper_fraction;
+    long long viscosity_count;
 };
 
 static const char *ala_f3_space_name[ALA_F3_SPACES]={"V","Z","Y"};
+static FILE *ala_f3_open_root(struct All_variables *,struct ala_f3_state *,
+                              const char *,const char *);
+
+static int ala_f3_parse_csv_doubles(const char *text,double *values,int count)
+{
+    char *end;
+    int i;
+    if(text==NULL) return 0;
+    for(i=0;i<count;i++) {
+        values[i]=strtod(text,&end);
+        if(end==text || !isfinite(values[i])) return 0;
+        if(i<count-1) { if(*end!=',') return 0; text=end+1; }
+        else if(*end!='\0') return 0;
+    }
+    return 1;
+}
+
+static int ala_f3_parse_csv_ints(const char *text,int *values,int count)
+{
+    char *end;
+    long value;
+    int i;
+    if(text==NULL) return 0;
+    for(i=0;i<count;i++) {
+        value=strtol(text,&end,10);
+        if(end==text) return 0;
+        values[i]=(int)value;
+        if(i<count-1) { if(*end!=',') return 0; text=end+1; }
+        else if(*end!='\0') return 0;
+    }
+    return 1;
+}
+
+/* EVI at levmax is the integration-point field consumed by stiffness
+ * assembly.  Local elements are domain-owned; order is cap, element, GP.
+ * The root CSV preserves world-rank order for the post-run SHA256 envelope. */
+static void ala_f3_viscosity_provenance(struct All_variables *E,
+                                         struct ala_f3_state *s)
+{
+    int m,e,gp,vpts=vpoints[E->mesh.nsd],nproc=E->parallel.nproc;
+    long long count=0,lower=0,upper=0,*counts=NULL;
+    unsigned long long hash=1469598103934665603ULL,*hashes=NULL;
+    double eta,cap,local_min=DBL_MAX,local_max=-DBL_MAX;
+    double global_min,global_max;
+    long long global_count,global_lower,global_upper;
+    FILE *fp;
+    for(m=1;m<=E->sphere.caps_per_proc;m++) for(e=1;e<=E->lmesh.nel;e++)
+        for(gp=1;gp<=vpts;gp++) {
+            float raw=E->EVI[E->mesh.levmax][m][(e-1)*vpts+gp];
+            eta=(double)raw;
+            if(!isfinite(eta) || eta<=0.0) myerror(E,"F3 invalid operator viscosity");
+            cap=E->eco[m][e].centre[3]>0.89641 ? E->viscosity.max_value
+                                                : 5.0*E->viscosity.max_value;
+            local_min=min(local_min,eta); local_max=max(local_max,eta);
+            if(E->viscosity.MIN && eta==(double)E->viscosity.min_value) lower++;
+            if(E->viscosity.MAX && eta==cap) upper++;
+            hash=ala_e2_checksum_bytes(hash,(const unsigned char *)&raw,sizeof(raw));
+            count++;
+        }
+    MPI_Allreduce(&local_min,&global_min,1,MPI_DOUBLE,MPI_MIN,E->parallel.world);
+    MPI_Allreduce(&local_max,&global_max,1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+    MPI_Allreduce(&count,&global_count,1,MPI_LONG_LONG,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&lower,&global_lower,1,MPI_LONG_LONG,MPI_SUM,E->parallel.world);
+    MPI_Allreduce(&upper,&global_upper,1,MPI_LONG_LONG,MPI_SUM,E->parallel.world);
+    if(E->parallel.me==0) {
+        counts=(long long *)malloc(nproc*sizeof(long long));
+        hashes=(unsigned long long *)malloc(nproc*sizeof(unsigned long long));
+        if(counts==NULL || hashes==NULL) myerror(E,"F3 viscosity record allocation failed");
+    }
+    MPI_Gather(&count,1,MPI_LONG_LONG,counts,1,MPI_LONG_LONG,0,E->parallel.world);
+    MPI_Gather(&hash,1,MPI_UNSIGNED_LONG_LONG,hashes,1,MPI_UNSIGNED_LONG_LONG,0,E->parallel.world);
+    s->viscosity_min=global_min; s->viscosity_max=global_max;
+    s->viscosity_contrast=global_max/global_min; s->viscosity_count=global_count;
+    s->viscosity_lower_fraction=(double)global_lower/(double)global_count;
+    s->viscosity_upper_fraction=(double)global_upper/(double)global_count;
+    if(E->parallel.me==0) {
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_viscosity_rank_records.csv","w");
+        fprintf(fp,"rank_id,local_entry_count,local_viscosity_hash\n");
+        for(m=0;m<nproc;m++) fprintf(fp,"%d,%lld,%016llx\n",m,counts[m],hashes[m]);
+        fclose(fp); free(counts); free(hashes);
+    }
+}
 
 static void ala_f3_path(struct ala_f3_state *s,const char *name,
                         char *path,size_t size)
@@ -112,9 +201,10 @@ static void ala_f3_qr_insert(struct All_variables *E,
 {
     double **r;
     double global_pdot();
-    double pre,post1,post2,alpha,max_relative=0.0,value;
+    double pre,post1,post2,alpha,max_relative=0.0,value,remaining;
     int i,accepted=0;
-    const double reject_relative=1.0e-12;
+    const double reject_relative=
+        STRICT_ALA_STAGE_F3_QR_RANK_REJECTION_RELATIVE_THRESHOLD;
     r=ala_schur_alloc_pressure(E,s->lev);
     ala_f3_copy(E,r,candidate,s->lev);
     pre=ala_f3_norm(E,r,s->lev);
@@ -133,6 +223,7 @@ static void ala_f3_qr_insert(struct All_variables *E,
         ala_f3_axpy(E,r,-alpha,basis->q[i],s->lev);
     }
     post2=ala_f3_norm(E,r,s->lev);
+    remaining=(pre>0.0 && isfinite(post2)) ? post2/pre : 0.0;
     if(pre>0.0 && post2>reject_relative*pre && basis->rank<ALA_F3_MAX_BASIS &&
        isfinite(post2)) {
         ala_f3_scale(E,r,1.0/post2,s->lev);
@@ -141,12 +232,15 @@ static void ala_f3_qr_insert(struct All_variables *E,
     }
     else ala_schur_free_field(E,r);
     if(E->parallel.me==0)
-        fprintf(fp,"%d,%s,%s,%d,%d,%s,%.17e,%.17e,%.17e,%.17e,%d,%d\n",
+        fprintf(fp,"%d,%s,%s,%d,%d,%s,%.17e,%.17e,%.17e,%.17e,%d,%.17e,%.17e,%.17e,%d,%d\n",
             iteration,space,scope,accepted,accepted ? 0 : 1,
             pre<=0.0 ? "NONFINITE_OR_ZERO" :
             (basis->rank>=ALA_F3_MAX_BASIS && !accepted ? "BASIS_LIMIT" :
              (!accepted ? "RELATIVE_RANK_REJECTION" : "NONE")),
-            pre,post1,post2,max_relative,1,basis->rank);
+            pre,post1,post2,max_relative,
+            max_relative>STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD,
+            remaining,STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD,
+            reject_relative,1,basis->rank);
 }
 
 static double ala_f3_projection_error(struct All_variables *E,double **mode,
@@ -187,7 +281,7 @@ static void ala_f3_create_outputs(struct All_variables *E,
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_cumulative_subspace.csv","w");
     fprintf(fp,"iteration,restart_cycle,row_type,mode_id,mode_energy_weight,E_V_all,E_Z_all,E_Y_all,E_V_cycle,E_Z_cycle,E_Y_cycle,E_V_weighted_all,E_Z_weighted_all,E_Y_weighted_all,E_V_weighted_cycle,E_Z_weighted_cycle,E_Y_weighted_cycle,descriptive_geometry_only_VZ\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_basis_rank.csv","w");
-    fprintf(fp,"iteration,space,scope,accepted,rejected,rejection_reason,pre_norm,post_first_pass_norm,post_second_pass_norm,first_pass_relative_orthogonality,second_pass_performed,resulting_rank\n"); fclose(fp);
+    fprintf(fp,"iteration,space,scope,accepted,rejected,rejection_reason,pre_norm,post_first_pass_norm,post_second_pass_norm,first_pass_orthogonality_defect,first_pass_defect_exceeds_threshold,relative_remaining_norm,qr_first_pass_orthogonality_threshold_loaded,qr_rank_rejection_relative_threshold_loaded,second_pass_performed,resulting_rank\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_mode_coefficients.csv","w");
     fprintf(fp,"iteration,mode_id,mode_energy_weight,coefficient,absolute_modal_amplitude,residual_global_pdot_norm,mode_status\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_explanation.csv","w");
@@ -195,7 +289,7 @@ static void ala_f3_create_outputs(struct All_variables *E,
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_restart_retention.csv","w");
     fprintf(fp,"restart_boundary_iteration,restart_cycle,mode_id,pre_restart_Y_reachability,post_restart_iteration,post_restart_cycle_local_Y_reachability,recovery_metric_available,recovery_iterations\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_reference_actions.csv","w");
-    fprintf(fp,"operator,action_id,input_id,repeat_id,requested_relative_tolerance,max_MG_cycles,achieved_relative,MG_cycles,status,output_norm\n"); fclose(fp);
+    fprintf(fp,"operator,action_id,input_id,repeat_id,global_rhs_norm2,global_residual_norm2,rhs_rms,residual_rms,zero_rhs,relative_residual,residual_status,requested_relative_tolerance,achieved_MG_cycles,max_MG_cycles,converged,fallback,finite,residual_gate_pass,output_norm\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_projected_matrices.csv","w");
     fprintf(fp,"matrix,row_mode,column_mode,value\n"); fclose(fp);
     fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_reconstruction_coefficients.csv","w");
@@ -212,14 +306,23 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
     double vectors[4*ALA_E2_LATE_COUNT*ALA_E2_LATE_COUNT];
     double norms[2*ALA_E2_LATE_COUNT],cov[4*ALA_E2_LATE_COUNT*ALA_E2_LATE_COUNT];
     double total=0.0,orth_max=0.0,value;
+    double expected_weights[ALA_F3_MAX_MODES],expected_selected_energy;
+    int expected_ids[ALA_F3_MAX_MODES];
     const char *required=getenv("STRICT_ALA_STAGE_F3_REQUIRED");
+    const char *mode_count_env=getenv("STRICT_ALA_STAGE_F3_AUTHORITATIVE_MODE_COUNT");
+    const char *mode_ids_env=getenv("STRICT_ALA_STAGE_F3_AUTHORITATIVE_MODE_IDS");
+    const char *weights_env=getenv("STRICT_ALA_STAGE_F3_AUTHORITATIVE_WEIGHTS");
+    const char *energy_env=getenv("STRICT_ALA_STAGE_F3_AUTHORITATIVE_SELECTED_ENERGY");
+    const char *manifest_env=getenv("STRICT_ALA_STAGE_F3_MANIFEST_SHA256");
+    const char *threshold_contract_env=getenv("STRICT_ALA_STAGE_F3_THRESHOLD_CONTRACT_SHA256");
     const char *snapshot_dir=getenv("STRICT_ALA_STAGE_F3_E2_SNAPSHOT_DIR");
     const char *output_dir=getenv("STRICT_ALA_STAGE_F3_OUTPUT_DIR");
     FILE *fp,*coefficient_fp=NULL;
     int i,j,n=2*ALA_E2_LATE_COUNT;
     unsigned long long checksum;
     if(required==NULL) return NULL;
-    if(snapshot_dir==NULL || output_dir==NULL)
+    if(snapshot_dir==NULL || output_dir==NULL || manifest_env==NULL ||
+       threshold_contract_env==NULL)
         myerror(E,"Incomplete strict-ALA Stage-F3 environment contract");
     if(E->parallel.nproc!=384 || E->parallel.nprocx!=4 ||
        E->parallel.nprocy!=4 || E->parallel.nprocz!=2)
@@ -232,6 +335,9 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
     s->enabled=1; s->lev=lev; s->restart=restart;
     s->outer_budget=outer_budget; s->current_cycle=1;
     snprintf(s->output_dir,sizeof(s->output_dir),"%s",output_dir);
+    snprintf(s->manifest_sha256,sizeof(s->manifest_sha256),"%.64s",manifest_env);
+    snprintf(s->threshold_contract_sha256,sizeof(s->threshold_contract_sha256),
+             "%.64s",threshold_contract_env);
     memset(&template_observer,0,sizeof(template_observer));
     template_observer.lev=lev;
     snprintf(template_observer.shared_dir,sizeof(template_observer.shared_dir),
@@ -248,24 +354,46 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
     ala_e2_covariance(E,cases,indices,n,cov);
     if(!ala_e2_pod(cov,n,1,values,vectors,norms))
         myerror(E,"Stage-F3 deterministic E2 POD reconstruction failed");
-    s->selected=ala_f1a_selected_count(values,n,&s->selected_energy);
-    if(s->selected<3 || s->selected>ALA_F3_MAX_MODES ||
-       s->selected_energy<0.95-1.0e-12)
+    /* The authoritative E2 mode count is supplied by the immutable pre-run
+     * mode contract.  Never reselect modes from the reconstructed spectrum. */
+    if(mode_count_env==NULL || sscanf(mode_count_env,"%d",&s->selected)!=1)
+        myerror(E,"F3_AUTHORITATIVE_E2_MODE_COUNT_MISSING");
+    if(s->selected<1 || s->selected>ALA_F3_MAX_MODES)
         myerror(E,"Stage-F3 authoritative POD selection mismatch");
+    if(!ala_f3_parse_csv_ints(mode_ids_env,expected_ids,s->selected) ||
+       !ala_f3_parse_csv_doubles(weights_env,expected_weights,s->selected) ||
+       energy_env==NULL || sscanf(energy_env,"%lf",&expected_selected_energy)!=1)
+        myerror(E,"F3_AUTHORITATIVE_E2_MODE_CONTRACT_PARSE_FAILED");
     for(i=0;i<n;i++) total+=values[i];
+    s->selected_energy=0.0;
     s->snapshot_hash=1469598103934665603ULL;
     for(i=0;i<s->selected;i++) {
+        if(expected_ids[i]!=i+1) myerror(E,"F3_AUTHORITATIVE_E2_MODE_ID_ORDER_MISMATCH");
         s->mode[i]=ala_e2_build_mode(E,cases,indices,n,vectors,norms,i);
         s->weights[i]=values[i]/max(total,1.0e-300);
+        if(fabs(s->weights[i]-expected_weights[i])>
+           STRICT_ALA_STAGE_F3_POD_WEIGHT_SUM_ABSOLUTE_TOLERANCE)
+            myerror(E,"F3_AUTHORITATIVE_E2_MODE_WEIGHT_MISMATCH");
+        s->weights[i]=expected_weights[i];
+        s->selected_energy+=s->weights[i];
         checksum=ala_f3_mode_checksum(E,s->mode[i],lev);
         s->mode_checksum[i]=checksum;
         s->snapshot_hash^=checksum;
+        if(i<3) s->additivity_probe[i]=s->mode[i];
     }
+    /* q3 is retained only as a frozen linearity probe when it is outside the
+     * two-mode authoritative Q_E2.  It never enters F3 POD science. */
+    for(i=s->selected;i<3;i++)
+        s->additivity_probe[i]=ala_e2_build_mode(E,cases,indices,n,vectors,norms,i);
+    if(fabs(s->selected_energy-expected_selected_energy)>
+       STRICT_ALA_STAGE_F3_POD_WEIGHT_SUM_ABSOLUTE_TOLERANCE)
+        myerror(E,"F3_AUTHORITATIVE_E2_SELECTED_ENERGY_MISMATCH");
     for(i=0;i<s->selected;i++) for(j=0;j<s->selected;j++) {
         value=global_pdot(E,s->mode[i],s->mode[j],lev)-(i==j ? 1.0 : 0.0);
         if(fabs(value)>orth_max) orth_max=fabs(value);
     }
     ala_f3_create_outputs(E,s);
+    ala_f3_viscosity_provenance(E,s);
     if(E->parallel.me==0)
         coefficient_fp=ala_f3_open_root(E,s,
             "strict_ala_stage_F3_pod_reconstruction_coefficients.csv","a");
@@ -288,14 +416,19 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
         *(long long)E->lmesh.NPNO[lev]*(long long)sizeof(double);
     if(E->parallel.me==0) {
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_reconstruction.json","w");
-        fprintf(fp,"{\n  \"schema\":\"strict-ala-stage-F3-pod-reconstruction-v1\",\n  \"method\":\"deterministic_E2_joint_direction_case_balanced_snapshot_reconstruction\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"selected_modes\":%d,\n  \"pod_weight_sum\":%.17e,\n  \"orthogonality_max_abs_defect\":%.17e,\n  \"deterministic_sign_rule\":\"match_original_E2_eigensolver_order_then_validate_joint_coefficients\",\n  \"snapshot_aggregate_checksum\":\"%016llx\",\n  \"mode_checksums\":[",
-            s->selected,s->selected_energy,orth_max,s->snapshot_hash);
+        fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-pod-reconstruction\",\n  \"schema_version\":\"1\",\n  \"stage_id\":\"STRICT_STAGE_F3_OUTER_SCHUR_KRYLOV_RELOCALIZATION\",\n  \"manifest_sha256\":\"%s\",\n  \"method\":\"deterministic_E2_joint_direction_case_balanced_snapshot_reconstruction\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"selected_modes\":%d,\n  \"mode_ids\":[",
+            s->manifest_sha256,s->selected);
+        for(i=0;i<s->selected;i++) fprintf(fp,"%s%d",i ? "," : "",i+1);
+        fprintf(fp,"],\n  \"pod_weight_sum\":%.17e,\n  \"orthogonality_max_abs_defect\":%.17e,\n  \"deterministic_sign_rule\":\"match_original_E2_joint_coefficient_trajectory\",\n  \"snapshot_aggregate_checksum\":\"%016llx\",\n  \"mode_checksums\":[",
+            s->selected_energy,orth_max,s->snapshot_hash);
         for(i=0;i<s->selected;i++) {
             fprintf(fp,"%s{\"mode_id\":%d,\"checksum\":\"%016llx\",\"weight\":%.17e}",
                 i ? "," : "",i+1,s->mode_checksum[i],s->weights[i]);
         }
-        fprintf(fp,"],\n  \"coefficient_trajectory_validation\":\"DEFERRED_TO_FAIL_CLOSED_ANALYZER\",\n  \"valid\":%s\n}\n",
-            orth_max<=1.0e-10 ? "true" : "false");
+        fprintf(fp,"],\n  \"authoritative_mode_set_reused\":true,\n  \"pod_reselection_performed\":false,\n  \"pod_retraining_performed\":false,\n  \"normalization_validation_pass\":%s,\n  \"coefficient_trajectory_validation\":\"DEFERRED_TO_FAIL_CLOSED_ANALYZER\",\n  \"Q_E2_validation_complete\":%s,\n  \"valid\":%s,\n  \"complete\":true\n}\n",
+            orth_max<=STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD ? "true" : "false",
+            orth_max<=STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD ? "true" : "false",
+            orth_max<=STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD ? "true" : "false");
         fclose(fp);
         fprintf(E->fp,"STRICT_ALA_STAGE_F3_BEGIN orientation=RIGHT_FGMRES "
             "modes=%d pod_weight_sum=%.17e restart=%d outer_budget=%d\n",
@@ -447,8 +580,8 @@ static int ala_f3_reference_action(struct All_variables *E,
     double *achieved,long long *cycles)
 {
     double **pwork=0,**rhs=0,**saved=0,**u=0,**vwork=0;
-    double rhs2,target,output_norm;
-    int m,e,valid;
+    double rhs2,residual2,rhs_rms,residual_rms,relative,target,output_norm;
+    int m,e,valid,zero_rhs,finite_values;
     FILE *fp=NULL;
     (void)cache;
     pwork=ala_schur_alloc_pressure(E,s->lev);
@@ -463,24 +596,49 @@ static int ala_f3_reference_action(struct All_variables *E,
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=0;e<E->lmesh.NEQ[s->lev];e++) saved[m][e]=rhs[m][e];
     rhs2=global_vdot(E,rhs,rhs,s->lev);
-    target=1.0e-10*sqrt(rhs2/max((double)E->mesh.neq,1.0));
-    setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
-    valid=solve_del2_u_bounded(E,u,rhs,target,s->lev,1024,100);
-    unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
-    *cycles=E->control.ala_stage_f3_last_inner_cycles;
+    zero_rhs=(rhs2==0.0);
+    if(zero_rhs) {
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++) u[m][e]=0.0;
+        *cycles=0; valid=1;
+    }
+    else {
+        rhs_rms=sqrt(rhs2/(double)E->mesh.neq);
+        target=STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE*rhs_rms;
+        setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
+        valid=solve_del2_u_bounded(E,u,rhs,target,s->lev,
+            STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,100);
+        unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
+        *cycles=E->control.ala_stage_f3_last_inner_cycles;
+    }
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=0;e<E->lmesh.NEQ[s->lev];e++) rhs[m][e]=saved[m][e];
-    *achieved=ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
+    (void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
+    residual2=global_vdot(E,vwork,vwork,s->lev);
+    rhs_rms=sqrt(rhs2/(double)E->mesh.neq);
+    residual_rms=sqrt(residual2/(double)E->mesh.neq);
+    relative=zero_rhs ? (residual2==0.0 ? 0.0 : -1.0)
+                      : residual_rms/rhs_rms;
+    *achieved=relative;
     strip_bcs_from_residual(E,u,s->lev);
     assemble_div_rho_u(E,u,output,s->lev);
     output_norm=ala_f3_norm(E,output,s->lev);
-    valid=valid && isfinite(*achieved) && *achieved<=1.0e-10 &&
-        *cycles<=1024 && output_norm>=0.0;
+    finite_values=isfinite(rhs2) && isfinite(residual2) &&
+        isfinite(rhs_rms) && isfinite(residual_rms) && output_norm>=0.0;
+    valid=valid && finite_values && relative>=0.0 &&
+        relative<=STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE &&
+        *cycles<=STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES;
     if(E->parallel.me==0) {
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_reference_actions.csv","a");
-        fprintf(fp,"%s,%s,%s,%d,1.00000000000000004e-10,1024,%.17e,%lld,%s,%.17e\n",
+        fprintf(fp,"%s,%s,%s,%d,%.17e,%.17e,%.17e,%.17e,%d,",
             preconditioned ? "S_ref_M_inverse" : "S_ref",action_id,input_id,
-            repeat_id,*achieved,*cycles,valid ? "CONVERGED" : "FAILED",
+            repeat_id,rhs2,residual2,rhs_rms,residual_rms,zero_rhs);
+        if(relative>=0.0) fprintf(fp,"%.17e",relative);
+        fprintf(fp,",%s,%.17e,%lld,%d,%d,0,%d,%d,%.17e\n",
+            zero_rhs ? (residual2==0.0 ? "ZERO_RHS_EXACT" :
+                         "ZERO_RHS_NONZERO_RESIDUAL") : "NONZERO_RHS",
+            STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE,*cycles,
+            STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,valid,finite_values,valid,
             output_norm);
         fclose(fp);
     }
@@ -497,6 +655,7 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
 {
     struct ala_f3_state *s=(struct ala_f3_state *)state;
     double **Sref[ALA_F3_MAX_MODES],**Aq[ALA_F3_MAX_MODES];
+    double **Aprobe[3];
     double **test=0,**out=0;
     double Htrue[ALA_F3_MAX_MODES*ALA_F3_MAX_MODES];
     double Hright[ALA_F3_MAX_MODES*ALA_F3_MAX_MODES];
@@ -513,6 +672,7 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
     if(s==NULL || !s->enabled || s->finalized) return;
     s->finalized=1;
     for(i=0;i<s->selected;i++) { Sref[i]=NULL; Aq[i]=NULL; }
+    for(i=0;i<3;i++) Aprobe[i]=NULL;
     for(i=0;i<s->selected;i++) {
         Sref[i]=ala_schur_alloc_pressure(E,s->lev);
         if(!ala_f3_reference_action(E,s,s->mode[i],Sref[i],cache,0,
@@ -522,6 +682,12 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
             "H_RIGHT","q",i+1,&achieved,&cycles)) hright_valid=0;
         norm=ala_f3_norm(E,Aq[i],s->lev);
         action_scale=max(action_scale,norm);
+        if(i<3) Aprobe[i]=Aq[i];
+    }
+    for(i=s->selected;i<3;i++) {
+        Aprobe[i]=ala_schur_alloc_pressure(E,s->lev);
+        if(!ala_f3_reference_action(E,s,s->additivity_probe[i],Aprobe[i],cache,1,
+            "ADDITIVITY_PROBE","q",i+1,&achieved,&cycles)) hright_valid=0;
     }
     numerical_floor=64.0*DBL_EPSILON*max(action_scale,1.0);
     for(j=0;j<s->selected;j++) for(i=0;i<s->selected;i++) {
@@ -536,31 +702,34 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
             /max(ala_f3_norm(E,Aq[i],s->lev),numerical_floor);
         ala_schur_free_field(E,out); out=NULL;
         test=ala_schur_alloc_pressure(E,s->lev);
-        ala_f3_copy(E,test,s->mode[i],s->lev); ala_f3_scale(E,test,0.5,s->lev);
+        ala_f3_copy(E,test,s->mode[i],s->lev);
+        ala_f3_scale(E,test,STRICT_ALA_STAGE_F3_SCALING_SCALAR_C,s->lev);
         out=ala_schur_alloc_pressure(E,s->lev);
         if(!ala_f3_reference_action(E,s,test,out,cache,1,
             "SCALING","0.5q",i+1,&achieved,&cycles)) hright_valid=0;
-        ala_f3_scale(E,out,2.0,s->lev);
+        ala_f3_scale(E,out,1.0/STRICT_ALA_STAGE_F3_SCALING_SCALAR_C,s->lev);
         scaling_error[i]=ala_f3_difference_norm(E,Aq[i],out,s->lev)
             /max(ala_f3_norm(E,Aq[i],s->lev),numerical_floor);
         ala_schur_free_field(E,test); ala_schur_free_field(E,out);
         test=out=NULL;
-        if(repeat_error[i]>1.0e-10 || scaling_error[i]>1.0e-8)
+        if(repeat_error[i]>STRICT_ALA_STAGE_F3_REPEAT_ACTION_RELATIVE_TOLERANCE ||
+           scaling_error[i]>STRICT_ALA_STAGE_F3_SCALING_RELATIVE_TOLERANCE)
             hright_valid=0;
     }
     for(i=0;i<3;i++) {
         test=ala_schur_alloc_pressure(E,s->lev);
-        ala_f3_copy(E,test,s->mode[pair_a[i]],s->lev);
-        ala_f3_axpy(E,test,1.0,s->mode[pair_b[i]],s->lev);
+        ala_f3_copy(E,test,s->additivity_probe[pair_a[i]],s->lev);
+        ala_f3_axpy(E,test,1.0,s->additivity_probe[pair_b[i]],s->lev);
         out=ala_schur_alloc_pressure(E,s->lev);
         if(!ala_f3_reference_action(E,s,test,out,cache,1,
             "ADDITIVITY","q_pair",i+1,&achieved,&cycles)) hright_valid=0;
-        ala_f3_axpy(E,out,-1.0,Aq[pair_a[i]],s->lev);
-        ala_f3_axpy(E,out,-1.0,Aq[pair_b[i]],s->lev);
-        den=ala_f3_norm(E,Aq[pair_a[i]],s->lev)
-            +ala_f3_norm(E,Aq[pair_b[i]],s->lev);
+        ala_f3_axpy(E,out,-1.0,Aprobe[pair_a[i]],s->lev);
+        ala_f3_axpy(E,out,-1.0,Aprobe[pair_b[i]],s->lev);
+        den=ala_f3_norm(E,Aprobe[pair_a[i]],s->lev)
+            +ala_f3_norm(E,Aprobe[pair_b[i]],s->lev);
         add_error[i]=ala_f3_norm(E,out,s->lev)/max(den,numerical_floor);
-        if(add_error[i]>1.0e-8) hright_valid=0;
+        if(add_error[i]>STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE)
+            hright_valid=0;
         ala_schur_free_field(E,test); ala_schur_free_field(E,out);
         test=out=NULL;
     }
@@ -583,13 +752,15 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
                                   +Htrue[j*s->selected+i]);
     }
     htrue_valid=sref_valid && isfinite(symmetry_num) && isfinite(symmetry_den)
-        && sqrt(symmetry_num)/max(sqrt(symmetry_den),numerical_floor)<=1.0e-8;
+        && sqrt(symmetry_num)/max(sqrt(symmetry_den),numerical_floor)<=
+           STRICT_ALA_STAGE_F3_H_TRUE_SYMMETRY_RELATIVE_TOLERANCE;
     ala_geneo_jacobi_eigensolve(sym,eigvec,eig,s->selected);
     mineig=eig[0];
     for(i=0;i<s->selected;i++) {
         mineig=min(mineig,eig[i]); maxeig=max(maxeig,fabs(eig[i]));
     }
-    if(mineig < -1.0e-12*max(maxeig,numerical_floor)) htrue_valid=0;
+    if(mineig < -STRICT_ALA_STAGE_F3_H_TRUE_NEGATIVE_CURVATURE_RELATIVE_TOLERANCE*
+       max(maxeig,numerical_floor)) htrue_valid=0;
     hright_valid=hright_valid && sref_valid;
     if(E->parallel.me==0) {
         matrix_fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_projected_matrices.csv","a");
@@ -615,16 +786,31 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
         fprintf(fp,"],\n  \"leakage_weighted\":%.17e,\n  \"normalized_weighted_rms\":true,\n  \"raw_vector_action_nonfinite\":false\n}\n",weighted_leakage);
         fclose(fp);
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_runtime.json","w");
-        fprintf(fp,"{\n  \"schema\":\"strict-ala-stage-F3-runtime-v1\",\n  \"outer_preconditioning_orientation\":\"RIGHT_FGMRES\",\n  \"v_j\":\"pressure_space_Arnoldi_basis\",\n  \"z_j\":\"configured_M_inverse_v_j_pressure_correction\",\n  \"s_j\":\"S_prod_j_z_j_sampled_before_Arnoldi_in_place_orthogonalization\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"iterations\":%d,\n  \"joint_target_reached\":%s,\n  \"best_R_cont\":%.17e,\n  \"final_R_cont\":%.17e,\n  \"R_cont_target\":%.17e,\n  \"base_plateau_confirmed\":%s,\n  \"restart_retention_status\":\"INCONCLUSIVE_SINGLE_BOUNDARY\",\n  \"restart_boundary_observed\":%s,\n  \"bytes_per_pressure_vector_per_rank\":%lld,\n  \"maximum_resident_diagnostic_vectors_per_rank\":%d,\n  \"estimated_peak_diagnostic_bytes_per_rank\":%lld,\n  \"production_default_change_authorized\":false\n}\n",
+        fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-runtime-raw\",\n  \"schema_version\":\"1\",\n  \"stage_id\":\"STRICT_STAGE_F3_OUTER_SCHUR_KRYLOV_RELOCALIZATION\",\n  \"manifest_sha256\":\"%s\",\n  \"canonical_threshold_sha256\":\"%s\",\n  \"generated_threshold_contract_sha256\":\"%s\",\n  \"actual_mpi_world_size\":%d,\n  \"actual_restart\":%d,\n  \"actual_outer_budget\":%d,\n  \"runtime_threshold_values\":{\"S_ref_inner_relative_tolerance\":%.17e,\"S_ref_max_MG_cycles\":%d,\"repeat_action_relative_tolerance\":%.17e,\"scaling_scalar_c\":%.17e,\"scaling_relative_tolerance\":%.17e,\"additivity_relative_tolerance\":%.17e,\"qr_first_pass_orthogonality_threshold\":%.17e,\"qr_rank_rejection_relative_threshold\":%.17e,\"H_true_symmetry_relative_tolerance\":%.17e,\"H_true_negative_curvature_relative_tolerance\":%.17e},\n  \"outer_preconditioning_orientation\":\"RIGHT_FGMRES\",\n  \"v_j\":\"pressure_space_Arnoldi_basis\",\n  \"z_j\":\"configured_M_inverse_v_j_pressure_correction\",\n  \"s_j\":\"S_prod_j_z_j_sampled_before_Arnoldi_in_place_orthogonalization\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"iterations\":%d,\n  \"joint_target_reached\":%s,\n  \"best_R_cont\":%.17e,\n  \"final_R_cont\":%.17e,\n  \"R_cont_target\":%.17e,\n  \"base_plateau_confirmed\":%s,\n  \"restart_retention_status\":\"INCONCLUSIVE_SINGLE_BOUNDARY\",\n  \"restart_boundary_observed\":%s,\n  \"viscosity_provenance\":{\"storage\":\"EVI[levmax][cap][(element-1)*vpts+gp]\",\"entity_semantics\":\"owned_element_integration_points\",\"local_order\":\"cap_element_gauss_point\",\"configured_visc_max\":%.17e,\"eta_min\":%.17e,\"eta_max\":%.17e,\"eta_contrast\":%.17e,\"lower_clamp_fraction\":%.17e,\"upper_clamp_fraction\":%.17e,\"global_owned_entry_count\":%lld},\n  \"bytes_per_pressure_vector_per_rank\":%lld,\n  \"maximum_resident_diagnostic_pressure_vector_equivalents_per_rank\":%d,\n  \"estimated_peak_diagnostic_bytes_per_rank\":%lld,\n  \"production_default_change_authorized\":false,\n  \"complete\":true\n}\n",
+            s->manifest_sha256,STRICT_ALA_STAGE_F3_THRESHOLD_SOURCE_SHA256,
+            s->threshold_contract_sha256,E->parallel.nproc,s->restart,s->outer_budget,
+            STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,
+            STRICT_ALA_STAGE_F3_REPEAT_ACTION_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_SCALING_SCALAR_C,
+            STRICT_ALA_STAGE_F3_SCALING_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_QR_FIRST_PASS_ORTHOGONALITY_THRESHOLD,
+            STRICT_ALA_STAGE_F3_QR_RANK_REJECTION_RELATIVE_THRESHOLD,
+            STRICT_ALA_STAGE_F3_H_TRUE_SYMMETRY_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_H_TRUE_NEGATIVE_CURVATURE_RELATIVE_TOLERANCE,
             iterations,joint_target_reached ? "true" : "false",best_continuity,
             final_continuity,continuity_target,
             (!joint_target_reached && iterations==60 &&
              best_continuity>continuity_target) ? "true" : "false",
             iterations>=s->restart ? "true" : "false",
+            E->viscosity.max_value,s->viscosity_min,s->viscosity_max,
+            s->viscosity_contrast,s->viscosity_lower_fraction,
+            s->viscosity_upper_fraction,s->viscosity_count,
             s->bytes_per_pressure_vector,
-            6*ALA_F3_MAX_BASIS+2*s->selected+8,
+            6*ALA_F3_MAX_BASIS+2*ALA_E2_LATE_COUNT+2*s->selected+20,
             s->bytes_per_pressure_vector*(long long)(6*ALA_F3_MAX_BASIS+
-                                                     2*s->selected+8));
+                2*ALA_E2_LATE_COUNT+2*s->selected+20));
         fclose(fp);
         fprintf(E->fp,"STRICT_ALA_STAGE_F3_NUMERICAL_COMPLETE iterations=%d "
             "S_ref_valid=%d H_true_valid=%d H_right_valid=%d\n",iterations,
@@ -638,6 +824,10 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
     for(i=0;i<s->selected;i++) {
         ala_schur_free_field(E,Sref[i]); ala_schur_free_field(E,Aq[i]);
         ala_schur_free_field(E,s->mode[i]);
+    }
+    for(i=s->selected;i<3;i++) {
+        ala_schur_free_field(E,Aprobe[i]);
+        ala_schur_free_field(E,s->additivity_probe[i]);
     }
     for(i=0;i<ALA_F3_SPACES;i++) {
         ala_f3_clear_basis(E,&s->basis[i][ALA_F3_ALL]);

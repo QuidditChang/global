@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import hashlib
 import json
 import tempfile
 import unittest
@@ -12,6 +13,10 @@ SPEC = importlib.util.spec_from_file_location(
     "f3", ROOT / "tools/analyze_strict_ala_stage_F3.py")
 F3 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(F3)
+GEN_SPEC = importlib.util.spec_from_file_location(
+    "f3_contracts", ROOT / "tools/generate_strict_ala_stage_F3_contracts.py")
+GEN = importlib.util.module_from_spec(GEN_SPEC)
+GEN_SPEC.loader.exec_module(GEN)
 RUNS = ROOT.parents[1] / "runs"
 
 
@@ -130,12 +135,19 @@ class StageF3Tests(unittest.TestCase):
         write_csv(rank, ("iteration", "space", "scope", "accepted",
             "rejected", "rejection_reason", "pre_norm",
             "post_first_pass_norm", "post_second_pass_norm",
-            "first_pass_relative_orthogonality", "second_pass_performed",
+            "first_pass_orthogonality_defect",
+            "first_pass_defect_exceeds_threshold", "relative_remaining_norm",
+            "qr_first_pass_orthogonality_threshold_loaded",
+            "qr_rank_rejection_relative_threshold_loaded", "second_pass_performed",
             "resulting_rank"), [{"iteration": 1, "space": "Y",
             "scope": "ALL", "accepted": 1, "rejected": 0,
             "rejection_reason": "NONE", "pre_norm": 1,
             "post_first_pass_norm": 1, "post_second_pass_norm": 1,
-            "first_pass_relative_orthogonality": 0,
+            "first_pass_orthogonality_defect": 0,
+            "first_pass_defect_exceeds_threshold": 0,
+            "relative_remaining_norm": 1,
+            "qr_first_pass_orthogonality_threshold_loaded": 1e-10,
+            "qr_rank_rejection_relative_threshold_loaded": 1e-12,
             "second_pass_performed": 1, "resulting_rank": 1}])
         matrices = root / "matrices.csv"
         matrix_rows = []
@@ -250,6 +262,128 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("MPI_cap_decomposition", text)
         self.assertIn("STRICT_STAGE_F3_${LSB_JOBID}", text)
         self.assertNotIn("F2H", text)
+
+    def test_no_pod_reselection_and_single_q_e2_source(self):
+        stage=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
+        self.assertNotIn("ala_f1a_selected_count",stage)
+        self.assertIn("authoritative_mode_set_reused",stage)
+        self.assertIn("s->mode[i]",stage)
+
+    def test_qr_always_two_pass_and_generated_rank_gate(self):
+        stage=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
+        body=stage[stage.index("static void ala_f3_qr_insert"):stage.index("static double ala_f3_projection_error")]
+        self.assertGreaterEqual(body.count("for(i=0;i<basis->rank;i++)"),3)
+        self.assertIn("QR_RANK_REJECTION_RELATIVE_THRESHOLD",body)
+        self.assertIn("first_pass_defect_exceeds_threshold",stage)
+
+    def test_sref_residual_nonzero_ratio(self):
+        row=F3.sref_residual_record(4.0,1.0,2,0.6,3,10)
+        self.assertEqual(row["relative_residual"],0.5)
+        self.assertTrue(row["residual_gate_pass"])
+
+    def test_sref_zero_rhs_exact_is_valid_action(self):
+        row=F3.sref_residual_record(0.0,0.0,10,1e-10,0,1024)
+        self.assertEqual(row["residual_status"],"ZERO_RHS_EXACT")
+        self.assertEqual(row["relative_residual"],0.0)
+        self.assertTrue(row["residual_gate_pass"])
+
+    def test_sref_zero_rhs_nonzero_residual_fails(self):
+        row=F3.sref_residual_record(0.0,1.0,10,1e-10,0,1024)
+        self.assertIsNone(row["relative_residual"])
+        self.assertFalse(row["residual_gate_pass"])
+
+    def test_ordered_viscosity_checksum_determinism_and_sensitivity(self):
+        records=[{"rank_id":0,"local_entry_count":2,"local_viscosity_hash":"aa"},
+                 {"rank_id":1,"local_entry_count":2,"local_viscosity_hash":"bb"}]
+        baseline=F3.ordered_viscosity_checksum(records,2)
+        self.assertEqual(baseline,F3.ordered_viscosity_checksum(list(records),2))
+        changed=[dict(x) for x in records]; changed[1]["local_viscosity_hash"]="bc"
+        self.assertNotEqual(baseline,F3.ordered_viscosity_checksum(changed,2))
+
+    def test_viscosity_checksum_rejects_rank_count_and_permutation_identity(self):
+        records=[{"rank_id":1,"local_entry_count":2,"local_viscosity_hash":"aa"},
+                 {"rank_id":0,"local_entry_count":2,"local_viscosity_hash":"bb"}]
+        digest=F3.ordered_viscosity_checksum(records,2)
+        swapped=[dict(records[0],rank_id=0),dict(records[1],rank_id=1)]
+        self.assertNotEqual(digest,F3.ordered_viscosity_checksum(swapped,2))
+        with self.assertRaises(ValueError): F3.ordered_viscosity_checksum(records,400)
+
+    def test_root_relative_resolution_rejects_escape(self):
+        self.assertEqual(F3.resolve_relative("/a","b/c"),Path("/a/b/c"))
+        with self.assertRaises(ValueError): F3.resolve_relative("/a","../c")
+        with self.assertRaises(ValueError): F3.resolve_relative("/a","/c")
+
+    def test_json_and_csv_schema_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); bad=root/"bad.json"; bad.write_text("{}")
+            ok,status=F3.validate_artifact(bad,{"artifact_type":"json","required_fields":{"x":"present"}})
+            self.assertFalse(ok); self.assertIn("missing_json_fields",status)
+            csv_path=root/"bad.csv"; csv_path.write_text("b,a\n1,2\n")
+            ok,status=F3.validate_artifact(csv_path,{"artifact_type":"csv","exact_ordered_header":["a","b"],"minimum_record_count":1})
+            self.assertFalse(ok); self.assertEqual(status,"csv_header_mismatch")
+
+    def test_missing_and_empty_artifacts_fail_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"x"; spec={"artifact_type":"json","required_fields":{}}
+            self.assertFalse(F3.validate_artifact(path,spec)[0])
+            path.write_text(""); self.assertFalse(F3.validate_artifact(path,spec)[0])
+
+    def test_threshold_generator_is_deterministic_and_hash_grounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); outputs=[]
+            for index in range(2):
+                header=root/f"h{index}.h"; mirror=root/f"m{index}.json"
+                args=SimpleNamespace(thresholds=RUNS/"cmbhf_ALA_strict_stage_F3_thresholds.json",header=header,mirror=mirror,verify=True)
+                GEN.threshold_contract(args); outputs.append((header.read_bytes(),mirror.read_bytes()))
+            self.assertEqual(outputs[0],outputs[1])
+
+    def test_threshold_identity_mismatch_fails(self):
+        canonical=json.loads((RUNS/"cmbhf_ALA_strict_stage_F3_thresholds.json").read_text())
+        digest=hashlib.sha256((RUNS/"cmbhf_ALA_strict_stage_F3_thresholds.json").read_bytes()).hexdigest()
+        mirror={"canonical_threshold_sha256":digest,"values":canonical}
+        runtime={"canonical_threshold_sha256":digest,"runtime_threshold_values":{"S_ref_max_MG_cycles":1}}
+        self.assertTrue(F3.validate_threshold_identity(canonical,digest,mirror,runtime))
+
+    def test_mode_contract_unique_ids_order_and_weights(self):
+        evidence=Path("/Volumes/Pōwehi/CitcomS_DATA/STRICT_STAGE_E2_12121889/03_subspace")
+        if not evidence.is_dir(): self.skipTest("local E2 evidence unavailable")
+        value=GEN.derive_modes(evidence/"strict_ala_stage_E2_pod.csv",evidence/"strict_ala_stage_E2_joint_pod_coefficients.csv")
+        self.assertEqual(value["authoritative_mode_count"],2)
+        self.assertEqual(value["authoritative_mode_ids"],[1,2])
+        self.assertEqual(value["authoritative_mode_order"],[1,2])
+        self.assertAlmostEqual(sum(value["authoritative_energy_weights"]),0.9438460932970015)
+
+    def test_source_operator_viscosity_is_finest_evi(self):
+        element=(ROOT/"lib/Element_calculations.c").read_text()
+        stage=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
+        self.assertIn("E->EVI[lev][m][(el-1)*vpts+k]",element)
+        self.assertIn("E->EVI[E->mesh.levmax]",stage)
+        self.assertIn("MPI_Gather",stage)
+
+    def test_manifest_hash_modification_is_detectable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"manifest.json"; path.write_text("{}\n")
+            frozen=F3.sha256(path); path.write_text('{"changed":true}\n')
+            self.assertNotEqual(frozen,F3.sha256(path))
+
+    def test_artifact_schema_declares_final_outputs_without_self_hash_cycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/"schema.json"
+            GEN.schema_contract(SimpleNamespace(output=output))
+            artifacts={x["relative_path"]:x for x in
+                       json.loads(output.read_text())["artifacts"]}
+            self.assertIn("03_final/strict_ala_stage_F3_evidence_index.json",artifacts)
+            self.assertIn("03_final/strict_ala_stage_F3_final_audit.json",artifacts)
+            restart=artifacts["01_outer_krylov_relocalization/strict_ala_stage_F3_restart_retention.csv"]
+            self.assertEqual(restart["minimum_record_count"],0)
+            analyzer=(ROOT/"tools/analyze_strict_ala_stage_F3.py").read_text()
+            self.assertIn('rel.endswith("strict_ala_stage_F3_evidence_index.json")',analyzer)
+            self.assertIn('rel.endswith("strict_ala_stage_F3_final_audit.json")',analyzer)
+
+    def test_fq_formula_uses_global_pressure_norm_and_exact_modes(self):
+        source=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
+        self.assertIn("projected2+=coefficient*coefficient",source)
+        self.assertIn("projected2/max(norm*norm",source)
 
 
 if __name__ == "__main__":

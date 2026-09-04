@@ -6,10 +6,12 @@ import csv
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path
 
 import numpy as np
 
+STAGE_ID = "STRICT_STAGE_F3_OUTER_SCHUR_KRYLOV_RELOCALIZATION"
 
 def load_json(path):
     return json.loads(Path(path).read_text())
@@ -89,50 +91,121 @@ def csv_nonfinite(rows, excluded=()):
 
 
 def validate_thresholds(t):
-    required = {
-        "S_ref_inner_relative_tolerance": 1e-10,
-        "S_ref_max_MG_cycles": 1024,
-        "repeat_action_relative_tolerance": 1e-10,
-        "scaling_scalar_c": .5,
-        "scaling_relative_tolerance": 1e-8,
-        "additivity_relative_tolerance": 1e-8,
-        "modal_significance_floor_relative": 1e-4,
-        "qr_first_pass_orthogonality_threshold": 1e-10,
-        "qr_rank_rejection_relative_threshold": 1e-12,
-        "projected_subspace_mode_leakage_limit": .25,
-        "projected_subspace_weighted_leakage_limit": .20,
-        "Y_mode_reachability_error_limit": .20,
-        "Y_weighted_reachability_error_limit": .20,
-        "POD_late_median_explanation_min": .80,
-        "POD_iteration40_explanation_min": .75,
-        "mode_stagnation_ratio_min": .90,
-        "mode_decay_ratio_max": .70,
-        "projected_condition_number_adverse": 1e3,
-        "projected_mixing_adverse": .50,
-        "projected_non_normality_adverse": .25,
-        "sigma_zero_relative_threshold": 1e-14,
-        "H_true_symmetry_relative_tolerance": 1e-8,
-        "H_true_negative_curvature_relative_tolerance": 1e-12,
-        "pod_reconstruction_coefficient_relative_tolerance": 1e-10,
-        "projection_monotonicity_absolute_tolerance": 1e-10,
-        "pod_weight_sum_absolute_tolerance": 1e-10,
-        "inner_target_relative_roundoff": 1e-12,
-    }
+    # Numeric values live only in the canonical JSON.  This routine validates
+    # shape and semantics; it deliberately carries no duplicate gate values.
+    required = ("S_ref_inner_relative_tolerance", "S_ref_max_MG_cycles",
+        "repeat_action_relative_tolerance", "scaling_scalar_c",
+        "scaling_relative_tolerance", "additivity_relative_tolerance",
+        "modal_significance_floor_relative",
+        "qr_first_pass_orthogonality_threshold",
+        "qr_rank_rejection_relative_threshold",
+        "projected_subspace_mode_leakage_limit",
+        "projected_subspace_weighted_leakage_limit",
+        "Y_mode_reachability_error_limit", "Y_weighted_reachability_error_limit",
+        "POD_late_median_explanation_min", "POD_iteration40_explanation_min",
+        "mode_stagnation_ratio_min", "mode_decay_ratio_max",
+        "authoritative_mode_energy_min", "projected_condition_number_adverse",
+        "projected_mixing_adverse", "projected_non_normality_adverse",
+        "sigma_zero_relative_threshold", "H_true_symmetry_relative_tolerance",
+        "H_true_negative_curvature_relative_tolerance",
+        "pod_reconstruction_coefficient_relative_tolerance",
+        "projection_monotonicity_absolute_tolerance",
+        "pod_weight_sum_absolute_tolerance", "inner_target_relative_roundoff")
     errors = []
-    for key, expected in required.items():
-        if key not in t or float(t[key]) != expected:
-            errors.append(f"{key} must equal {expected!r}")
-    if t.get("additivity_mode_pairs") != [[1, 2], [1, 3], [2, 3]]:
-        errors.append("additivity_mode_pairs must be q1/q2, q1/q3, q2/q3")
-    if t.get("numerical_floor_definition") != \
-            "64*DBL_EPSILON*max(reference_action_norm_scale,1)":
-        errors.append("numerical_floor_definition mismatch")
-    if t.get("qr_policy") != "deterministic_always_two_pass_batched_MGS_global_pdot":
-        errors.append("qr_policy mismatch")
+    for key in required:
+        if key not in t or isinstance(t.get(key), bool) or not finite(t.get(key)):
+            errors.append(f"{key} must be a finite numeric value")
+    pairs=t.get("additivity_mode_pairs")
+    if not isinstance(pairs,list) or not pairs or any(not isinstance(x,list) or len(x)!=2 for x in pairs):
+        errors.append("additivity_mode_pairs must contain mode-id pairs")
+    if not isinstance(t.get("qr_policy"),str) or not t["qr_policy"]:
+        errors.append("qr_policy must be nonempty")
     if t.get("production_default_change_authorized") is not False:
         errors.append("production authorization must remain false")
     if errors:
         raise ValueError("; ".join(errors))
+
+
+def validate_threshold_identity(canonical, canonical_hash, mirror, runtime):
+    validate_thresholds(canonical)
+    errors=[]
+    if mirror.get("values") != canonical:
+        errors.append("generated runtime threshold values differ from canonical JSON")
+    if mirror.get("canonical_threshold_sha256") != canonical_hash:
+        errors.append("generated runtime threshold canonical hash mismatch")
+    if runtime.get("canonical_threshold_sha256") != canonical_hash:
+        errors.append("runtime canonical threshold hash mismatch")
+    loaded=runtime.get("runtime_threshold_values",{})
+    for key,value in loaded.items():
+        if key not in canonical or canonical[key]!=value:
+            errors.append("runtime-loaded threshold mismatch: "+key)
+    if not loaded:
+        errors.append("runtime-loaded threshold values missing")
+    return errors
+
+
+def sref_residual_record(rhs_norm2,residual_norm2,global_neq,tolerance,cycles,max_cycles,
+                         converged=True,fallback=False):
+    if global_neq<=0 or rhs_norm2<0 or residual_norm2<0:
+        raise ValueError("invalid S_ref residual inputs")
+    rhs_rms=math.sqrt(rhs_norm2/global_neq)
+    residual_rms=math.sqrt(residual_norm2/global_neq)
+    zero=rhs_norm2==0.0
+    if zero and residual_norm2==0.0:
+        relative,status=0.0,"ZERO_RHS_EXACT"
+    elif zero:
+        relative,status=None,"ZERO_RHS_NONZERO_RESIDUAL"
+    else:
+        relative,status=residual_rms/rhs_rms,"NONZERO_RHS"
+    passed=(status!="ZERO_RHS_NONZERO_RESIDUAL" and relative is not None and
+            relative<=tolerance and cycles<=max_cycles and converged and not fallback and
+            all(math.isfinite(x) for x in (rhs_rms,residual_rms,relative)))
+    return {"global_rhs_norm2":rhs_norm2,"global_residual_norm2":residual_norm2,
+            "rhs_rms":rhs_rms,"residual_rms":residual_rms,"zero_rhs":zero,
+            "relative_residual":relative,"residual_status":status,
+            "requested_relative_tolerance":tolerance,"achieved_MG_cycles":cycles,
+            "max_MG_cycles":max_cycles,"converged":bool(converged),
+            "fallback":bool(fallback),"finite":all(math.isfinite(x) for x in
+            (rhs_norm2,residual_norm2,rhs_rms,residual_rms)),"residual_gate_pass":passed}
+
+
+def ordered_viscosity_checksum(records,actual_world_size):
+    ordered=sorted(records,key=lambda x:int(x["rank_id"]))
+    if [int(x["rank_id"]) for x in ordered] != list(range(actual_world_size)):
+        raise ValueError("viscosity rank records do not match actual MPI world")
+    payload=b"F3-VISCOSITY-RANK-RECORDS-V1\n"
+    for row in ordered:
+        payload += ("%d,%d,%s\n"%(int(row["rank_id"]),int(row["local_entry_count"]),
+                    row["local_viscosity_hash"])).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def resolve_relative(stage_root,relative_path):
+    relative=Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("artifact path is not root-relative")
+    return Path(stage_root)/relative
+
+
+def validate_artifact(path,spec):
+    path=Path(path)
+    if not path.is_file() or path.stat().st_size==0:
+        return False,"missing_or_empty"
+    try:
+        if spec["artifact_type"]=="json":
+            value=load_json(path)
+            missing=[key for key in spec.get("required_fields",{}) if key not in value]
+            if missing: return False,"missing_json_fields:"+",".join(missing)
+        elif spec["artifact_type"]=="csv":
+            with path.open(newline="") as stream:
+                reader=csv.reader(stream); header=next(reader,[]); data=list(reader)
+            if header!=spec.get("exact_ordered_header"):
+                return False,"csv_header_mismatch"
+            if len(data)<int(spec.get("minimum_record_count",0)):
+                return False,"csv_record_count"
+    except (OSError,ValueError,json.JSONDecodeError):
+        return False,"parse_failure"
+    return True,"complete"
 
 
 def matrix_from_rows(rows, name):
@@ -204,6 +277,60 @@ def cfg_contract(args):
     return 0 if not errors else 1
 
 
+def runtime_provenance(args):
+    manifest=load_json(args.manifest); expected=Path(args.manifest_hash).read_text().split()[0]
+    actual=sha256(args.manifest)
+    if actual!=expected: raise ValueError("manifest changed before runtime provenance")
+    raw=load_json(args.runtime_raw); pod=load_json(args.pod_reconstruction)
+    mirror=load_json(args.threshold_contract); canonical=load_json(args.thresholds)
+    ranks=load_csv(args.viscosity_rank_records)
+    world=int(raw["actual_mpi_world_size"])
+    checksum=ordered_viscosity_checksum(ranks,world)
+    viscosity=dict(raw["viscosity_provenance"])
+    viscosity.update({"checksum_algorithm":"SHA256(F3-VISCOSITY-RANK-RECORDS-V1 ordered world-rank records)",
+      "ordered_rank_record_count":len(ranks),"distributed_viscosity_checksum":checksum,
+      "actual_mpi_world_size":world})
+    errors=validate_threshold_identity(canonical,sha256(args.thresholds),mirror,raw)
+    errors += ([] if raw.get("manifest_sha256")==expected else ["runtime manifest hash mismatch"])
+    errors += ([] if pod.get("Q_E2_validation_complete") is True else ["Q_E2 validation incomplete"])
+    value={"schema_id":"strict-ala-stage-F3-runtime-provenance","schema_version":"1",
+      "stage_id":STAGE_ID,"manifest_sha256":expected,
+      "actual_mpi_world_size":world,"actual_restart":raw.get("actual_restart"),
+      "actual_outer_budget":raw.get("actual_outer_budget"),
+      "canonical_threshold_sha256":sha256(args.thresholds),
+      "generated_runtime_threshold_contract_sha256":sha256(args.threshold_contract),
+      "runtime_threshold_values":canonical,
+      "reconstructed_mode_checksums":pod.get("mode_checksums"),
+      "Q_E2_validation_complete":pod.get("Q_E2_validation_complete"),
+      "viscosity_provenance":viscosity,"runtime_contract_errors":errors,
+      "production_default_change_authorized":False,"complete":not errors}
+    write_json(args.output,value)
+    return 0 if not errors else 1
+
+
+def evidence_index(args):
+    root=Path(args.stage_root); schema=load_json(args.artifact_schema)
+    manifest_hash=Path(args.manifest_hash).read_text().split()[0]
+    entries=[]; errors=[]
+    for spec in schema["artifacts"]:
+        rel=spec["relative_path"]
+        if rel.endswith("strict_ala_stage_F3_evidence_index.json") or rel.endswith("strict_ala_stage_F3_final_audit.json"):
+            continue
+        path=resolve_relative(root,rel); ok,status=validate_artifact(path,spec)
+        if not ok: errors.append(rel+":"+status)
+        entries.append({"relative_path":rel,"byte_size":path.stat().st_size if path.is_file() else 0,
+          "sha256":sha256(path) if path.is_file() else None,"schema_id":spec["schema_id"],
+          "schema_version":spec["schema_version"],"complete_status":status})
+    value={"schema_id":"strict-ala-stage-F3-evidence-index","schema_version":"1",
+      "stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
+      "runtime_provenance_sha256":sha256(args.runtime_provenance),
+      "threshold_canonical_sha256":sha256(args.thresholds),
+      "E2_mode_contract_sha256":sha256(args.mode_contract),"artifacts":entries,
+      "errors":errors,"complete":not errors}
+    write_json(args.output,value)
+    return 0 if not errors else 1
+
+
 def analyze(args):
     t = load_json(args.thresholds)
     validate_thresholds(t)
@@ -221,6 +348,12 @@ def analyze(args):
     authoritative = load_csv(args.authoritative_coefficients)
     baseline = load_csv(args.baseline_iterations)
     errors = []
+    manifest_hash = (Path(args.manifest_hash).read_text().split()[0]
+                     if getattr(args,"manifest_hash",None) else "UNIT_TEST_NO_MANIFEST")
+    mode_contract = (load_json(args.mode_contract)
+                     if getattr(args,"mode_contract",None) else None)
+    runtime_provenance_value = (load_json(args.runtime_provenance)
+                     if getattr(args,"runtime_provenance",None) else None)
 
     numeric_tables = (explain, modes, subspace, rank_rows, inner_rows,
                       matrix_rows, reconstructed, authoritative, baseline)
@@ -240,8 +373,22 @@ def analyze(args):
     if (not isinstance(iterations, int) or iterations < 1 or iterations > 60 or
             (iterations < 60 and not early_joint)):
         errors.append("neither frozen 60-iteration trajectory nor genuine early joint convergence")
-    if not pod.get("valid") or pod.get("selected_modes", 0) < 3:
+    if not pod.get("valid") or pod.get("selected_modes", 0) < 1:
         errors.append("POD reconstruction invalid")
+    if mode_contract:
+        if pod.get("selected_modes") != mode_contract.get("authoritative_mode_count"):
+            errors.append("authoritative E2 mode count mismatch")
+        if pod.get("mode_ids") != mode_contract.get("authoritative_mode_ids"):
+            errors.append("authoritative E2 mode ID/order mismatch")
+        observed_weights=[x.get("weight") for x in pod.get("mode_checksums",[])]
+        expected_weights=mode_contract.get("authoritative_energy_weights")
+        if observed_weights != expected_weights:
+            errors.append("authoritative E2 energy-weight mismatch")
+        if pod.get("authoritative_mode_set_reused") is not True or pod.get("pod_reselection_performed") is not False:
+            errors.append("Q_E2 selection contract mismatch")
+    if runtime_provenance_value and (not runtime_provenance_value.get("complete") or
+            runtime_provenance_value.get("manifest_sha256")!=manifest_hash):
+        errors.append("runtime provenance invalid")
     inner_targets_pass = bool(inner_rows) and all(
         row.get("status") == "CONVERGED" and
         finite(row.get("achieved_relative")) and
@@ -291,12 +438,16 @@ def analyze(args):
 
     for row in rank_rows:
         numeric = ("pre_norm", "post_first_pass_norm", "post_second_pass_norm",
-                   "first_pass_relative_orthogonality")
+                   "first_pass_orthogonality_defect", "relative_remaining_norm")
         if any(not finite(row[x]) for x in numeric):
             errors.append("nonfinite QR diagnostic")
             break
         if int(row["second_pass_performed"]) != 1:
             errors.append("non-deterministic QR pass count")
+            break
+        expected_reject=float(row["relative_remaining_norm"]) <= t["qr_rank_rejection_relative_threshold"]
+        if expected_reject != (int(row["rejected"])==1):
+            errors.append("QR rank rejection does not follow canonical threshold")
             break
 
     # All-history projection errors must not increase beyond a roundoff guard.
@@ -451,7 +602,8 @@ def analyze(args):
         next_task = "STOP_AND_REVIEW_BEFORE_NEXT_SOLVER_DESIGN"
 
     projected = {
-        "schema": "strict-ala-stage-F3-projected-operator-v1",
+        "schema_id": "strict-ala-stage-F3-projected-operator",
+        "schema_version":"1","stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
         "outer_preconditioning_orientation": "RIGHT_FGMRES",
         "H_true_definition": "Q^T S_ref Q",
         "H_right_definition": "Q^T S_ref M^-1 Q",
@@ -462,19 +614,24 @@ def analyze(args):
         "leakage_weighted": json_safe(weighted_leakage),
         "spectral_interpretation_authoritative": bool(projected_closed and
             reference["H_right_fixed_operator_valid"]),
+        "Y_space_interpretation":"empirical_actual_production_Schur_image_space_not_fixed_operator_spectrum",
+        "complete":True,
     }
     write_json(args.projected_operator_output, projected)
     reference_final = json_safe(dict(reference))
     reference_final.update({
-        "schema": "strict-ala-stage-F3-reference-operator-validation-v1",
+        "schema_id": "strict-ala-stage-F3-reference-operator-validation",
+        "schema_version":"1","stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
         "H_true_metrics": true_metrics,
         "H_right_metrics": right_metrics,
         "derived_infinite_condition_number_is_valid": True,
         "raw_vector_action_nonfinite_invalid": True,
+        "complete":True,
     })
     write_json(args.reference_validation_output, reference_final)
     result = {
-        "schema": "strict-ala-stage-F3-decision-v1",
+        "schema_id": "strict-ala-stage-F3-decision","schema_version":"1",
+        "stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
         "decision": decision, "next_authorized_task": next_task,
         "valid": not errors, "complete": True, "validity_errors": errors,
         "base_reproduction_pass": reproduction_pass,
@@ -512,17 +669,53 @@ def audit(args):
              (args.inputs_pre, args.inputs_post),
              (args.source_pre, args.source_post)]
     provenance = all(Path(a).read_bytes() == Path(b).read_bytes() for a, b in pairs)
+    manifest_hash=Path(args.manifest_hash).read_text().split()[0]
+    manifest_unchanged=sha256(args.manifest)==manifest_hash
+    schema=load_json(args.artifact_schema); index=load_json(args.evidence_index)
+    runtime=load_json(args.runtime_provenance); manifest=load_json(args.manifest)
+    errors=[]
+    if not manifest_unchanged: errors.append("manifest hash changed")
+    if sha256(args.mode_contract)!=manifest.get("authoritative_E2_mode_contract_hash"):
+        errors.append("E2 mode contract hash mismatch")
+    if sha256(args.artifact_schema)!=manifest.get("artifact_schema_contract_hash"):
+        errors.append("artifact schema hash mismatch")
+    if runtime.get("manifest_sha256")!=manifest_hash or not runtime.get("complete"):
+        errors.append("runtime provenance lineage/closure failure")
+    if (runtime.get("actual_mpi_world_size"),runtime.get("actual_restart"),runtime.get("actual_outer_budget"))!=(384,50,60):
+        errors.append("runtime execution contract mismatch")
+    if index.get("manifest_sha256")!=manifest_hash or not index.get("complete"):
+        errors.append("evidence index lineage/closure failure")
+    indexed={entry["relative_path"]:entry for entry in index.get("artifacts",[])}
+    for spec in schema.get("artifacts",[]):
+        rel=spec["relative_path"]
+        if rel.endswith("strict_ala_stage_F3_evidence_index.json") or rel.endswith("strict_ala_stage_F3_final_audit.json"):
+            continue
+        path=resolve_relative(args.stage_root,rel); ok,status=validate_artifact(path,spec)
+        entry=indexed.get(rel)
+        if not ok or not entry or entry.get("sha256")!=sha256(path):
+            errors.append("artifact closure failed: "+rel+":"+status)
+    allowed={"POD_SUBSPACE_NO_LONGER_EXPLAINS_PLATEAU",
+      "OUTER_SCHUR_IMAGE_REACHABILITY_LIMITED",
+      "OUTER_SPACE_REACHABLE_BUT_PROJECTED_OPERATOR_ADVERSE",
+      "OUTER_BOTTLENECK_UNRESOLVED","INVALID_EXPERIMENT"}
+    if decision.get("decision") not in allowed:
+        errors.append("primary decision missing or invalid")
+    if decision.get("production_default_change_authorized") is not False:
+        errors.append("production authorization changed")
     value = {
-        "schema": "strict-ala-stage-F3-final-audit-v1",
-        "valid": bool(decision.get("valid") and provenance),
-        "complete": bool(decision.get("complete") and provenance),
+        "schema_id": "strict-ala-stage-F3-final-audit","schema_version":"1",
+        "stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
+        "valid": bool(decision.get("valid") and provenance and not errors),
+        "complete": bool(decision.get("complete") and provenance and not errors),
         "decision": decision.get("decision"),
         "next_authorized_task": decision.get("next_authorized_task"),
         "provenance_unchanged": provenance,
+        "manifest_hash_unchanged":manifest_unchanged,
+        "evidence_chain_errors":errors,
         "production_default_change_authorized": False,
     }
     write_json(args.output, value)
-    return 0 if provenance else 1
+    return 0 if provenance and not errors else 1
 
 
 def parser():
@@ -542,10 +735,26 @@ def parser():
                  "output"):
         q.add_argument("--" + name, required=True)
     q.set_defaults(fn=analyze)
+    q.add_argument("--manifest-hash")
+    q.add_argument("--mode-contract")
+    q.add_argument("--runtime-provenance")
+    q = sub.add_parser("runtime-provenance")
+    for name in ("manifest","manifest-hash","runtime-raw","pod-reconstruction",
+                 "thresholds","threshold-contract","viscosity-rank-records","output"):
+        q.add_argument("--"+name,required=True)
+    q.set_defaults(fn=runtime_provenance)
+    q = sub.add_parser("evidence-index")
+    for name in ("stage-root","artifact-schema","manifest-hash","runtime-provenance",
+                 "thresholds","mode-contract","output"):
+        q.add_argument("--"+name,required=True)
+    q.set_defaults(fn=evidence_index)
     q = sub.add_parser("audit")
     for name in ("decision", "binary-pre", "binary-post", "inputs-pre",
                  "inputs-post", "source-pre", "source-post", "output"):
         q.add_argument("--" + name, required=True)
+    for name in ("stage-root","manifest","manifest-hash","mode-contract",
+                 "artifact-schema","runtime-provenance","evidence-index"):
+        q.add_argument("--"+name,required=True)
     q.set_defaults(fn=audit)
     return p
 
