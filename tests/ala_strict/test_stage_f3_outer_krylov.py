@@ -263,6 +263,11 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("STRICT_STAGE_F3_${LSB_JOBID}", text)
         self.assertNotIn("F2H", text)
 
+    def test_lsf_reproduction_reference_resolves_e2_root(self):
+        text = (RUNS / "cmbhf_ALA_strict_stage_F3.lsf").read_text()
+        self.assertIn("print(path.parents[3])", text)
+        self.assertNotIn("print(path.parents[2])", text)
+
     def test_no_pod_reselection_and_single_q_e2_source(self):
         stage=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
         self.assertNotIn("ala_f1a_selected_count",stage)
