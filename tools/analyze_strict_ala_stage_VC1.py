@@ -149,9 +149,7 @@ def cfg_contract(args):
             failures.append("%s.%s=%r expected %r" %
                             (key[0], key[1], stage.get(key), expected))
     phase_delta_s = stage.get(("CitcomS.solver.phase", "phase_delta_s"))
-    if phase_delta_s is None:
-        failures.append("CitcomS.solver.phase.phase_delta_s is required")
-    else:
+    if phase_delta_s is not None:
         try:
             parsed_phase_delta_s = parse_float_vector(phase_delta_s)
         except ValueError:

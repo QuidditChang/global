@@ -118,6 +118,28 @@ class VC1ContinuationTests(unittest.TestCase):
             self.assertTrue(value["valid"])
             self.assertEqual(value["visc_max"], 10.0)
 
+    def test_cfg_contract_accepts_authoritative_upstream_without_phase_delta_s(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            canonical = directory / "canonical.cfg"
+            candidate = directory / "candidate.cfg"
+            output = directory / "contract.json"
+            text = CFG.format(steps=30000, datadir="old", old="old", vmax=100)
+            text = text.replace(
+                "phase_delta_s = -0.032902012641276054, -0.022663818742040032, "
+                "0.017520140281939885\n", "")
+            canonical.write_text(text)
+            candidate.write_text(text.replace("steps = 30000", "steps = 1")
+                                 .replace("datadir = old", "datadir = new")
+                                 .replace("datadir_old = old", "datadir_old = restart")
+                                 .replace("visc_max = 100", "visc_max = 10"))
+            vc1.cfg_contract(types.SimpleNamespace(canonical=str(canonical), cfg=str(candidate),
+                                                   visc_max=10.0, output=str(output)))
+            value = json.loads(output.read_text())
+            self.assertTrue(value["valid"])
+            self.assertNotIn("CitcomS.solver.phase.phase_delta_s is required",
+                             value["failures"])
+
     def test_stage_parser_accepts_numerical_nonconvergence_without_warm_output(self):
         with tempfile.TemporaryDirectory() as directory:
             case = pathlib.Path(directory)
