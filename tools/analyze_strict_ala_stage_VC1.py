@@ -193,7 +193,10 @@ def parse_time(path):
 def stage_summary(args):
     case = pathlib.Path(args.case_dir)
     log = case / "DATA" / "0" / "raw.log"
+    solver_logs = sorted((case / "DATA" / "0").glob("global_AhatP*.log"))
     text = log.read_text(errors="replace") if log.is_file() else ""
+    for solver_log in solver_logs:
+        text += "\n" + solver_log.read_text(errors="replace")
     iter_files = list((case / "DATA" / "0").glob("*.strict_ala_stage_C_iterations.csv"))
     rows = list(csv.DictReader(iter_files[0].open())) if len(iter_files) == 1 else []
     complete = re.findall(
@@ -208,6 +211,14 @@ def stage_summary(args):
             coupled_status = ("CONVERGED" if coupled[-1][0] == "joint_target_reached"
                               else "NUMERICAL_NONCONVERGENCE")
             complete = [(coupled_status, coupled[-1][1], coupled[-1][2], coupled[-1][3])]
+    if not complete:
+        failed = re.findall(
+            r"Strict ALA coupled FGMRES failed acceptance: "
+            r"cancellation=([0-9eE+.-]+) momentum_relative=([0-9eE+.-]+) "
+            r"iterations=(\d+) breakdown=(\d+)", text)
+        if failed:
+            complete = [("NUMERICAL_NONCONVERGENCE", failed[-1][2],
+                         failed[-1][0], failed[-1][1])]
     status = complete[-1][0] if complete else "INFRASTRUCTURE_FAILURE"
     iterations = int(complete[-1][1]) if complete else 0
     final_cont = float(complete[-1][2]) if complete else None
@@ -248,16 +259,17 @@ def stage_summary(args):
                           for item in coupled_rows)
         rmom_traj.extend({"iteration": int(item[0]), "R_mom": float(item[2])}
                          for item in coupled_rows)
-    coupled_cost = re.findall(r"STRICT_ALA_VC1_COUPLED_COST K_gamma_rhs_solves=(\d+) "
-                              r"K_gamma_operator_applications=(\d+) velocity_MG_cycles=(\d+) "
-                              r"preconditioner_applications=(\d+)", text)
+    coupled_cost = re.findall(
+        r"STRICT_ALA_VC1_COUPLED_COST K_gamma_rhs_solves=(\d+) "
+        r"(?:(?:K_gamma_operator_applications=(\d+) )?)velocity_MG_cycles=(\d+) "
+        r"preconditioner_applications=(\d+)", text)
     k_solves = (int(last.get("cumulative_inner_solves", 0) or 0) if last else
                 (int(coupled_cost[-1][0]) if coupled_cost else 0))
     mg_cycles = (int(last.get("cumulative_inner_cycles", 0) or 0) if last else
                  (int(coupled_cost[-1][2]) if coupled_cost else 0))
     frozen_valid = ((len(frozen) >= 1 and frozen[-1][0] == frozen[-1][1]) or
                     (status == "NUMERICAL_NONCONVERGENCE" and len(frozen_guard) >= 1))
-    numerical_output_valid = bool(rcont_traj) and (bool(rows) or len(coupled_cost) == 1)
+    numerical_output_valid = bool(rcont_traj) and bool(complete)
     valid = (status in ("CONVERGED", "NUMERICAL_NONCONVERGENCE") and
              len(visc) >= 1 and frozen_valid and
              numerical_output_valid and
@@ -278,7 +290,10 @@ def stage_summary(args):
         "R_mom_trajectory": rmom_traj, "final_R_cont": final_cont,
         "final_R_mom": final_mom,
         "K_gamma_solve_count": k_solves,
-        "K_gamma_operator_application_count": (int(last.get("cumulative_K_gamma_applications", 0) or 0) if last else (int(coupled_cost[-1][1]) if coupled_cost else 0)),
+        "K_gamma_operator_application_count": (
+            int(last.get("cumulative_K_gamma_applications", 0) or 0) if last else
+            (int(coupled_cost[-1][1]) if coupled_cost and coupled_cost[-1][1]
+             else None)),
         "total_MG_cycles": mg_cycles,
         "MG_cycles_per_K_gamma_solve": (
             float(mg_cycles) / max(float(k_solves), 1.0)),
@@ -303,7 +318,9 @@ def stage_summary(args):
                        "fraction_at_upper_clamp": float(visc[0][5]),
                        "sample_count": int(visc[0][6]), "checksum": visc[0][7]}
                       if visc else None),
-        "artifacts": {str(log.resolve()): digest(log)} if log.is_file() else {},
+        "cost_counters_available": bool(last or coupled_cost),
+        "artifacts": ({str(path.resolve()): digest(path)
+                       for path in [log] + solver_logs if path.is_file()}),
     }
     write_json(args.output, value)
     if status == "INFRASTRUCTURE_FAILURE":

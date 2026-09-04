@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import pathlib
+import subprocess
+import tarfile
 import tempfile
 import types
 import unittest
@@ -8,6 +10,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOL_PATH = ROOT / "tools" / "analyze_strict_ala_stage_VC1.py"
+BACKPORT = ROOT / "tools" / "backport_strict_ala_vc1.py"
 DRIVER = ROOT / "lib" / "Drive_solvers.c"
 STOKES = ROOT / "lib" / "Stokes_flow_Incomp.c"
 LSF = ROOT.parents[1] / "runs" / "cmbhf_ALA_strict_stage_VC1.lsf"
@@ -128,13 +131,19 @@ class VC1ContinuationTests(unittest.TestCase):
                 "STRICT_ALA_VC1_FROZEN_STATE_GUARD before=def solver_mutable_scope=U_P_only\n"
                 "STRICT_ALA_VC1_TIMING operator_rebuild_seconds=1.0e+00 "
                 "fgmres_and_preconditioner_seconds=0.0e+00\n"
-                "ALA COUPLED FGMRES startup restart=50 block_norm=1 cancellation=1.0e+00 "
-                "raw_momentum_relative=2.0e-04\n"
+                "Strict ALA coupled FGMRES failed acceptance: cancellation=1.938367e-02 "
+                "momentum_relative=1.303084e-05 iterations=220 breakdown=0\n")
+            (rank0 / "global_AhatP220_test.log").write_text(
+                "ALA COUPLED FGMRES startup restart=20 block_norm=1 cancellation=9.8e-01 "
+                "raw_momentum_relative=2.6e-03\n"
+                "ALA COUPLED FGMRES iteration=220 block_relative=2.6e-03 "
+                "cancellation=1.938367e-02 raw_momentum_relative_last_audit=1.55e-05\n"
+                "ALA_COUPLED_FEASIBILITY_SUMMARY status=iteration_budget_exhausted "
+                "iterations=220 cancellation=1.938367e-02 best=1.938367e-02 "
+                "raw_momentum_relative=1.303084e-05\n"
                 "STRICT_ALA_VC1_COUPLED_COST K_gamma_rhs_solves=221 "
-                "K_gamma_operator_applications=221 velocity_MG_cycles=1234 "
-                "preconditioner_applications=220\n"
-                "STRICT_ALA_STAGE_C_CASE_COMPLETE case=COLD status=NUMERICAL_NONCONVERGENCE "
-                "iterations=220 continuity=1.938367e-2 momentum=1.303084e-5\n")
+                "velocity_MG_cycles=1234 preconditioner_applications=220 "
+                "source=production_counters\n")
             output = case / "completion.json"
             vc1.stage_summary(types.SimpleNamespace(path_id="COLD_100", stage_index=0,
                 visc_max=100.0, warm_source="COLD", case_dir=str(case), exit_status=1,
@@ -142,6 +151,35 @@ class VC1ContinuationTests(unittest.TestCase):
             value = json.loads(output.read_text())
             self.assertTrue(value["valid"])
             self.assertEqual(value["convergence_status"], "NUMERICAL_NONCONVERGENCE")
+            self.assertTrue(value["cost_counters_available"])
+            self.assertEqual(value["K_gamma_solve_count"], 221)
+            self.assertEqual(value["total_MG_cycles"], 1234)
+            self.assertIsNone(value["K_gamma_operator_application_count"])
+            self.assertEqual(len(value["artifacts"]), 2)
+
+    def test_backport_pins_upstream_math_and_adds_only_vc1_driver_hooks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            archive = directory / "source.tar"
+            subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar",
+                            "--output", str(archive), "2628980"], check=True)
+            with tarfile.open(archive) as source:
+                source.extractall(directory / "tree")
+            audit = directory / "audit.json"
+            subprocess.run(["python3", str(BACKPORT), "--source-repo", str(ROOT),
+                            "--source-tree", str(directory / "tree"),
+                            "--diagnostic-commit",
+                            "af97100c1211d0d1390cda590f4b53729df94720",
+                            "--audit", str(audit)], check=True)
+            value = json.loads(audit.read_text())
+            self.assertTrue(value["baseline_hashes_verified"])
+            self.assertIn("Stokes_flow_Incomp.c:read_only_cost_log",
+                          value["backport_scope"])
+            patched = (directory / "tree" / "lib" / "Drive_solvers.c").read_text()
+            self.assertIn("STRICT_ALA_VC1_WARM_STATE", patched)
+            self.assertIn("STRICT_ALA_VC1_FROZEN_STATE_GUARD", patched)
+            stokes = (directory / "tree" / "lib" / "Stokes_flow_Incomp.c").read_text()
+            self.assertIn("source=production_counters", stokes)
 
     def test_stage_parser_fails_closed_after_writing_infrastructure_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -168,9 +206,13 @@ class VC1ContinuationTests(unittest.TestCase):
         self.assertIn('for fine_vmax in 2 3 5 10 30 100', text)
         self.assertIn("break", text)
         self.assertIn("|| true", text)
-        self.assertIn("prepare-runtime-cfg", text)
+        self.assertIn("build_solver", text)
+        self.assertIn('git -C "${SOURCE_REPO}" archive', text)
+        self.assertIn('"${BUILD}/bin/pycitcoms"', text)
+        self.assertNotIn('"${CODE_DIR}/bin/pycitcoms" --pyre-start', text)
+        self.assertIn('"${compare_dir}"/DATA/0/global_AhatP*.log', text)
         self.assertIn("EXPECTED_UPSTREAM_CFG_SHA256", text)
-        self.assertIn('"${UPSTREAM_CANONICAL}" "${CANONICAL}"', text)
+        self.assertIn("VC1_DIAGNOSTIC_COMMIT", text)
 
     def test_continuation_path_completion_accepts_early_numerical_stop(self):
         rows = [{"path_id": "FINE", "continuation_stage_index": 1,
