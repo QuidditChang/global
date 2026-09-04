@@ -3360,6 +3360,14 @@ static float solve_ala_coupled_fgmres_core(
                 E->control.tole_comp,augmented_momentum_relative,
                 momentum_relative,E->control.ala_unaugmented_momentum_tolerance,
                 residual_est);
+        if(getenv("STRICT_ALA_VC1_STAGE")!=NULL)
+            fprintf(E->fp,"STRICT_ALA_VC1_COUPLED_COST "
+                    "K_gamma_rhs_solves=%lld K_gamma_operator_applications=%lld "
+                    "velocity_MG_cycles=%lld preconditioner_applications=%lld\n",
+                    E->control.ala_stage_abc_inner_call_count,
+                    E->control.ala_stage_abc_k_application_count,
+                    E->control.ala_stage_abc_inner_cycle_count,
+                    E->control.ala_stage_abc_preconditioner_count);
         fflush(E->fp);
     }
     if(getenv("STRICT_ALA_STAGE_F1B_SHORT")!=NULL)
