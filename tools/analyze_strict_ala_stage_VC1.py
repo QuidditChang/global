@@ -19,6 +19,11 @@ AUTHORITATIVE = {
 }
 ENVELOPE = {"R_cont_abs": 5.0e-7, "R_mom_abs": 5.0e-10,
             "iterations_abs": 0}
+PHASE_DELTA_S_COMPAT = (
+    -0.032902012641276054,
+    -0.022663818742040032,
+    0.017520140281939885,
+)
 
 
 def digest(path):
@@ -43,6 +48,77 @@ def parse_cfg(path):
             key, value = (item.strip() for item in line.split("=", 1))
             values[(section, key)] = value
     return values
+
+
+def parse_float_vector(value):
+    return tuple(float(item.strip()) for item in value.split(","))
+
+
+def prepare_runtime_cfg(args):
+    """Add the current parser's required phase entropy vector to a step-0 cfg.
+
+    The upstream cfg is retained byte-for-byte.  phase_delta_s is not consumed
+    by the frozen step-0 Stokes equations, but the current single-entropy phase
+    parser requires a nonzero vector before those equations can start.
+    """
+    upstream = pathlib.Path(args.upstream)
+    output = pathlib.Path(args.output)
+    audit_path = pathlib.Path(args.audit)
+    failures = []
+    upstream_hash = digest(upstream)
+    if upstream_hash != args.expected_upstream_sha256:
+        failures.append("upstream cfg sha256 mismatch")
+    values = parse_cfg(upstream)
+    phase_key = ("CitcomS.solver.phase", "phase_delta_s")
+    if phase_key in values:
+        failures.append("upstream cfg unexpectedly already defines phase_delta_s")
+
+    lines = upstream.read_text().splitlines()
+    rewritten = []
+    section = ""
+    inserted = 0
+    vector = ", ".join(format(value, ".17g") for value in PHASE_DELTA_S_COMPAT)
+    for raw in lines:
+        stripped = raw.split("#", 1)[0].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+        rewritten.append(raw)
+        if (section == "CitcomS.solver.phase" and
+                re.match(r"^\s*phase_delta_rho\s*=", raw)):
+            rewritten.append("# VC1 step-0 parser compatibility; thermal evolution is disabled.")
+            rewritten.append("phase_delta_s = " + vector)
+            inserted += 1
+    if inserted != 1:
+        failures.append("expected one phase_delta_rho insertion point, found %d" % inserted)
+
+    runtime_hash = None
+    changed_fields = []
+    if not failures:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("\n".join(rewritten) + "\n")
+        runtime_hash = digest(output)
+        runtime_values = parse_cfg(output)
+        changed_fields = sorted("%s.%s" % key for key in set(values) | set(runtime_values)
+                                if values.get(key) != runtime_values.get(key))
+        if changed_fields != ["CitcomS.solver.phase.phase_delta_s"]:
+            failures.append("runtime cfg changed fields are not phase_delta_s only")
+
+    audit = {
+        "schema": "strict-ala-stage-VC1-runtime-cfg-compatibility-v1",
+        "valid": not failures,
+        "failures": failures,
+        "upstream_cfg_sha256": upstream_hash,
+        "runtime_cfg_sha256": runtime_hash,
+        "changed_fields": changed_fields,
+        "phase_delta_s": list(PHASE_DELTA_S_COMPAT),
+        "scope": "step_0_frozen_stokes_initialization_only",
+        "stokes_operator_change": False,
+        "thermal_evolution_authorized": False,
+        "production_default_change_authorized": False,
+    }
+    write_json(audit_path, audit)
+    if failures:
+        raise SystemExit("; ".join(failures))
 
 
 def cfg_contract(args):
@@ -72,6 +148,16 @@ def cfg_contract(args):
         if stage.get(key) != expected:
             failures.append("%s.%s=%r expected %r" %
                             (key[0], key[1], stage.get(key), expected))
+    phase_delta_s = stage.get(("CitcomS.solver.phase", "phase_delta_s"))
+    if phase_delta_s is None:
+        failures.append("CitcomS.solver.phase.phase_delta_s is required")
+    else:
+        try:
+            parsed_phase_delta_s = parse_float_vector(phase_delta_s)
+        except ValueError:
+            parsed_phase_delta_s = ()
+        if parsed_phase_delta_s != PHASE_DELTA_S_COMPAT:
+            failures.append("phase_delta_s compatibility vector mismatch")
     if float(stage.get(("CitcomS.solver.visc", "visc_max"), "nan")) != args.visc_max:
         failures.append("visc_max mismatch")
     failures.extend("unauthorized cfg change: " + item for item in unexpected)
@@ -220,10 +306,30 @@ def stage_summary(args):
         "artifacts": {str(log.resolve()): digest(log)} if log.is_file() else {},
     }
     write_json(args.output, value)
+    if status == "INFRASTRUCTURE_FAILURE":
+        raise SystemExit("stage infrastructure failure: path=%s exit_status=%d" %
+                         (args.path_id, args.exit_status))
 
 
 def within(actual, expected, tolerance):
     return actual is not None and abs(actual - expected) <= tolerance
+
+
+def continuation_path_complete(completions, path_id, viscosity_sequence):
+    rows = sorted((row for row in completions if row["path_id"] == path_id),
+                  key=lambda row: row["continuation_stage_index"])
+    if not rows:
+        return False
+    for offset, expected_viscosity in enumerate(viscosity_sequence):
+        if offset >= len(rows):
+            return False
+        row = rows[offset]
+        if (row["continuation_stage_index"] != offset + 1 or
+                row["visc_max"] != float(expected_viscosity)):
+            return False
+        if row["convergence_status"] != "CONVERGED":
+            return len(rows) == offset + 1
+    return len(rows) == len(viscosity_sequence)
 
 
 def aggregate(args):
@@ -261,8 +367,23 @@ def aggregate(args):
             for component in ("u", "p"))
     physical_fingerprints = {row.get("physical_state_fingerprint") for row in completions}
     physical_lineage_valid = len(physical_fingerprints) == 1 and None not in physical_fingerprints
+    cold_and_seed_present = (("COLD_100", 0) in by_key and
+                             ("SEED_1", 0) in by_key)
+    if seed.get("convergence_status") == "CONVERGED":
+        path_execution_complete = all((
+            continuation_path_complete(completions, "DIRECT_WARM", (100,)),
+            continuation_path_complete(completions, "COARSE", (10, 100)),
+            continuation_path_complete(completions, "FINE", (2, 3, 5, 10, 30, 100)),
+        ))
+    else:
+        path_execution_complete = not any(
+            row["path_id"] in ("DIRECT_WARM", "COARSE", "FINE")
+            for row in completions)
+    experiment_complete = (cold_and_seed_present and path_execution_complete and
+                           all(row.get("complete") for row in completions))
     all_valid = (all(row.get("valid") for row in completions) and
-                 warm_chain_valid and physical_lineage_valid)
+                 warm_chain_valid and physical_lineage_valid and
+                 experiment_complete)
     final_success = {}
     for path in ("DIRECT_WARM", "COARSE", "FINE"):
         stages = [row for row in completions if row["path_id"] == path]
@@ -361,19 +482,28 @@ def aggregate(args):
                     "relative_pressure_difference_global_pdot": float(match.group(5)),
                     "pressure_gauge": "exact_no_regauge"})
     audit = {"schema": "strict-ala-stage-VC1-final-audit-v1",
-             "valid": decision != "INVALID_EXPERIMENT", "complete": True,
-             "decision": decision, "expected_stage_count": 11,
+             "valid": decision != "INVALID_EXPERIMENT",
+             "complete": experiment_complete,
+             "decision": decision, "maximum_stage_count": 11,
              "completed_stage_count": len(completions),
              "physical_state_fingerprints": sorted(physical_fingerprints, key=lambda item: "" if item is None else item),
              "physical_state_lineage_valid": physical_lineage_valid,
              "successful_target_state_comparisons": comparisons,
-             "production_default_change_authorized": False, "exit_status": 0}
+             "production_default_change_authorized": False,
+             "exit_status": 1 if decision == "INVALID_EXPERIMENT" else 0}
     write_json(outputs / "strict_ala_stage_VC1_final_audit.json", audit)
+    if decision == "INVALID_EXPERIMENT":
+        raise SystemExit("VC1 experiment is invalid")
 
 
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("prepare-runtime-cfg")
+    p.add_argument("--upstream", required=True); p.add_argument("--output", required=True)
+    p.add_argument("--audit", required=True)
+    p.add_argument("--expected-upstream-sha256", required=True)
+    p.set_defaults(func=prepare_runtime_cfg)
     p = sub.add_parser("cfg-contract")
     p.add_argument("--canonical", required=True); p.add_argument("--cfg", required=True)
     p.add_argument("--visc-max", type=float, required=True); p.add_argument("--output", required=True)

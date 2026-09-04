@@ -26,6 +26,9 @@ piterations = 220
 ala_outer_solver = coupled_fgmres
 ala_element_vanka_smoother = on
 ala_coupled_element_vanka = on
+[CitcomS.solver.phase]
+phase_delta_rho = 180.0, 58.0, 459.0
+phase_delta_s = -0.032902012641276054, -0.022663818742040032, 0.017520140281939885
 [CitcomS.solver.visc]
 SDEPV = off
 PDEPV = off
@@ -34,6 +37,41 @@ visc_max = {vmax}
 
 
 class VC1ContinuationTests(unittest.TestCase):
+    def test_runtime_cfg_adds_only_step_zero_phase_parser_compatibility(self):
+        upstream_text = CFG.format(steps=30000, datadir="old", old="old", vmax=100)
+        upstream_text = upstream_text.replace(
+            "phase_delta_s = -0.032902012641276054, -0.022663818742040032, "
+            "0.017520140281939885\n", "")
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            upstream = directory / "upstream.cfg"
+            runtime = directory / "runtime.cfg"
+            audit = directory / "audit.json"
+            upstream.write_text(upstream_text)
+            vc1.prepare_runtime_cfg(types.SimpleNamespace(
+                upstream=str(upstream), output=str(runtime), audit=str(audit),
+                expected_upstream_sha256=vc1.digest(upstream)))
+            value = json.loads(audit.read_text())
+            self.assertTrue(value["valid"])
+            self.assertEqual(value["changed_fields"],
+                             ["CitcomS.solver.phase.phase_delta_s"])
+            self.assertFalse(value["stokes_operator_change"])
+            self.assertEqual(vc1.parse_cfg(runtime)[
+                ("CitcomS.solver.phase", "phase_delta_s")],
+                ", ".join(format(item, ".17g")
+                          for item in vc1.PHASE_DELTA_S_COMPAT))
+
+    def test_runtime_cfg_rejects_wrong_upstream_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            upstream = directory / "upstream.cfg"
+            upstream.write_text("[CitcomS.solver.phase]\nphase_delta_rho = 1, 2, 3\n")
+            with self.assertRaises(SystemExit):
+                vc1.prepare_runtime_cfg(types.SimpleNamespace(
+                    upstream=str(upstream), output=str(directory / "runtime.cfg"),
+                    audit=str(directory / "audit.json"),
+                    expected_upstream_sha256="0" * 64))
+
     def test_momentum_only_transfer_and_fresh_process_contract(self):
         source = DRIVER.read_text()
         self.assertIn('STRICT_ALA_VC1_WARM_INPUT', source)
@@ -99,11 +137,28 @@ class VC1ContinuationTests(unittest.TestCase):
                 "iterations=220 continuity=1.938367e-2 momentum=1.303084e-5\n")
             output = case / "completion.json"
             vc1.stage_summary(types.SimpleNamespace(path_id="COLD_100", stage_index=0,
-                visc_max=100.0, warm_source="COLD", case_dir=str(case), exit_status=0,
+                visc_max=100.0, warm_source="COLD", case_dir=str(case), exit_status=1,
                 wall_seconds=10.0, output=str(output)))
             value = json.loads(output.read_text())
             self.assertTrue(value["valid"])
             self.assertEqual(value["convergence_status"], "NUMERICAL_NONCONVERGENCE")
+
+    def test_stage_parser_fails_closed_after_writing_infrastructure_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = pathlib.Path(directory)
+            rank0 = case / "DATA" / "0"
+            rank0.mkdir(parents=True)
+            (rank0 / "raw.log").write_text("phase parser stopped before solve\n")
+            output = case / "completion.json"
+            with self.assertRaises(SystemExit):
+                vc1.stage_summary(types.SimpleNamespace(
+                    path_id="COLD_100", stage_index=0, visc_max=100.0,
+                    warm_source="COLD", case_dir=str(case), exit_status=1,
+                    wall_seconds=2.0, output=str(output)))
+            value = json.loads(output.read_text())
+            self.assertFalse(value["complete"])
+            self.assertFalse(value["valid"])
+            self.assertEqual(value["convergence_status"], "INFRASTRUCTURE_FAILURE")
 
     def test_path_sequences_and_independent_stop_logic(self):
         text = LSF.read_text()
@@ -113,6 +168,52 @@ class VC1ContinuationTests(unittest.TestCase):
         self.assertIn('for fine_vmax in 2 3 5 10 30 100', text)
         self.assertIn("break", text)
         self.assertIn("|| true", text)
+        self.assertIn("prepare-runtime-cfg", text)
+        self.assertIn("EXPECTED_UPSTREAM_CFG_SHA256", text)
+        self.assertIn('"${UPSTREAM_CANONICAL}" "${CANONICAL}"', text)
+
+    def test_continuation_path_completion_accepts_early_numerical_stop(self):
+        rows = [{"path_id": "FINE", "continuation_stage_index": 1,
+                 "visc_max": 2.0,
+                 "convergence_status": "NUMERICAL_NONCONVERGENCE"}]
+        self.assertTrue(vc1.continuation_path_complete(
+            rows, "FINE", (2, 3, 5, 10, 30, 100)))
+        rows[0]["convergence_status"] = "CONVERGED"
+        self.assertFalse(vc1.continuation_path_complete(
+            rows, "FINE", (2, 3, 5, 10, 30, 100)))
+
+    def test_aggregate_marks_incomplete_invalid_run_nonzero(self):
+        def failed_stage(path_id, visc_max):
+            return {
+                "path_id": path_id, "continuation_stage_index": 0,
+                "visc_max": visc_max, "warm_start_source": "COLD",
+                "convergence_status": "INFRASTRUCTURE_FAILURE",
+                "FGMRES_iterations": 0, "final_R_cont": None,
+                "final_R_mom": None, "K_gamma_solve_count": 0,
+                "total_MG_cycles": 0, "operator_rebuild_time_seconds": None,
+                "preconditioner_cache_rebuild_time_seconds": 0.0,
+                "FGMRES_solve_time_seconds": 0.0,
+                "total_stage_wall_time_seconds": 1.0,
+                "R_cont_trajectory": [], "R_mom_trajectory": [],
+                "physical_state_fingerprint": None, "valid": False,
+                "complete": False,
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for name, viscosity in (("COLD_100", 100.0), ("SEED_1", 1.0)):
+                stage = root / name
+                stage.mkdir()
+                (stage / "completion.json").write_text(
+                    json.dumps(failed_stage(name, viscosity)))
+            final = root / "FINAL"
+            with self.assertRaises(SystemExit):
+                vc1.aggregate(types.SimpleNamespace(root=str(root),
+                                                   output_dir=str(final)))
+            audit = json.loads((final / "strict_ala_stage_VC1_final_audit.json").read_text())
+            self.assertFalse(audit["valid"])
+            self.assertFalse(audit["complete"])
+            self.assertEqual(audit["exit_status"], 1)
 
     def test_coupled_solver_exports_required_cost_counters(self):
         text = STOKES.read_text()
