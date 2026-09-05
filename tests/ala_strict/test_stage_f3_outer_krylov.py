@@ -63,6 +63,12 @@ class StageF3Tests(unittest.TestCase):
                       action)
         self.assertIn("total_cycles += E->control.ala_stage_f3_last_inner_cycles",
                       action)
+        rhs_restore = action.index(
+            "rhs[m][e]=saved[m][e];\n"
+            "        (void)ala_schur_velocity_residual",
+            first_solve)
+        self.assertLess(first_solve, rhs_restore)
+        self.assertLess(rhs_restore, correction_solve)
         self.assertNotIn(
             "0.1*STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE",
             action)

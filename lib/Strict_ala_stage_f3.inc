@@ -617,6 +617,11 @@ static int ala_f3_reference_action(struct All_variables *E,
         /* Explicit residual correction removes the amplification of the
          * 1e-10 inner-solve error in fixed-operator additivity tests.  The
          * scientific tolerance and cumulative max-cycle gates are unchanged. */
+        /* The multigrid solve uses its RHS as workspace.  Restore the
+         * immutable action RHS before assembling r = rhs - K_gamma u. */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++)
+                rhs[m][e]=saved[m][e];
         (void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
         correction_rhs2=global_vdot(E,vwork,vwork,s->lev);
         if(valid && isfinite(correction_rhs2) && correction_rhs2>0.0) {
