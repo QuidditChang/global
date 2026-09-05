@@ -47,7 +47,7 @@ class StageF3Tests(unittest.TestCase):
             'setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1)')
         first_solve = action.index("valid=solve_del2_u_bounded", marker_set)
         correction_solve = action.index(
-            "correction_valid=solve_del2_u_bounded", first_solve)
+            "(void)solve_del2_u_bounded(E,correction,rhs", first_solve)
         marker_unset = action.index(
             'unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION")',
             correction_solve)
@@ -63,6 +63,15 @@ class StageF3Tests(unittest.TestCase):
                       action)
         self.assertIn("total_cycles += E->control.ala_stage_f3_last_inner_cycles",
                       action)
+        self.assertNotIn("valid=valid && correction_valid", action)
+        final_residual = action.index(
+            "(void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);",
+            correction_solve)
+        final_gate = action.index(
+            "relative<=STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE",
+            final_residual)
+        self.assertLess(correction_solve, final_residual)
+        self.assertLess(final_residual, final_gate)
         rhs_restore = action.index(
             "rhs[m][e]=saved[m][e];\n"
             "        (void)ala_schur_velocity_residual",
