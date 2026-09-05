@@ -295,6 +295,12 @@ class StageF3Tests(unittest.TestCase):
         text = (RUNS / "cmbhf_ALA_strict_stage_F3.lsf").read_text()
         self.assertIn("print(path.parents[3])", text)
         self.assertNotIn("print(path.parents[2])", text)
+        self.assertIn("restored E2 evidence hash mismatch", text)
+        self.assertIn("authoritative_E2_lineage_root", text)
+        self.assertIn("authoritative_E2_runtime_root", text)
+        self.assertNotIn(
+            "pathlib.Path(sys.argv[1]).resolve())' \"${E2_ROOT}\")\" =",
+            text)
 
     def test_no_pod_reselection_and_single_q_e2_source(self):
         stage=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
