@@ -579,9 +579,12 @@ static int ala_f3_reference_action(struct All_variables *E,
     const char *action_id,const char *input_id,int repeat_id,
     double *achieved,long long *cycles)
 {
-    double **pwork=0,**rhs=0,**saved=0,**u=0,**vwork=0;
+    double **pwork=0,**rhs=0,**saved=0,**u=0,**vwork=0,**correction=0;
     double rhs2,residual2,rhs_rms,residual_rms,relative,target,output_norm;
-    int m,e,valid,zero_rhs,finite_values;
+    double correction_rhs2,correction_rms,correction_target;
+    long long total_cycles;
+    int m,e,valid,zero_rhs,finite_values,remaining_cycles;
+    int correction_valid;
     FILE *fp=NULL;
     (void)cache;
     pwork=ala_schur_alloc_pressure(E,s->lev);
@@ -589,6 +592,7 @@ static int ala_f3_reference_action(struct All_variables *E,
     saved=ala_schur_alloc_velocity(E,s->lev);
     u=ala_schur_alloc_velocity(E,s->lev);
     vwork=ala_schur_alloc_velocity(E,s->lev);
+    correction=ala_schur_alloc_velocity(E,s->lev);
     if(preconditioned)
         apply_ala_pressure_preconditioner(E,input,pwork,output,s->lev,-3,cache);
     else ala_f3_copy(E,pwork,input,s->lev);
@@ -597,10 +601,11 @@ static int ala_f3_reference_action(struct All_variables *E,
         for(e=0;e<E->lmesh.NEQ[s->lev];e++) saved[m][e]=rhs[m][e];
     rhs2=global_vdot(E,rhs,rhs,s->lev);
     zero_rhs=(rhs2==0.0);
+    total_cycles=0;
     if(zero_rhs) {
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=0;e<E->lmesh.NEQ[s->lev];e++) u[m][e]=0.0;
-        *cycles=0; valid=1;
+        valid=1;
     }
     else {
         rhs_rms=sqrt(rhs2/(double)E->mesh.neq);
@@ -608,9 +613,43 @@ static int ala_f3_reference_action(struct All_variables *E,
         setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
         valid=solve_del2_u_bounded(E,u,rhs,target,s->lev,
             STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,100);
+        total_cycles=E->control.ala_stage_f3_last_inner_cycles;
+        /* Explicit residual correction removes the amplification of the
+         * 1e-10 inner-solve error in fixed-operator additivity tests.  The
+         * scientific tolerance and cumulative max-cycle gates are unchanged. */
+        (void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
+        correction_rhs2=global_vdot(E,vwork,vwork,s->lev);
+        if(valid && isfinite(correction_rhs2) && correction_rhs2>0.0) {
+            remaining_cycles=STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES-
+                (int)total_cycles;
+            if(remaining_cycles<=0)
+                valid=0;
+            else {
+                correction_rms=sqrt(correction_rhs2/
+                                    (double)E->mesh.neq);
+                correction_target=
+                    STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE*
+                    correction_rms;
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
+                        rhs[m][e]=vwork[m][e];
+                        correction[m][e]=0.0;
+                    }
+                correction_valid=solve_del2_u_bounded(E,correction,rhs,
+                    correction_target,s->lev,remaining_cycles,100);
+                total_cycles += E->control.ala_stage_f3_last_inner_cycles;
+                valid=valid && correction_valid;
+                for(m=1;m<=E->sphere.caps_per_proc;m++)
+                    for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
+                        u[m][e] += correction[m][e];
+                        rhs[m][e]=saved[m][e];
+                    }
+            }
+        }
+        else if(!isfinite(correction_rhs2)) valid=0;
         unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
-        *cycles=E->control.ala_stage_f3_last_inner_cycles;
     }
+    *cycles=total_cycles;
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=0;e<E->lmesh.NEQ[s->lev];e++) rhs[m][e]=saved[m][e];
     (void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
@@ -645,6 +684,7 @@ static int ala_f3_reference_action(struct All_variables *E,
     ala_schur_free_field(E,pwork); ala_schur_free_field(E,rhs);
     ala_schur_free_field(E,saved); ala_schur_free_field(E,u);
     ala_schur_free_field(E,vwork);
+    ala_schur_free_field(E,correction);
     return valid;
 }
 

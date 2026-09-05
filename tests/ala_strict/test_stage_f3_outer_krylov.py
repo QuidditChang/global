@@ -39,6 +39,34 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("global_pdot", stage)
         self.assertIn("base_plateau_confirmed", stage)
 
+    def test_reference_action_uses_cumulative_bounded_residual_correction(self):
+        stage = (ROOT / "lib/Strict_ala_stage_f3.inc").read_text()
+        action = stage[stage.index("static int ala_f3_reference_action"):
+                       stage.index("static void strict_ala_stage_f3_finalize")]
+        marker_set = action.index(
+            'setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1)')
+        first_solve = action.index("valid=solve_del2_u_bounded", marker_set)
+        correction_solve = action.index(
+            "correction_valid=solve_del2_u_bounded", first_solve)
+        marker_unset = action.index(
+            'unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION")',
+            correction_solve)
+        self.assertLess(marker_set, first_solve)
+        self.assertLess(first_solve, correction_solve)
+        self.assertLess(correction_solve, marker_unset)
+        self.assertIn("total_cycles=0;", action)
+        self.assertIn(
+            "remaining_cycles=STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES-",
+            action)
+        self.assertIn("correction_rhs2>0.0", action)
+        self.assertIn("STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE*",
+                      action)
+        self.assertIn("total_cycles += E->control.ala_stage_f3_last_inner_cycles",
+                      action)
+        self.assertNotIn(
+            "0.1*STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE",
+            action)
+
     def test_threshold_contract_contains_four_audit_corrections(self):
         thresholds = json.loads((RUNS /
             "cmbhf_ALA_strict_stage_F3_thresholds.json").read_text())
