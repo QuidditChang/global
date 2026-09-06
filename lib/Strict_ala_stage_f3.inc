@@ -583,36 +583,93 @@ static int ala_f3_reference_action(struct All_variables *,
 static int strict_ala_stage_f3_precheck(struct All_variables *E,
     struct ala_f3_state *s, struct ala_pressure_preconditioner_cache *cache)
 {
-    double **q1,**q2,**qp,**z1,**z2,**zp,**work,**a1,**a2,**ap;
+    double **q1,**q2,**qp,**z1,**z2,**zp,**zerr,**work,**a1,**a2,**ap;
+    double **g1,**g2,**gp,**u1,**u2,**up,**d1,**d2,**dp;
     double n1,n2,m_error,a1n,a2n,a_error,den,achieved;
+    double bt_error,k_error,b_error,gn1,gn2,un1,un2,dn1,dn2;
     long long cycles;
     FILE *fp;
     int m,e,m_pass,a_pass=0,actions_valid=1,pass;
+    int decomposition_valid=0;
+    int saved_production_logging;
+    bt_error=k_error=b_error=-1.0;
     q1=s->mode[0];
     q2=(s->selected>1) ? s->mode[1] : s->additivity_probe[1];
     qp=ala_schur_alloc_pressure(E,s->lev);
     z1=ala_schur_alloc_pressure(E,s->lev);
     z2=ala_schur_alloc_pressure(E,s->lev);
     zp=ala_schur_alloc_pressure(E,s->lev);
+    zerr=ala_schur_alloc_pressure(E,s->lev);
     work=ala_schur_alloc_pressure(E,s->lev);
     a1=ala_schur_alloc_pressure(E,s->lev);
     a2=ala_schur_alloc_pressure(E,s->lev);
     ap=ala_schur_alloc_pressure(E,s->lev);
+    g1=ala_schur_alloc_velocity(E,s->lev);
+    g2=ala_schur_alloc_velocity(E,s->lev);
+    gp=ala_schur_alloc_velocity(E,s->lev);
+    u1=ala_schur_alloc_velocity(E,s->lev);
+    u2=ala_schur_alloc_velocity(E,s->lev);
+    up=ala_schur_alloc_velocity(E,s->lev);
+    d1=ala_schur_alloc_pressure(E,s->lev);
+    d2=ala_schur_alloc_pressure(E,s->lev);
+    dp=ala_schur_alloc_pressure(E,s->lev);
     ala_f3_copy(E,qp,q1,s->lev);
     ala_f3_axpy(E,qp,1.0,q2,s->lev);
     apply_ala_pressure_preconditioner(E,q1,z1,work,s->lev,-3,cache);
     apply_ala_pressure_preconditioner(E,q2,z2,work,s->lev,-3,cache);
     apply_ala_pressure_preconditioner(E,qp,zp,work,s->lev,-3,cache);
     n1=ala_f3_norm(E,z1,s->lev); n2=ala_f3_norm(E,z2,s->lev);
+    ala_f3_copy(E,zerr,zp,s->lev);
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
-            zp[m][e]-=z1[m][e]+z2[m][e];
-    m_error=ala_f3_norm(E,zp,s->lev);
+            zerr[m][e]-=z1[m][e]+z2[m][e];
+    m_error=ala_f3_norm(E,zerr,s->lev);
     den=max(n1+n2,1.0e-300);
     m_error/=den;
     m_pass=isfinite(m_error) &&
         m_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
     if(m_pass) {
+        assemble_grad_rho_p(E,z1,g1,s->lev);
+        assemble_grad_rho_p(E,z2,g2,s->lev);
+        assemble_grad_rho_p(E,zp,gp,s->lev);
+        gn1=sqrt(max(global_vdot(E,g1,g1,s->lev),0.0));
+        gn2=sqrt(max(global_vdot(E,g2,g2,s->lev),0.0));
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++)
+                gp[m][e]-=g1[m][e]+g2[m][e];
+        bt_error=sqrt(max(global_vdot(E,gp,gp,s->lev),0.0)) /
+            max(gn1+gn2,1.0e-300);
+        setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
+        saved_production_logging=E->control.ala_stage_abc_production_logging;
+        E->control.ala_stage_abc_production_logging=0;
+        solve_del2_u_fixed_cycles(E,u1,g1,s->lev,
+            STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
+        solve_del2_u_fixed_cycles(E,u2,g2,s->lev,
+            STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
+        solve_del2_u_fixed_cycles(E,up,gp,s->lev,
+            STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
+        E->control.ala_stage_abc_production_logging=saved_production_logging;
+        unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
+        un1=sqrt(max(global_vdot(E,u1,u1,s->lev),0.0));
+        un2=sqrt(max(global_vdot(E,u2,u2,s->lev),0.0));
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++)
+                up[m][e]-=u1[m][e]+u2[m][e];
+        k_error=sqrt(max(global_vdot(E,up,up,s->lev),0.0)) /
+            max(un1+un2,1.0e-300);
+        strip_bcs_from_residual(E,u1,s->lev);
+        strip_bcs_from_residual(E,u2,s->lev);
+        strip_bcs_from_residual(E,up,s->lev);
+        assemble_div_rho_u(E,u1,d1,s->lev);
+        assemble_div_rho_u(E,u2,d2,s->lev);
+        assemble_div_rho_u(E,up,dp,s->lev);
+        dn1=ala_f3_norm(E,d1,s->lev); dn2=ala_f3_norm(E,d2,s->lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
+                dp[m][e]-=d1[m][e]+d2[m][e];
+        b_error=ala_f3_norm(E,dp,s->lev)/max(dn1+dn2,1.0e-300);
+        decomposition_valid=isfinite(bt_error) && isfinite(k_error) &&
+            isfinite(b_error);
         if(!ala_f3_reference_action(E,s,q1,a1,cache,1,
             "PRECHECK_H_RIGHT","q1",1,&achieved,&cycles)) actions_valid=0;
         if(!ala_f3_reference_action(E,s,q2,a2,cache,1,
@@ -624,7 +681,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
             for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
                 ap[m][e]-=a1[m][e]+a2[m][e];
         a_error=ala_f3_norm(E,ap,s->lev)/max(a1n+a2n,1.0e-300);
-        a_pass=actions_valid && isfinite(a_error) &&
+        a_pass=actions_valid && decomposition_valid && isfinite(a_error) &&
             a_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
     }
     else {
@@ -638,6 +695,10 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 "  \"M_inverse_q1_norm\":%.17e,\n  \"M_inverse_q2_norm\":%.17e,\n"
                 "  \"M_inverse_relative_additivity_error\":%.17e,\n"
                 "  \"M_inverse_pass\":%s,\n"
+                "  \"B_transpose_relative_additivity_error\":%.17e,\n"
+                "  \"K_gamma_inverse_relative_additivity_error\":%.17e,\n"
+                "  \"B_relative_additivity_error\":%.17e,\n"
+                "  \"decomposition_valid\":%s,\n"
                 "  \"H_right_definition\":\"S_ref M^-1\",\n"
                 "  \"H_right_q1_norm\":%.17e,\n  \"H_right_q2_norm\":%.17e,\n"
                 "  \"H_right_relative_additivity_error\":%.17e,\n"
@@ -645,6 +706,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 "  \"H_right_pass\":%s,\n"
                 "  \"threshold\":%.17e,\n  \"pass\":%s\n}\n",
                 n1,n2,m_error,m_pass ? "true" : "false",
+                bt_error,k_error,b_error,decomposition_valid ? "true" : "false",
                 a1n,a2n,a_error,actions_valid ? "true" : "false",
                 a_pass ? "true" : "false",
                 (double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
@@ -653,9 +715,15 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     }
     ala_schur_free_field(E,qp); ala_schur_free_field(E,z1);
     ala_schur_free_field(E,z2); ala_schur_free_field(E,zp);
+    ala_schur_free_field(E,zerr);
     ala_schur_free_field(E,work);
     ala_schur_free_field(E,a1); ala_schur_free_field(E,a2);
     ala_schur_free_field(E,ap);
+    ala_schur_free_field(E,g1); ala_schur_free_field(E,g2);
+    ala_schur_free_field(E,gp); ala_schur_free_field(E,u1);
+    ala_schur_free_field(E,u2); ala_schur_free_field(E,up);
+    ala_schur_free_field(E,d1);
+    ala_schur_free_field(E,d2); ala_schur_free_field(E,dp);
     MPI_Barrier(E->parallel.world);
     return pass;
 }
