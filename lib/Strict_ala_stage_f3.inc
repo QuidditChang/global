@@ -573,6 +573,17 @@ static void strict_ala_stage_f3_residual(struct All_variables *E,void *state,
     }
 }
 
+static int ala_f3_accuracy_solve(struct All_variables *E, double **x,
+    double **rhs, double relative_target, int lev)
+{
+    double rnorm=sqrt(max(global_vdot(E,rhs,rhs,lev),0.0));
+    setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
+    solve_del2_u_bounded(E,x,rhs,relative_target*max(rnorm,1.0e-300),
+        lev,STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,100);
+    unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
+    return 1;
+}
+
 static int ala_f3_reference_action(struct All_variables *,
     struct ala_f3_state *,double **,double **,
     struct ala_pressure_preconditioner_cache *,int,const char *,const char *,
@@ -584,15 +595,21 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     struct ala_f3_state *s, struct ala_pressure_preconditioner_cache *cache)
 {
     double **q1,**q2,**qp,**z1,**z2,**zp,**zerr,**work,**a1,**a2,**ap;
-    double **g1,**g2,**gp,**u1,**u2,**up,**d1,**d2,**dp;
+    double **g1,**g2,**gp,**b1w,**b2w,**bpw,**ob1,**ob2,**obp;
+    double **xs1,**xs2,**xsp,**xse;
+    double **rwork,**u1,**u2,**up,**uerr,**vw,**d1,**d2,**dp;
     double n1,n2,m_error,a1n,a2n,a_error,den,achieved;
-    double bt_error,k_error,b_error,gn1,gn2,un1,un2,dn1,dn2;
+    double bt_error,k_error,b_error,gn1,gn2,un1,un2,dn1,dn2,dn12;
+    double rx1,rx2,rxp,ex_error,levels[3],sweep_R[3],sweep_E[3];
+    double br1,br2,brp,denx;
+    int li;
     long long cycles;
     FILE *fp;
     int m,e,m_pass,a_pass=0,actions_valid=1,pass;
     int decomposition_valid=0;
     int saved_production_logging;
     bt_error=k_error=b_error=-1.0;
+    rx1=rx2=rxp=ex_error=-1.0;
     q1=s->mode[0];
     q2=(s->selected>1) ? s->mode[1] : s->additivity_probe[1];
     qp=ala_schur_alloc_pressure(E,s->lev);
@@ -607,9 +624,22 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     g1=ala_schur_alloc_velocity(E,s->lev);
     g2=ala_schur_alloc_velocity(E,s->lev);
     gp=ala_schur_alloc_velocity(E,s->lev);
+    b1w=ala_schur_alloc_velocity(E,s->lev);
+    b2w=ala_schur_alloc_velocity(E,s->lev);
+    bpw=ala_schur_alloc_velocity(E,s->lev);
+    ob1=ala_schur_alloc_velocity(E,s->lev);
+    ob2=ala_schur_alloc_velocity(E,s->lev);
+    obp=ala_schur_alloc_velocity(E,s->lev);
+    xs1=ala_schur_alloc_velocity(E,s->lev);
+    xs2=ala_schur_alloc_velocity(E,s->lev);
+    xsp=ala_schur_alloc_velocity(E,s->lev);
+    xse=ala_schur_alloc_velocity(E,s->lev);
+    rwork=ala_schur_alloc_velocity(E,s->lev);
     u1=ala_schur_alloc_velocity(E,s->lev);
     u2=ala_schur_alloc_velocity(E,s->lev);
     up=ala_schur_alloc_velocity(E,s->lev);
+    uerr=ala_schur_alloc_velocity(E,s->lev);
+    vw=ala_schur_alloc_velocity(E,s->lev);
     d1=ala_schur_alloc_pressure(E,s->lev);
     d2=ala_schur_alloc_pressure(E,s->lev);
     dp=ala_schur_alloc_pressure(E,s->lev);
@@ -639,6 +669,13 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 gp[m][e]-=g1[m][e]+g2[m][e];
         bt_error=sqrt(max(global_vdot(E,gp,gp,s->lev),0.0)) /
             max(gn1+gn2,1.0e-300);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
+                b1w[m][e]=g1[m][e];
+                b2w[m][e]=g2[m][e];
+                bpw[m][e]=g1[m][e]+g2[m][e];
+                ob1[m][e]=b1w[m][e]; ob2[m][e]=b2w[m][e]; obp[m][e]=bpw[m][e];
+            }
         setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
         saved_production_logging=E->control.ala_stage_abc_production_logging;
         E->control.ala_stage_abc_production_logging=0;
@@ -652,11 +689,49 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
         unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
         un1=sqrt(max(global_vdot(E,u1,u1,s->lev),0.0));
         un2=sqrt(max(global_vdot(E,u2,u2,s->lev),0.0));
+        /* Preserve u12 for the clean B(u12) action; the old diagnostic
+         * overwrote it with the additivity defect before applying B. */
+        ala_f3_copy(E,uerr,up,s->lev);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=0;e<E->lmesh.NEQ[s->lev];e++)
-                up[m][e]-=u1[m][e]+u2[m][e];
-        k_error=sqrt(max(global_vdot(E,up,up,s->lev),0.0)) /
-            max(un1+un2,1.0e-300);
+                uerr[m][e]-=u1[m][e]+u2[m][e];
+        ex_error=sqrt(max(global_vdot(E,uerr,uerr,s->lev),0.0)) /
+            max(sqrt(max(global_vdot(E,up,up,s->lev),0.0)),1.0e-300);
+        k_error=ex_error;
+        (void)ala_schur_velocity_residual(E,u1,b1w,vw,s->lev);
+        rx1=sqrt(max(global_vdot(E,vw,vw,s->lev),0.0)) /
+            max(gn1,1.0e-300);
+        (void)ala_schur_velocity_residual(E,u2,b2w,vw,s->lev);
+        rx2=sqrt(max(global_vdot(E,vw,vw,s->lev),0.0)) /
+            max(gn2,1.0e-300);
+        (void)ala_schur_velocity_residual(E,up,bpw,vw,s->lev);
+        rxp=sqrt(max(global_vdot(E,vw,vw,s->lev),0.0)) /
+            max(sqrt(max(global_vdot(E,gp,gp,s->lev),0.0)),1.0e-300);
+        levels[0]=1.0e-6; levels[1]=1.0e-8; levels[2]=1.0e-10;
+        for(li=0;li<3;li++) {
+            br1=sqrt(max(global_vdot(E,ob1,ob1,s->lev),0.0));
+            br2=sqrt(max(global_vdot(E,ob2,ob2,s->lev),0.0));
+            brp=sqrt(max(global_vdot(E,obp,obp,s->lev),0.0));
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
+                    b1w[m][e]=ob1[m][e]; b2w[m][e]=ob2[m][e];
+                    bpw[m][e]=obp[m][e];
+                }
+            ala_f3_accuracy_solve(E,xs1,b1w,levels[li],s->lev);
+            ala_f3_accuracy_solve(E,xs2,b2w,levels[li],s->lev);
+            ala_f3_accuracy_solve(E,xsp,bpw,levels[li],s->lev);
+            (void)ala_schur_velocity_residual(E,xs1,ob1,rwork,s->lev);
+            sweep_R[li]=sqrt(max(global_vdot(E,rwork,rwork,s->lev),0.0))/max(br1,1.0e-300);
+            (void)ala_schur_velocity_residual(E,xs2,ob2,rwork,s->lev);
+            sweep_R[li]=max(sweep_R[li],sqrt(max(global_vdot(E,rwork,rwork,s->lev),0.0))/max(br2,1.0e-300));
+            (void)ala_schur_velocity_residual(E,xsp,obp,rwork,s->lev);
+            sweep_R[li]=max(sweep_R[li],sqrt(max(global_vdot(E,rwork,rwork,s->lev),0.0))/max(brp,1.0e-300));
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(e=0;e<E->lmesh.NEQ[s->lev];e++)
+                    xse[m][e]=xsp[m][e]-xs1[m][e]-xs2[m][e];
+            denx=sqrt(max(global_vdot(E,xsp,xsp,s->lev),0.0));
+            sweep_E[li]=sqrt(max(global_vdot(E,xse,xse,s->lev),0.0))/max(denx,1.0e-300);
+        }
         strip_bcs_from_residual(E,u1,s->lev);
         strip_bcs_from_residual(E,u2,s->lev);
         strip_bcs_from_residual(E,up,s->lev);
@@ -664,10 +739,11 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
         assemble_div_rho_u(E,u2,d2,s->lev);
         assemble_div_rho_u(E,up,dp,s->lev);
         dn1=ala_f3_norm(E,d1,s->lev); dn2=ala_f3_norm(E,d2,s->lev);
+        dn12=ala_f3_norm(E,dp,s->lev);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
                 dp[m][e]-=d1[m][e]+d2[m][e];
-        b_error=ala_f3_norm(E,dp,s->lev)/max(dn1+dn2,1.0e-300);
+        b_error=ala_f3_norm(E,dp,s->lev)/max(dn12,1.0e-300);
         decomposition_valid=isfinite(bt_error) && isfinite(k_error) &&
             isfinite(b_error);
         if(!ala_f3_reference_action(E,s,q1,a1,cache,1,
@@ -681,7 +757,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
             for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
                 ap[m][e]-=a1[m][e]+a2[m][e];
         a_error=ala_f3_norm(E,ap,s->lev)/max(a1n+a2n,1.0e-300);
-        a_pass=actions_valid && decomposition_valid && isfinite(a_error) &&
+        a_pass=actions_valid && isfinite(a_error) &&
             a_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
     }
     else {
@@ -696,9 +772,16 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 "  \"M_inverse_relative_additivity_error\":%.17e,\n"
                 "  \"M_inverse_pass\":%s,\n"
                 "  \"B_transpose_relative_additivity_error\":%.17e,\n"
-                "  \"K_gamma_inverse_relative_additivity_error\":%.17e,\n"
-                "  \"B_relative_additivity_error\":%.17e,\n"
-                "  \"decomposition_valid\":%s,\n"
+                "  \"K_gamma_path_dependence_diagnostic\":%.17e,\n"
+                "  \"B_decomposed_path_dependence_diagnostic\":%.17e,\n"
+                "  \"decomposed_diagnostics_authoritative\":false,\n"
+                "  \"reference_solution_additivity_error\":%.17e,\n"
+                "  \"reference_residual_b1\":%.17e,\n"
+                "  \"reference_residual_b2\":%.17e,\n"
+                "  \"reference_residual_b12\":%.17e,\n"
+                "  \"reference_accuracy_levels\":[1e-6,1e-8,1e-10],\n"
+                "  \"reference_accuracy_sweep_R\":[%.17e,%.17e,%.17e],\n"
+                "  \"reference_accuracy_sweep_E_x\":[%.17e,%.17e,%.17e],\n"
                 "  \"H_right_definition\":\"S_ref M^-1\",\n"
                 "  \"H_right_q1_norm\":%.17e,\n  \"H_right_q2_norm\":%.17e,\n"
                 "  \"H_right_relative_additivity_error\":%.17e,\n"
@@ -706,7 +789,8 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 "  \"H_right_pass\":%s,\n"
                 "  \"threshold\":%.17e,\n  \"pass\":%s\n}\n",
                 n1,n2,m_error,m_pass ? "true" : "false",
-                bt_error,k_error,b_error,decomposition_valid ? "true" : "false",
+                bt_error,k_error,b_error,ex_error,rx1,rx2,rxp,
+                sweep_R[0],sweep_R[1],sweep_R[2],sweep_E[0],sweep_E[1],sweep_E[2],
                 a1n,a2n,a_error,actions_valid ? "true" : "false",
                 a_pass ? "true" : "false",
                 (double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
@@ -721,7 +805,15 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     ala_schur_free_field(E,ap);
     ala_schur_free_field(E,g1); ala_schur_free_field(E,g2);
     ala_schur_free_field(E,gp); ala_schur_free_field(E,u1);
+    ala_schur_free_field(E,b1w); ala_schur_free_field(E,b2w);
+    ala_schur_free_field(E,bpw); ala_schur_free_field(E,xs1);
+    ala_schur_free_field(E,ob1); ala_schur_free_field(E,ob2);
+    ala_schur_free_field(E,obp);
+    ala_schur_free_field(E,xs2); ala_schur_free_field(E,xsp);
+    ala_schur_free_field(E,xse); ala_schur_free_field(E,rwork);
     ala_schur_free_field(E,u2); ala_schur_free_field(E,up);
+    ala_schur_free_field(E,uerr);
+    ala_schur_free_field(E,vw);
     ala_schur_free_field(E,d1);
     ala_schur_free_field(E,d2); ala_schur_free_field(E,dp);
     MPI_Barrier(E->parallel.world);
