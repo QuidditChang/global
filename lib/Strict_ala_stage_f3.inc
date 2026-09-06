@@ -37,6 +37,12 @@ struct ala_f3_state {
     long long viscosity_count;
 };
 
+static int strict_ala_stage_f3_fixed_reference_pass(void *state)
+{
+    struct ala_f3_state *s=(struct ala_f3_state *)state;
+    return s!=NULL && s->fixed_reference_pass;
+}
+
 static const char *ala_f3_space_name[ALA_F3_SPACES]={"V","Z","Y"};
 static FILE *ala_f3_open_root(struct All_variables *,struct ala_f3_state *,
                               const char *,const char *);
@@ -335,6 +341,10 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
     if(s==NULL) myerror(E,"Unable to allocate Stage-F3 state");
     s->enabled=1; s->lev=lev; s->restart=restart;
     s->outer_budget=outer_budget; s->current_cycle=1;
+    s->experiment_valid=1;
+    s->fixed_reference_pass=0;
+    if(getenv("STRICT_ALA_STAGE_F3_FIXED_REFERENCE_PASS")!=NULL)
+        s->fixed_reference_pass=(strcmp(getenv("STRICT_ALA_STAGE_F3_FIXED_REFERENCE_PASS"),"1")==0);
     snprintf(s->output_dir,sizeof(s->output_dir),"%s",output_dir);
     snprintf(s->manifest_sha256,sizeof(s->manifest_sha256),"%.64s",manifest_env);
     snprintf(s->threshold_contract_sha256,sizeof(s->threshold_contract_sha256),

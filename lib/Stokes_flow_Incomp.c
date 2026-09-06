@@ -254,6 +254,7 @@ static void strict_ala_stage_f3_direction(
 static int strict_ala_stage_f3_precheck(
     struct All_variables *E,struct ala_f3_state *s,
     struct ala_pressure_preconditioner_cache *cache);
+static int strict_ala_stage_f3_fixed_reference_pass(void *state);
 static void strict_ala_stage_f3_residual(
     struct All_variables *E,void *state,double **residual,int iteration,
     double continuity_relative,double momentum_relative,
@@ -3701,12 +3702,23 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
         int precheck_ok=strict_ala_stage_f3_precheck(
             E,(struct ala_f3_state *)stage_f3_state,cache);
         if(E->parallel.me==0) {
-            fprintf(stderr,"STRICT_ALA_STAGE_F3_PRECHECK_COMPLETE pass=%d\n",
-                    precheck_ok ? 1 : 0);
+            fprintf(stderr,"STRICT_ALA_STAGE_F3_PRECHECK_COMPLETE "
+                    "experiment_valid=%d fixed_reference_pass=%d\n",
+                    precheck_ok ? 1 : 0,
+                    strict_ala_stage_f3_fixed_reference_pass(stage_f3_state));
             fflush(stderr);
         }
-        MPI_Finalize();
-        exit(precheck_ok ? EXIT_SUCCESS : EXIT_FAILURE);
+        if(getenv("STRICT_ALA_STAGE_F3_PRECHECK_ONLY")!=NULL) {
+            MPI_Finalize();
+            exit(precheck_ok ? EXIT_SUCCESS : EXIT_FAILURE);
+        }
+        if(!precheck_ok) {
+            MPI_Finalize();
+            exit(EXIT_FAILURE);
+        }
+        /* A valid experiment continues in this same MPI process.  The
+         * state records whether fixed-reference spectral attribution is
+         * available; trajectory diagnostics remain valid otherwise. */
     }
     strict_ala_stage_e_sample(E,&stage_e_observer,r,0,cancellation_l2,
         momentum_relative,initial_rnorm,initial_rnorm,0);
