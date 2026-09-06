@@ -573,6 +573,54 @@ static void strict_ala_stage_f3_residual(struct All_variables *E,void *state,
     }
 }
 
+/* Short fixed-action preflight.  This isolates the linearity of the actual
+ * F3 pressure preconditioner before spending a full production trajectory. */
+static int strict_ala_stage_f3_precheck(struct All_variables *E,
+    struct ala_f3_state *s, struct ala_pressure_preconditioner_cache *cache)
+{
+    double **q1,**q2,**qp,**z1,**z2,**zp,**work;
+    double n1,n2,err,den;
+    FILE *fp;
+    int m,e,pass;
+    q1=s->mode[0];
+    q2=(s->selected>1) ? s->mode[1] : s->additivity_probe[1];
+    qp=ala_schur_alloc_pressure(E,s->lev);
+    z1=ala_schur_alloc_pressure(E,s->lev);
+    z2=ala_schur_alloc_pressure(E,s->lev);
+    zp=ala_schur_alloc_pressure(E,s->lev);
+    work=ala_schur_alloc_pressure(E,s->lev);
+    ala_f3_copy(E,qp,q1,s->lev);
+    ala_f3_axpy(E,qp,1.0,q2,s->lev);
+    apply_ala_pressure_preconditioner(E,q1,z1,work,s->lev,-3,cache);
+    apply_ala_pressure_preconditioner(E,q2,z2,work,s->lev,-3,cache);
+    apply_ala_pressure_preconditioner(E,qp,zp,work,s->lev,-3,cache);
+    n1=ala_f3_norm(E,z1,s->lev); n2=ala_f3_norm(E,z2,s->lev);
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
+            zp[m][e]-=z1[m][e]+z2[m][e];
+    err=ala_f3_norm(E,zp,s->lev);
+    den=max(n1+n2,1.0e-300);
+    err/=den;
+    pass=isfinite(err) && err<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
+    if(E->parallel.me==0) {
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_precheck.json","w");
+        fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-precheck\",\n"
+                "  \"operator\":\"M_inverse\",\n"
+                "  \"definition\":\"||M^-1(q1+q2)-M^-1(q1)-M^-1(q2)||/(||M^-1(q1)||+||M^-1(q2)||)\",\n"
+                "  \"q1_norm\":%.17e,\n  \"q2_norm\":%.17e,\n"
+                "  \"relative_additivity_error\":%.17e,\n"
+                "  \"threshold\":%.17e,\n  \"pass\":%s\n}\n",
+                n1,n2,err,(double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
+                pass ? "true" : "false");
+        fclose(fp);
+    }
+    ala_schur_free_field(E,qp); ala_schur_free_field(E,z1);
+    ala_schur_free_field(E,z2); ala_schur_free_field(E,zp);
+    ala_schur_free_field(E,work);
+    MPI_Barrier(E->parallel.world);
+    return pass;
+}
+
 static int ala_f3_reference_action(struct All_variables *E,
     struct ala_f3_state *s,double **input,double **output,
     struct ala_pressure_preconditioner_cache *cache,int preconditioned,

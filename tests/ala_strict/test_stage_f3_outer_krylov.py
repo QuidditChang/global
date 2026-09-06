@@ -306,7 +306,9 @@ class StageF3Tests(unittest.TestCase):
         text = (RUNS / "cmbhf_ALA_strict_stage_F3.lsf").read_text()
         self.assertIn("#BSUB -n 400", text)
         self.assertIn("--nodes=384 --macros.nodes=384", text)
-        self.assertEqual(text.count("pythia pyre.schedulers:jobstart"), 1)
+        self.assertEqual(text.count("pythia pyre.schedulers:jobstart"), 2)
+        self.assertIn("STRICT_ALA_STAGE_F3_PRECHECK", text)
+        self.assertIn("strict_ala_stage_F3_precheck.json", text)
         self.assertIn("-c 'import numpy'", text)
         self.assertIn("LINEAGE_E2_ROOT", text)
         self.assertIn("reproduction_envelope.json", text)
@@ -314,6 +316,15 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("MPI_cap_decomposition", text)
         self.assertIn("STRICT_STAGE_F3_${LSB_JOBID}", text)
         self.assertNotIn("F2H", text)
+
+    def test_precheck_is_before_production_trajectory(self):
+        source = (ROOT / "lib/Stokes_flow_Incomp.c").read_text()
+        precheck = source.index("STRICT_ALA_STAGE_F3_PRECHECK")
+        production_loop = source.index("while(count<*steps_max", precheck)
+        self.assertLess(precheck, production_loop)
+        stage = (ROOT / "lib/Strict_ala_stage_f3.inc").read_text()
+        self.assertIn("M^-1(q1+q2)-M^-1(q1)-M^-1(q2)", stage)
+        self.assertIn("relative_additivity_error", stage)
 
     def test_lsf_reproduction_reference_resolves_e2_root(self):
         text = (RUNS / "cmbhf_ALA_strict_stage_F3.lsf").read_text()
