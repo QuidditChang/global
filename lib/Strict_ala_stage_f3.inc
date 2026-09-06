@@ -584,6 +584,7 @@ static int ala_f3_reference_action(struct All_variables *E,
     double correction_rhs2,correction_rms,correction_target;
     long long total_cycles;
     int m,e,valid,zero_rhs,finite_values,remaining_cycles;
+    int saved_production_logging;
     FILE *fp=NULL;
     (void)cache;
     pwork=ala_schur_alloc_pressure(E,s->lev);
@@ -646,8 +647,16 @@ static int ala_f3_reference_action(struct All_variables *E,
                  * attainable precision.  Retain its best bounded iterate;
                  * the explicitly recomputed full-action residual below is
                  * the authoritative accuracy gate. */
+                /* The refinement is part of one diagnostic reference action,
+                 * not an additional production K_gamma solve.  Suppress the
+                 * Stage-C production ledger while it runs; otherwise its
+                 * roundoff-limited target is incorrectly promoted to an
+                 * independent required inner solve by the analyzer. */
+                saved_production_logging=E->control.ala_stage_abc_production_logging;
+                E->control.ala_stage_abc_production_logging=0;
                 (void)solve_del2_u_bounded(E,correction,rhs,
                     correction_target,s->lev,remaining_cycles,100);
+                E->control.ala_stage_abc_production_logging=saved_production_logging;
                 total_cycles += E->control.ala_stage_f3_last_inner_cycles;
                 for(m=1;m<=E->sphere.caps_per_proc;m++)
                     for(e=0;e<E->lmesh.NEQ[s->lev];e++) {

@@ -81,6 +81,15 @@ class StageF3Tests(unittest.TestCase):
         self.assertNotIn(
             "0.1*STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE",
             action)
+        self.assertIn(
+            "saved_production_logging=E->control.ala_stage_abc_production_logging",
+            action)
+        self.assertIn(
+            "E->control.ala_stage_abc_production_logging=0",
+            action)
+        self.assertIn(
+            "E->control.ala_stage_abc_production_logging=saved_production_logging",
+            action)
 
     def test_threshold_contract_contains_four_audit_corrections(self):
         thresholds = json.loads((RUNS /
