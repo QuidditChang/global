@@ -21,6 +21,7 @@ struct ala_f3_basis {
 
 struct ala_f3_state {
     int enabled,finalized,lev,restart,outer_budget,selected,current_cycle;
+    int precheck_completed,experiment_valid,fixed_reference_pass;
     double weights[ALA_F3_MAX_MODES],selected_energy;
     unsigned long long mode_checksum[ALA_F3_MAX_MODES];
     double **mode[ALA_F3_MAX_MODES];
@@ -597,11 +598,13 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     double **q1,**q2,**qp,**z1,**z2,**zp,**zerr,**work,**a1,**a2,**ap;
     double **g1,**g2,**gp,**b1w,**b2w,**bpw,**ob1,**ob2,**obp;
     double **xs1,**xs2,**xsp,**xse;
-    double **rwork,**u1,**u2,**up,**uerr,**vw,**d1,**d2,**dp;
+    double **rwork,**u1,**u2,**up,**uerr,**uc1,**uc2,**ucp,**vw;
+    double **repeat1,**repeat2,**repeatp,**scaled1,**scaled2,**scaledp,**stest;
+    double **d1,**d2,**dp,**derr;
     double n1,n2,m_error,a1n,a2n,a_error,den,achieved;
     double bt_error,k_error,b_error,gn1,gn2,un1,un2,dn1,dn2,dn12;
     double rx1,rx2,rxp,ex_error,levels[3],sweep_R[3],sweep_E[3];
-    double br1,br2,brp,denx;
+    double br1,br2,brp,denx,repeat_error,scaling_error;
     int li;
     long long cycles;
     FILE *fp;
@@ -610,6 +613,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     int saved_production_logging;
     bt_error=k_error=b_error=-1.0;
     rx1=rx2=rxp=ex_error=-1.0;
+    repeat_error=scaling_error=-1.0;
     q1=s->mode[0];
     q2=(s->selected>1) ? s->mode[1] : s->additivity_probe[1];
     qp=ala_schur_alloc_pressure(E,s->lev);
@@ -639,10 +643,21 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     u2=ala_schur_alloc_velocity(E,s->lev);
     up=ala_schur_alloc_velocity(E,s->lev);
     uerr=ala_schur_alloc_velocity(E,s->lev);
+    uc1=ala_schur_alloc_velocity(E,s->lev);
+    uc2=ala_schur_alloc_velocity(E,s->lev);
+    ucp=ala_schur_alloc_velocity(E,s->lev);
     vw=ala_schur_alloc_velocity(E,s->lev);
     d1=ala_schur_alloc_pressure(E,s->lev);
     d2=ala_schur_alloc_pressure(E,s->lev);
     dp=ala_schur_alloc_pressure(E,s->lev);
+    derr=ala_schur_alloc_pressure(E,s->lev);
+    repeat1=ala_schur_alloc_pressure(E,s->lev);
+    repeat2=ala_schur_alloc_pressure(E,s->lev);
+    repeatp=ala_schur_alloc_pressure(E,s->lev);
+    scaled1=ala_schur_alloc_pressure(E,s->lev);
+    scaled2=ala_schur_alloc_pressure(E,s->lev);
+    scaledp=ala_schur_alloc_pressure(E,s->lev);
+    stest=ala_schur_alloc_pressure(E,s->lev);
     ala_f3_copy(E,qp,q1,s->lev);
     ala_f3_axpy(E,qp,1.0,q2,s->lev);
     apply_ala_pressure_preconditioner(E,q1,z1,work,s->lev,-3,cache);
@@ -662,6 +677,13 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
         assemble_grad_rho_p(E,z1,g1,s->lev);
         assemble_grad_rho_p(E,z2,g2,s->lev);
         assemble_grad_rho_p(E,zp,gp,s->lev);
+        /* Keep b12 immutable.  gp is reserved for the B^T additivity
+         * defect; the independent bpw/obp pair carries B^T(q1+q2). */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
+                bpw[m][e]=gp[m][e];
+                obp[m][e]=gp[m][e];
+            }
         gn1=sqrt(max(global_vdot(E,g1,g1,s->lev),0.0));
         gn2=sqrt(max(global_vdot(E,g2,g2,s->lev),0.0));
         for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -673,7 +695,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
             for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
                 b1w[m][e]=g1[m][e];
                 b2w[m][e]=g2[m][e];
-                bpw[m][e]=g1[m][e]+g2[m][e];
+                /* bpw remains the original b12, not b1+b2. */
                 ob1[m][e]=b1w[m][e]; ob2[m][e]=b2w[m][e]; obp[m][e]=bpw[m][e];
             }
         setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
@@ -683,7 +705,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
             STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
         solve_del2_u_fixed_cycles(E,u2,g2,s->lev,
             STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
-        solve_del2_u_fixed_cycles(E,up,gp,s->lev,
+        solve_del2_u_fixed_cycles(E,up,bpw,s->lev,
             STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
         E->control.ala_stage_abc_production_logging=saved_production_logging;
         unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
@@ -704,7 +726,7 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
         (void)ala_schur_velocity_residual(E,u2,b2w,vw,s->lev);
         rx2=sqrt(max(global_vdot(E,vw,vw,s->lev),0.0)) /
             max(gn2,1.0e-300);
-        (void)ala_schur_velocity_residual(E,up,bpw,vw,s->lev);
+        (void)ala_schur_velocity_residual(E,up,obp,vw,s->lev);
         rxp=sqrt(max(global_vdot(E,vw,vw,s->lev),0.0)) /
             max(sqrt(max(global_vdot(E,gp,gp,s->lev),0.0)),1.0e-300);
         levels[0]=1.0e-6; levels[1]=1.0e-8; levels[2]=1.0e-10;
@@ -732,18 +754,21 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
             denx=sqrt(max(global_vdot(E,xsp,xsp,s->lev),0.0));
             sweep_E[li]=sqrt(max(global_vdot(E,xse,xse,s->lev),0.0))/max(denx,1.0e-300);
         }
-        strip_bcs_from_residual(E,u1,s->lev);
-        strip_bcs_from_residual(E,u2,s->lev);
-        strip_bcs_from_residual(E,up,s->lev);
-        assemble_div_rho_u(E,u1,d1,s->lev);
-        assemble_div_rho_u(E,u2,d2,s->lev);
-        assemble_div_rho_u(E,up,dp,s->lev);
+        ala_f3_copy(E,uc1,u1,s->lev);
+        ala_f3_copy(E,uc2,u2,s->lev);
+        ala_f3_copy(E,ucp,up,s->lev);
+        strip_bcs_from_residual(E,uc1,s->lev);
+        strip_bcs_from_residual(E,uc2,s->lev);
+        strip_bcs_from_residual(E,ucp,s->lev);
+        assemble_div_rho_u(E,uc1,d1,s->lev);
+        assemble_div_rho_u(E,uc2,d2,s->lev);
+        assemble_div_rho_u(E,ucp,dp,s->lev);
         dn1=ala_f3_norm(E,d1,s->lev); dn2=ala_f3_norm(E,d2,s->lev);
         dn12=ala_f3_norm(E,dp,s->lev);
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
-                dp[m][e]-=d1[m][e]+d2[m][e];
-        b_error=ala_f3_norm(E,dp,s->lev)/max(dn12,1.0e-300);
+                derr[m][e]=dp[m][e]-d1[m][e]-d2[m][e];
+        b_error=ala_f3_norm(E,derr,s->lev)/max(dn12,1.0e-300);
         decomposition_valid=isfinite(bt_error) && isfinite(k_error) &&
             isfinite(b_error);
         if(!ala_f3_reference_action(E,s,q1,a1,cache,1,
@@ -753,17 +778,45 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
         if(!ala_f3_reference_action(E,s,qp,ap,cache,1,
             "PRECHECK_H_RIGHT","q1_plus_q2",1,&achieved,&cycles)) actions_valid=0;
         a1n=ala_f3_norm(E,a1,s->lev); a2n=ala_f3_norm(E,a2,s->lev);
+        if(!ala_f3_reference_action(E,s,q1,repeat1,cache,1,
+            "PRECHECK_REPEAT","q1",2,&achieved,&cycles)) actions_valid=0;
+        if(!ala_f3_reference_action(E,s,q2,repeat2,cache,1,
+            "PRECHECK_REPEAT","q2",2,&achieved,&cycles)) actions_valid=0;
+        if(!ala_f3_reference_action(E,s,qp,repeatp,cache,1,
+            "PRECHECK_REPEAT","q1_plus_q2",2,&achieved,&cycles)) actions_valid=0;
+        ala_f3_copy(E,stest,q1,s->lev); ala_f3_scale(E,stest,0.5,s->lev);
+        if(!ala_f3_reference_action(E,s,stest,scaled1,cache,1,
+            "PRECHECK_SCALING","0.5q1",1,&achieved,&cycles)) actions_valid=0;
+        ala_f3_copy(E,stest,q2,s->lev); ala_f3_scale(E,stest,0.5,s->lev);
+        if(!ala_f3_reference_action(E,s,stest,scaled2,cache,1,
+            "PRECHECK_SCALING","0.5q2",1,&achieved,&cycles)) actions_valid=0;
+        ala_f3_copy(E,stest,qp,s->lev); ala_f3_scale(E,stest,0.5,s->lev);
+        if(!ala_f3_reference_action(E,s,stest,scaledp,cache,1,
+            "PRECHECK_SCALING","0.5q1_plus_q2",1,&achieved,&cycles)) actions_valid=0;
+        repeat_error=max(ala_f3_difference_norm(E,a1,repeat1,s->lev)/max(a1n,1.0e-300),
+                         ala_f3_difference_norm(E,a2,repeat2,s->lev)/max(a2n,1.0e-300));
+        repeat_error=max(repeat_error,ala_f3_difference_norm(E,ap,repeatp,s->lev)/max(ala_f3_norm(E,ap,s->lev),1.0e-300));
+        ala_f3_scale(E,scaled1,2.0,s->lev); ala_f3_scale(E,scaled2,2.0,s->lev);
+        ala_f3_scale(E,scaledp,2.0,s->lev);
+        scaling_error=max(ala_f3_difference_norm(E,a1,scaled1,s->lev)/max(a1n,1.0e-300),
+                          ala_f3_difference_norm(E,a2,scaled2,s->lev)/max(a2n,1.0e-300));
+        scaling_error=max(scaling_error,ala_f3_difference_norm(E,ap,scaledp,s->lev)/max(ala_f3_norm(E,ap,s->lev),1.0e-300));
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
                 ap[m][e]-=a1[m][e]+a2[m][e];
         a_error=ala_f3_norm(E,ap,s->lev)/max(a1n+a2n,1.0e-300);
         a_pass=actions_valid && isfinite(a_error) &&
-            a_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
+            a_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE &&
+            repeat_error<=STRICT_ALA_STAGE_F3_REPEAT_ACTION_RELATIVE_TOLERANCE &&
+            scaling_error<=STRICT_ALA_STAGE_F3_SCALING_RELATIVE_TOLERANCE;
     }
     else {
         a1n=a2n=0.0; a_error=-1.0;
     }
     pass=m_pass && a_pass;
+    s->fixed_reference_pass=pass;
+    s->experiment_valid=actions_valid && isfinite(m_error) && isfinite(a_error);
+    s->precheck_completed=1;
     if(E->parallel.me==0) {
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_precheck.json","w");
         fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-precheck\",\n"
@@ -785,14 +838,20 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
                 "  \"H_right_definition\":\"S_ref M^-1\",\n"
                 "  \"H_right_q1_norm\":%.17e,\n  \"H_right_q2_norm\":%.17e,\n"
                 "  \"H_right_relative_additivity_error\":%.17e,\n"
+                "  \"repeat_action_relative_error\":%.17e,\n"
+                "  \"scaling_relative_error\":%.17e,\n"
                 "  \"H_right_actions_valid\":%s,\n"
                 "  \"H_right_pass\":%s,\n"
+                "  \"fixed_reference_pass\":%s,\n"
+                "  \"experiment_valid\":%s,\n"
                 "  \"threshold\":%.17e,\n  \"pass\":%s\n}\n",
                 n1,n2,m_error,m_pass ? "true" : "false",
                 bt_error,k_error,b_error,ex_error,rx1,rx2,rxp,
                 sweep_R[0],sweep_R[1],sweep_R[2],sweep_E[0],sweep_E[1],sweep_E[2],
-                a1n,a2n,a_error,actions_valid ? "true" : "false",
-                a_pass ? "true" : "false",
+                a1n,a2n,a_error,repeat_error,scaling_error,
+                actions_valid ? "true" : "false",
+                a_pass ? "true" : "false", pass ? "true" : "false",
+                s->experiment_valid ? "true" : "false",
                 (double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
                 pass ? "true" : "false");
         fclose(fp);
@@ -813,11 +872,18 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     ala_schur_free_field(E,xse); ala_schur_free_field(E,rwork);
     ala_schur_free_field(E,u2); ala_schur_free_field(E,up);
     ala_schur_free_field(E,uerr);
+    ala_schur_free_field(E,uc1); ala_schur_free_field(E,uc2);
+    ala_schur_free_field(E,ucp);
     ala_schur_free_field(E,vw);
     ala_schur_free_field(E,d1);
     ala_schur_free_field(E,d2); ala_schur_free_field(E,dp);
+    ala_schur_free_field(E,derr);
+    ala_schur_free_field(E,repeat1); ala_schur_free_field(E,repeat2);
+    ala_schur_free_field(E,repeatp); ala_schur_free_field(E,scaled1);
+    ala_schur_free_field(E,scaled2); ala_schur_free_field(E,scaledp);
+    ala_schur_free_field(E,stest);
     MPI_Barrier(E->parallel.world);
-    return pass;
+    return s->experiment_valid;
 }
 
 static int ala_f3_reference_action(struct All_variables *E,
@@ -1018,7 +1084,10 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
     }
     if(mineig < -STRICT_ALA_STAGE_F3_H_TRUE_NEGATIVE_CURVATURE_RELATIVE_TOLERANCE*
        max(maxeig,numerical_floor)) htrue_valid=0;
-    hright_valid=hright_valid && sref_valid;
+    /* A trajectory-only run may still report descriptive H_right numbers,
+     * but they are never authoritative unless the short fixed-reference
+     * gate passed. */
+    hright_valid=hright_valid && sref_valid && s->fixed_reference_pass;
     if(E->parallel.me==0) {
         matrix_fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_projected_matrices.csv","a");
         for(i=0;i<s->selected;i++) for(j=0;j<s->selected;j++) {
