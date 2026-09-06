@@ -573,15 +573,21 @@ static void strict_ala_stage_f3_residual(struct All_variables *E,void *state,
     }
 }
 
-/* Short fixed-action preflight.  This isolates the linearity of the actual
- * F3 pressure preconditioner before spending a full production trajectory. */
+static int ala_f3_reference_action(struct All_variables *,
+    struct ala_f3_state *,double **,double **,
+    struct ala_pressure_preconditioner_cache *,int,const char *,const char *,
+    int,double *,long long *);
+
+/* Short fixed-action preflight.  First isolate M^-1, then certify the complete
+ * S_ref M^-1 action before spending a full production trajectory. */
 static int strict_ala_stage_f3_precheck(struct All_variables *E,
     struct ala_f3_state *s, struct ala_pressure_preconditioner_cache *cache)
 {
-    double **q1,**q2,**qp,**z1,**z2,**zp,**work;
-    double n1,n2,err,den;
+    double **q1,**q2,**qp,**z1,**z2,**zp,**work,**a1,**a2,**ap;
+    double n1,n2,m_error,a1n,a2n,a_error,den,achieved;
+    long long cycles;
     FILE *fp;
-    int m,e,pass;
+    int m,e,m_pass,a_pass=0,actions_valid=1,pass;
     q1=s->mode[0];
     q2=(s->selected>1) ? s->mode[1] : s->additivity_probe[1];
     qp=ala_schur_alloc_pressure(E,s->lev);
@@ -589,6 +595,9 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     z2=ala_schur_alloc_pressure(E,s->lev);
     zp=ala_schur_alloc_pressure(E,s->lev);
     work=ala_schur_alloc_pressure(E,s->lev);
+    a1=ala_schur_alloc_pressure(E,s->lev);
+    a2=ala_schur_alloc_pressure(E,s->lev);
+    ap=ala_schur_alloc_pressure(E,s->lev);
     ala_f3_copy(E,qp,q1,s->lev);
     ala_f3_axpy(E,qp,1.0,q2,s->lev);
     apply_ala_pressure_preconditioner(E,q1,z1,work,s->lev,-3,cache);
@@ -598,25 +607,55 @@ static int strict_ala_stage_f3_precheck(struct All_variables *E,
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
             zp[m][e]-=z1[m][e]+z2[m][e];
-    err=ala_f3_norm(E,zp,s->lev);
+    m_error=ala_f3_norm(E,zp,s->lev);
     den=max(n1+n2,1.0e-300);
-    err/=den;
-    pass=isfinite(err) && err<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
+    m_error/=den;
+    m_pass=isfinite(m_error) &&
+        m_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
+    if(m_pass) {
+        if(!ala_f3_reference_action(E,s,q1,a1,cache,1,
+            "PRECHECK_H_RIGHT","q1",1,&achieved,&cycles)) actions_valid=0;
+        if(!ala_f3_reference_action(E,s,q2,a2,cache,1,
+            "PRECHECK_H_RIGHT","q2",1,&achieved,&cycles)) actions_valid=0;
+        if(!ala_f3_reference_action(E,s,qp,ap,cache,1,
+            "PRECHECK_H_RIGHT","q1_plus_q2",1,&achieved,&cycles)) actions_valid=0;
+        a1n=ala_f3_norm(E,a1,s->lev); a2n=ala_f3_norm(E,a2,s->lev);
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
+                ap[m][e]-=a1[m][e]+a2[m][e];
+        a_error=ala_f3_norm(E,ap,s->lev)/max(a1n+a2n,1.0e-300);
+        a_pass=actions_valid && isfinite(a_error) &&
+            a_error<=STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE;
+    }
+    else {
+        a1n=a2n=0.0; a_error=-1.0;
+    }
+    pass=m_pass && a_pass;
     if(E->parallel.me==0) {
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_precheck.json","w");
         fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-precheck\",\n"
-                "  \"operator\":\"M_inverse\",\n"
-                "  \"definition\":\"||M^-1(q1+q2)-M^-1(q1)-M^-1(q2)||/(||M^-1(q1)||+||M^-1(q2)||)\",\n"
-                "  \"q1_norm\":%.17e,\n  \"q2_norm\":%.17e,\n"
-                "  \"relative_additivity_error\":%.17e,\n"
+                "  \"M_inverse_definition\":\"||M^-1(q1+q2)-M^-1(q1)-M^-1(q2)||/(||M^-1(q1)||+||M^-1(q2)||)\",\n"
+                "  \"M_inverse_q1_norm\":%.17e,\n  \"M_inverse_q2_norm\":%.17e,\n"
+                "  \"M_inverse_relative_additivity_error\":%.17e,\n"
+                "  \"M_inverse_pass\":%s,\n"
+                "  \"H_right_definition\":\"S_ref M^-1\",\n"
+                "  \"H_right_q1_norm\":%.17e,\n  \"H_right_q2_norm\":%.17e,\n"
+                "  \"H_right_relative_additivity_error\":%.17e,\n"
+                "  \"H_right_actions_valid\":%s,\n"
+                "  \"H_right_pass\":%s,\n"
                 "  \"threshold\":%.17e,\n  \"pass\":%s\n}\n",
-                n1,n2,err,(double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
+                n1,n2,m_error,m_pass ? "true" : "false",
+                a1n,a2n,a_error,actions_valid ? "true" : "false",
+                a_pass ? "true" : "false",
+                (double)STRICT_ALA_STAGE_F3_ADDITIVITY_RELATIVE_TOLERANCE,
                 pass ? "true" : "false");
         fclose(fp);
     }
     ala_schur_free_field(E,qp); ala_schur_free_field(E,z1);
     ala_schur_free_field(E,z2); ala_schur_free_field(E,zp);
     ala_schur_free_field(E,work);
+    ala_schur_free_field(E,a1); ala_schur_free_field(E,a2);
+    ala_schur_free_field(E,ap);
     MPI_Barrier(E->parallel.world);
     return pass;
 }
@@ -627,11 +666,10 @@ static int ala_f3_reference_action(struct All_variables *E,
     const char *action_id,const char *input_id,int repeat_id,
     double *achieved,long long *cycles)
 {
-    double **pwork=0,**rhs=0,**saved=0,**u=0,**vwork=0,**correction=0;
-    double rhs2,residual2,rhs_rms,residual_rms,relative,target,output_norm;
-    double correction_rhs2,correction_rms,correction_target;
+    double **pwork=0,**rhs=0,**saved=0,**u=0,**vwork=0;
+    double rhs2,residual2,rhs_rms,residual_rms,relative,output_norm;
     long long total_cycles;
-    int m,e,valid,zero_rhs,finite_values,remaining_cycles;
+    int m,e,valid,zero_rhs,finite_values;
     int saved_production_logging;
     FILE *fp=NULL;
     (void)cache;
@@ -640,7 +678,6 @@ static int ala_f3_reference_action(struct All_variables *E,
     saved=ala_schur_alloc_velocity(E,s->lev);
     u=ala_schur_alloc_velocity(E,s->lev);
     vwork=ala_schur_alloc_velocity(E,s->lev);
-    correction=ala_schur_alloc_velocity(E,s->lev);
     if(preconditioned)
         apply_ala_pressure_preconditioner(E,input,pwork,output,s->lev,-3,cache);
     else ala_f3_copy(E,pwork,input,s->lev);
@@ -656,64 +693,18 @@ static int ala_f3_reference_action(struct All_variables *E,
         valid=1;
     }
     else {
-        rhs_rms=sqrt(rhs2/(double)E->mesh.neq);
-        target=STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE*rhs_rms;
         setenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION","1",1);
-        valid=solve_del2_u_bounded(E,u,rhs,target,s->lev,
-            STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,100);
+        /* A fixed operator requires the same arithmetic path for every RHS.
+         * Residual-based stopping made the former solve/refinement split
+         * input-dependent and produced O(1e-7) additivity defects even when
+         * every final action residual was tiny.  Run one fixed-length solve;
+         * the explicit full-action residual below remains authoritative. */
+        saved_production_logging=E->control.ala_stage_abc_production_logging;
+        E->control.ala_stage_abc_production_logging=0;
+        valid=solve_del2_u_fixed_cycles(E,u,rhs,s->lev,
+            STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,100);
+        E->control.ala_stage_abc_production_logging=saved_production_logging;
         total_cycles=E->control.ala_stage_f3_last_inner_cycles;
-        /* Explicit residual correction removes the amplification of the
-         * 1e-10 inner-solve error in fixed-operator additivity tests.  The
-         * scientific tolerance and cumulative max-cycle gates are unchanged. */
-        /* The multigrid solve uses its RHS as workspace.  Restore the
-         * immutable action RHS before assembling r = rhs - K_gamma u. */
-        for(m=1;m<=E->sphere.caps_per_proc;m++)
-            for(e=0;e<E->lmesh.NEQ[s->lev];e++)
-                rhs[m][e]=saved[m][e];
-        (void)ala_schur_velocity_residual(E,u,rhs,vwork,s->lev);
-        correction_rhs2=global_vdot(E,vwork,vwork,s->lev);
-        if(valid && isfinite(correction_rhs2) && correction_rhs2>0.0) {
-            remaining_cycles=STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES-
-                (int)total_cycles;
-            if(remaining_cycles<=0)
-                valid=0;
-            else {
-                correction_rms=sqrt(correction_rhs2/
-                                    (double)E->mesh.neq);
-                correction_target=
-                    STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE*
-                    correction_rms;
-                for(m=1;m<=E->sphere.caps_per_proc;m++)
-                    for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
-                        rhs[m][e]=vwork[m][e];
-                        correction[m][e]=0.0;
-                    }
-                /* This is bounded iterative refinement, not a second
-                 * authoritative S_ref solve.  Its RHS is already the
-                 * first solve's O(1e-10) residual, so requiring another
-                 * 1e-10 relative reduction can place the target below
-                 * attainable precision.  Retain its best bounded iterate;
-                 * the explicitly recomputed full-action residual below is
-                 * the authoritative accuracy gate. */
-                /* The refinement is part of one diagnostic reference action,
-                 * not an additional production K_gamma solve.  Suppress the
-                 * Stage-C production ledger while it runs; otherwise its
-                 * roundoff-limited target is incorrectly promoted to an
-                 * independent required inner solve by the analyzer. */
-                saved_production_logging=E->control.ala_stage_abc_production_logging;
-                E->control.ala_stage_abc_production_logging=0;
-                (void)solve_del2_u_bounded(E,correction,rhs,
-                    correction_target,s->lev,remaining_cycles,100);
-                E->control.ala_stage_abc_production_logging=saved_production_logging;
-                total_cycles += E->control.ala_stage_f3_last_inner_cycles;
-                for(m=1;m<=E->sphere.caps_per_proc;m++)
-                    for(e=0;e<E->lmesh.NEQ[s->lev];e++) {
-                        u[m][e] += correction[m][e];
-                        rhs[m][e]=saved[m][e];
-                    }
-            }
-        }
-        else if(!isfinite(correction_rhs2)) valid=0;
         unsetenv("STRICT_ALA_STAGE_F3_REFERENCE_ACTION");
     }
     *cycles=total_cycles;
@@ -751,7 +742,6 @@ static int ala_f3_reference_action(struct All_variables *E,
     ala_schur_free_field(E,pwork); ala_schur_free_field(E,rhs);
     ala_schur_free_field(E,saved); ala_schur_free_field(E,u);
     ala_schur_free_field(E,vwork);
-    ala_schur_free_field(E,correction);
     return valid;
 }
 
@@ -893,10 +883,11 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
         fprintf(fp,"],\n  \"leakage_weighted\":%.17e,\n  \"normalized_weighted_rms\":true,\n  \"raw_vector_action_nonfinite\":false\n}\n",weighted_leakage);
         fclose(fp);
         fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_runtime.json","w");
-        fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-runtime-raw\",\n  \"schema_version\":\"1\",\n  \"stage_id\":\"STRICT_STAGE_F3_OUTER_SCHUR_KRYLOV_RELOCALIZATION\",\n  \"manifest_sha256\":\"%s\",\n  \"canonical_threshold_sha256\":\"%s\",\n  \"generated_threshold_contract_sha256\":\"%s\",\n  \"actual_mpi_world_size\":%d,\n  \"actual_restart\":%d,\n  \"actual_outer_budget\":%d,\n  \"runtime_threshold_values\":{\"S_ref_inner_relative_tolerance\":%.17e,\"S_ref_max_MG_cycles\":%d,\"repeat_action_relative_tolerance\":%.17e,\"scaling_scalar_c\":%.17e,\"scaling_relative_tolerance\":%.17e,\"additivity_relative_tolerance\":%.17e,\"qr_first_pass_orthogonality_threshold\":%.17e,\"qr_rank_rejection_relative_threshold\":%.17e,\"H_true_symmetry_relative_tolerance\":%.17e,\"H_true_negative_curvature_relative_tolerance\":%.17e},\n  \"outer_preconditioning_orientation\":\"RIGHT_FGMRES\",\n  \"v_j\":\"pressure_space_Arnoldi_basis\",\n  \"z_j\":\"configured_M_inverse_v_j_pressure_correction\",\n  \"s_j\":\"S_prod_j_z_j_sampled_before_Arnoldi_in_place_orthogonalization\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"iterations\":%d,\n  \"joint_target_reached\":%s,\n  \"best_R_cont\":%.17e,\n  \"final_R_cont\":%.17e,\n  \"R_cont_target\":%.17e,\n  \"base_plateau_confirmed\":%s,\n  \"restart_retention_status\":\"INCONCLUSIVE_SINGLE_BOUNDARY\",\n  \"restart_boundary_observed\":%s,\n  \"viscosity_provenance\":{\"storage\":\"EVI[levmax][cap][(element-1)*vpts+gp]\",\"entity_semantics\":\"owned_element_integration_points\",\"local_order\":\"cap_element_gauss_point\",\"configured_visc_max\":%.17e,\"eta_min\":%.17e,\"eta_max\":%.17e,\"eta_contrast\":%.17e,\"lower_clamp_fraction\":%.17e,\"upper_clamp_fraction\":%.17e,\"global_owned_entry_count\":%lld},\n  \"bytes_per_pressure_vector_per_rank\":%lld,\n  \"maximum_resident_diagnostic_pressure_vector_equivalents_per_rank\":%d,\n  \"estimated_peak_diagnostic_bytes_per_rank\":%lld,\n  \"production_default_change_authorized\":false,\n  \"complete\":true\n}\n",
+        fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-runtime-raw\",\n  \"schema_version\":\"1\",\n  \"stage_id\":\"STRICT_STAGE_F3_OUTER_SCHUR_KRYLOV_RELOCALIZATION\",\n  \"manifest_sha256\":\"%s\",\n  \"canonical_threshold_sha256\":\"%s\",\n  \"generated_threshold_contract_sha256\":\"%s\",\n  \"actual_mpi_world_size\":%d,\n  \"actual_restart\":%d,\n  \"actual_outer_budget\":%d,\n  \"runtime_threshold_values\":{\"S_ref_inner_relative_tolerance\":%.17e,\"S_ref_fixed_MG_cycles\":%d,\"S_ref_max_MG_cycles\":%d,\"repeat_action_relative_tolerance\":%.17e,\"scaling_scalar_c\":%.17e,\"scaling_relative_tolerance\":%.17e,\"additivity_relative_tolerance\":%.17e,\"qr_first_pass_orthogonality_threshold\":%.17e,\"qr_rank_rejection_relative_threshold\":%.17e,\"H_true_symmetry_relative_tolerance\":%.17e,\"H_true_negative_curvature_relative_tolerance\":%.17e},\n  \"outer_preconditioning_orientation\":\"RIGHT_FGMRES\",\n  \"v_j\":\"pressure_space_Arnoldi_basis\",\n  \"z_j\":\"configured_M_inverse_v_j_pressure_correction\",\n  \"s_j\":\"S_prod_j_z_j_sampled_before_Arnoldi_in_place_orthogonalization\",\n  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n  \"iterations\":%d,\n  \"joint_target_reached\":%s,\n  \"best_R_cont\":%.17e,\n  \"final_R_cont\":%.17e,\n  \"R_cont_target\":%.17e,\n  \"base_plateau_confirmed\":%s,\n  \"restart_retention_status\":\"INCONCLUSIVE_SINGLE_BOUNDARY\",\n  \"restart_boundary_observed\":%s,\n  \"viscosity_provenance\":{\"storage\":\"EVI[levmax][cap][(element-1)*vpts+gp]\",\"entity_semantics\":\"owned_element_integration_points\",\"local_order\":\"cap_element_gauss_point\",\"configured_visc_max\":%.17e,\"eta_min\":%.17e,\"eta_max\":%.17e,\"eta_contrast\":%.17e,\"lower_clamp_fraction\":%.17e,\"upper_clamp_fraction\":%.17e,\"global_owned_entry_count\":%lld},\n  \"bytes_per_pressure_vector_per_rank\":%lld,\n  \"maximum_resident_diagnostic_pressure_vector_equivalents_per_rank\":%d,\n  \"estimated_peak_diagnostic_bytes_per_rank\":%lld,\n  \"production_default_change_authorized\":false,\n  \"complete\":true\n}\n",
             s->manifest_sha256,STRICT_ALA_STAGE_F3_THRESHOLD_SOURCE_SHA256,
             s->threshold_contract_sha256,E->parallel.nproc,s->restart,s->outer_budget,
             STRICT_ALA_STAGE_F3_S_REF_INNER_RELATIVE_TOLERANCE,
+            STRICT_ALA_STAGE_F3_S_REF_FIXED_MG_CYCLES,
             STRICT_ALA_STAGE_F3_S_REF_MAX_MG_CYCLES,
             STRICT_ALA_STAGE_F3_REPEAT_ACTION_RELATIVE_TOLERANCE,
             STRICT_ALA_STAGE_F3_SCALING_SCALAR_C,

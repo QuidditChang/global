@@ -93,7 +93,8 @@ def csv_nonfinite(rows, excluded=()):
 def validate_thresholds(t):
     # Numeric values live only in the canonical JSON.  This routine validates
     # shape and semantics; it deliberately carries no duplicate gate values.
-    required = ("S_ref_inner_relative_tolerance", "S_ref_max_MG_cycles",
+    required = ("S_ref_inner_relative_tolerance", "S_ref_fixed_MG_cycles",
+        "S_ref_max_MG_cycles",
         "repeat_action_relative_tolerance", "scaling_scalar_c",
         "scaling_relative_tolerance", "additivity_relative_tolerance",
         "modal_significance_floor_relative",
@@ -115,6 +116,12 @@ def validate_thresholds(t):
     for key in required:
         if key not in t or isinstance(t.get(key), bool) or not finite(t.get(key)):
             errors.append(f"{key} must be a finite numeric value")
+    if (finite(t.get("S_ref_fixed_MG_cycles")) and
+            finite(t.get("S_ref_max_MG_cycles")) and
+            (int(t["S_ref_fixed_MG_cycles"]) != t["S_ref_fixed_MG_cycles"] or
+             t["S_ref_fixed_MG_cycles"] < 1 or
+             t["S_ref_fixed_MG_cycles"] > t["S_ref_max_MG_cycles"])):
+        errors.append("S_ref_fixed_MG_cycles must be an integer within the max-cycle budget")
     pairs=t.get("additivity_mode_pairs")
     if not isinstance(pairs,list) or not pairs or any(not isinstance(x,list) or len(x)!=2 for x in pairs):
         errors.append("additivity_mode_pairs must contain mode-id pairs")

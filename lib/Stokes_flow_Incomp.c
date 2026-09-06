@@ -45,6 +45,8 @@ void assemble_grad_rho_p(struct All_variables *,double **,double **,int);
 void assemble_grad_c_p(struct All_variables *,double **,double **,int);
 int solve_del2_u_bounded(struct All_variables *,double **,double **,double,
                          int,int,int);
+int solve_del2_u_fixed_cycles(struct All_variables *,double **,double **,
+                              int,int,int);
 double CPU_time0(void);
 double global_pdot(struct All_variables *,double **,double **,int);
 
@@ -245,6 +247,7 @@ static void apply_ala_pressure_preconditioner(struct All_variables *E,
                                               *cache);
 static void *strict_ala_stage_f3_begin(
     struct All_variables *E,int lev,int restart,int outer_budget);
+struct ala_f3_state;
 static void strict_ala_stage_f3_direction(
     struct All_variables *E,void *state,double **v,double **z,double **s,
     int iteration,int restart_cycle,double requested_inner_tolerance);

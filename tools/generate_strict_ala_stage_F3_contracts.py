@@ -48,6 +48,7 @@ def mode_contract(a):
 
 NUMERIC={
  "S_ref_inner_relative_tolerance":"S_REF_INNER_RELATIVE_TOLERANCE",
+ "S_ref_fixed_MG_cycles":"S_REF_FIXED_MG_CYCLES",
  "S_ref_max_MG_cycles":"S_REF_MAX_MG_CYCLES",
  "repeat_action_relative_tolerance":"REPEAT_ACTION_RELATIVE_TOLERANCE",
  "scaling_scalar_c":"SCALING_SCALAR_C",

@@ -393,6 +393,21 @@ int solve_del2_u_bounded(struct All_variables *E, double **d0, double **F,
                                progress_interval);
 }
 
+/* F3 reference-operator actions must use one input-independent arithmetic
+ * path.  A zero internal tolerance disables residual-based early exit; the
+ * caller recomputes and enforces the frozen physical relative-residual gate
+ * after exactly fixed_cycles multigrid applications. */
+int solve_del2_u_fixed_cycles(struct All_variables *E, double **d0, double **F,
+                              int high_lev, int fixed_cycles,
+                              int progress_interval)
+{
+  if(fixed_cycles<1 || progress_interval<1)
+    myerror(E,"Invalid fixed-cycle strict-ALA velocity MG limits");
+  (void)solve_del2_u_internal(E,d0,F,0.0,high_lev,fixed_cycles,
+                              progress_interval);
+  return 1;
+}
+
 /* =================================
    recursive multigrid function ....
    ================================= */
