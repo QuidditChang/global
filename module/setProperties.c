@@ -542,6 +542,7 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
     FILE *fp;
     float depth[PHASE_TRANSITIONS];
     float density_jump[PHASE_TRANSITIONS];
+    float entropy_jump[PHASE_TRANSITIONS];
     float Ra[PHASE_TRANSITIONS];
     float width[PHASE_TRANSITIONS];
     float clapeyron[PHASE_TRANSITIONS];
@@ -561,6 +562,8 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
                            PHASE_TRANSITIONS, fp);
     getFloatVectorProperty(properties, "phase_delta_rho", density_jump,
                            PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_delta_s", entropy_jump,
+                           PHASE_TRANSITIONS, fp);
     getFloatVectorProperty(properties, "phase_Ra", Ra,
                            PHASE_TRANSITIONS, fp);
     getFloatVectorProperty(properties, "phase_width", width,
@@ -573,6 +576,7 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
     for(i=0; i<PHASE_TRANSITIONS; i++) {
         E->control.phase[i].depth = depth[i];
         E->control.phase[i].density_jump = density_jump[i];
+        E->control.phase[i].entropy_jump = entropy_jump[i];
         E->control.phase[i].Ra = Ra[i];
         E->control.phase[i].clapeyron = clapeyron[i];
         E->control.phase[i].transT = transT[i];

@@ -53,6 +53,9 @@ class Phase(CitcomComponent):
             "phase_depth", default=[410.0/6371.0, 520.0/6371.0, 660.0/6371.0])
         phase_delta_rho = pyre.inventory.array(
             "phase_delta_rho", default=[0.0, 0.0, 0.0])
+        phase_delta_s = pyre.inventory.array(
+            "phase_delta_s", default=[0.0, 0.0, 0.0])
+        # Deprecated compatibility input. Runtime derives this from delta rho.
         phase_Ra = pyre.inventory.array(
             "phase_Ra", default=[0.0, 0.0, 0.0])
         phase_width = pyre.inventory.array(
