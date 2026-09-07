@@ -19,6 +19,9 @@
 #define PROFILE_TEMPERATURE_BINS 200
 #define PROFILE_TEMPERATURE_MIN_K 0.0
 #define PROFILE_TEMPERATURE_MAX_K 4500.0
+#define PROFILE_DENSITY_BINS 200
+#define PROFILE_DENSITY_MIN_KG_M3 2000.0
+#define PROFILE_DENSITY_MAX_KG_M3 7000.0
 #define PROFILE_K_BINS 200
 #define PROFILE_K_MIN 0.0
 #define PROFILE_K_MAX 35.0
@@ -101,6 +104,7 @@ struct Profile_result {
 
 enum Profile_flag {
     PROFILE_FLAG_TEMPERATURE = 0,
+    PROFILE_FLAG_DENSITY_TOTAL,
     PROFILE_FLAG_K,
     PROFILE_FLAG_KC,
     PROFILE_FLAG_VISCOSITY_GP,
@@ -148,6 +152,41 @@ static const double profile_percentile_levels[PROFILE_PERCENTILE_COUNT] =
 static double temperature_at_node(struct All_variables *E, int cap, int node)
 {
     return E->data.Ttop + E->T[cap][node] * E->data.ref_temperature;
+}
+
+static double density_total_at_node(struct All_variables *E, int cap, int node)
+{
+    int component, phase_index;
+    int nz = ((node - 1) % E->lmesh.noz) + 1;
+    double density_scale = E->data.rho0 * E->data.alpha0
+        * E->data.ref_temperature;
+    double temperature_anomaly = (E->T[cap][node] - E->refstate.Tref[nz])
+        * E->data.ref_temperature;
+    double density = E->data.rho0 * E->refstate.rho[nz]
+        * (1.0 - E->data.alpha0
+           * E->refstate.thermal_expansivity[nz] * temperature_anomaly);
+
+    if (E->control.tracer && E->composition.ichemical_buoyancy)
+        for (component = 0; component < E->composition.ncomp; ++component)
+            density += density_scale * E->composition.buoyancy_ratio[component]
+                * E->composition.comp_node[cap][component][node];
+
+    for (phase_index = 0; phase_index < PHASE_TRANSITIONS; ++phase_index) {
+        struct Phase_transition *phase = &E->control.phase[phase_index];
+        double fraction = phase_change_fraction_at_temperature(
+            E, phase_index, cap, node, E->T[cap][node]);
+        double reference_fraction = phase_change_reference_fraction(
+            E, phase_index, cap, node);
+        density += phase->density_jump * (fraction - reference_fraction);
+    }
+
+    if (!isfinite(density) || density <= 0.0) {
+        fprintf(stderr,
+                "Invalid total density: cap=%d node=%d nz=%d rho=%e\n",
+                cap, node, nz, density);
+        parallel_process_termination();
+    }
+    return density;
 }
 
 static double conductivity_at_gp(struct All_variables *E, int cap,
@@ -326,6 +365,9 @@ static const struct Profile_variable profile_variables[] = {
     {"temperature", "K", NODE_PROFILE, PROFILE_FLAG_TEMPERATURE,
      PROFILE_TEMPERATURE_BINS, PROFILE_TEMPERATURE_MIN_K,
      PROFILE_TEMPERATURE_MAX_K, temperature_at_node, NULL, NULL},
+    {"density_total", "kg/m^3", NODE_PROFILE, PROFILE_FLAG_DENSITY_TOTAL,
+     PROFILE_DENSITY_BINS, PROFILE_DENSITY_MIN_KG_M3,
+     PROFILE_DENSITY_MAX_KG_M3, density_total_at_node, NULL, NULL},
     {"k", "W/(m K)", GP_PROFILE, PROFILE_FLAG_K,
      PROFILE_K_BINS, PROFILE_K_MIN, PROFILE_K_MAX,
      NULL, conductivity_at_gp, NULL},
