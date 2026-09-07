@@ -53,6 +53,28 @@ static void read_tracer_visc22();
 static void get_shape_functions();
 void parallel_process_termination();
 
+static double strict_rheology_reference_temperature(struct All_variables *E,
+                                                     int cap, int element,
+                                                     int gp)
+{
+    int a, node, radial_node;
+    double temperature;
+    const int ends = enodes[E->mesh.nsd];
+
+    if(!E->refstate.has_temperature) {
+        myerror(E, "Reference-state Tref is required for EBA rheology");
+    }
+
+    temperature = 0.0;
+    for(a=1; a<=ends; a++) {
+        node = E->ien[cap][element].node[a];
+        radial_node = (node - 1) % E->lmesh.noz + 1;
+        temperature += E->refstate.temperature[radial_node]
+                     * E->N.vpt[GNVINDEX(a,gp)];
+    }
+    return temperature;
+}
+
 
 void viscosity_system_input(struct All_variables *E)
 {
@@ -557,7 +579,12 @@ void visc_from_T(E,EEta,propogate)
                             zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
                         }
 
-	                one = E->control.lith_age_mantle_temp + slope * (zzz - E->control.lith_age_depth);
+                        if(E->control.ala_pressure_buoyancy ||
+                           E->control.eba_formulation)
+                            one = strict_rheology_reference_temperature(E,m,i,jj);
+                        else
+                            one = E->control.lith_age_mantle_temp
+                                + slope * (zzz - E->control.lith_age_depth);
 
                         if(E->control.mat_control==0) {
 			   /*if(r>0.97 && fabs(E->flag_depth2[nodeg])*1000.0>200) { // && E->age_t[nodeg]>380.0/E->data.scalet) {
@@ -3218,4 +3245,3 @@ void apply_smooth_viscbc(E,EEta)
 
     return;
 }
-
