@@ -69,7 +69,7 @@ static double strict_rheology_reference_temperature(struct All_variables *E,
     for(a=1; a<=ends; a++) {
         node = E->ien[cap][element].node[a];
         radial_node = (node - 1) % E->lmesh.noz + 1;
-        temperature += E->refstate.temperature[radial_node]
+        temperature += E->refstate.Tref[radial_node]
                      * E->N.vpt[GNVINDEX(a,gp)];
     }
     return temperature;

@@ -77,9 +77,9 @@ void mat_prop_allocate(struct All_variables *E)
     /* dissipation scaling */
     E->refstate.dis = (double *) malloc((noz+1)*sizeof(double));
 
-    /* Column 3 initializes the background geotherm; it is not used by ALA
-       continuity, momentum, heating, expansion, or EOS closure. */
+    /* Column 3 is the fixed thermodynamic reference temperature. */
     E->refstate.temperature = (double *) malloc((noz+1)*sizeof(double));
+    E->refstate.Tref = E->refstate.temperature;
     E->refstate.gamma_eff = (double *) malloc((noz+1)*sizeof(double));
     E->refstate.has_temperature = 0;
     E->refstate.temperature_cmb = 0.0;
@@ -528,11 +528,9 @@ static void read_refstate(struct All_variables *E)
         parallel_process_termination();
     }
     if(E->control.ala_pressure_buoyancy || E->control.eba_formulation) {
-        /* Current ALA/EBA generation closes endpoint rows to the Dirichlet
-         * values T*=1 and T*=0.  Those closures are not the Katsura
-         * background endpoints needed by initial anomaly superposition.
-         * Recover both smooth background endpoints by quadratic continuation
-         * of the three adjacent interior radial samples. */
+        /* EBA stores the thermodynamic Tref at every node. The older strict
+         * ALA file supported by this branch still closes its endpoint rows,
+         * so retain quadratic endpoint recovery only for that format. */
         rewind(fp);
         background_rows = 0;
         for(j=0; j<4; j++) {
@@ -571,12 +569,18 @@ static void read_refstate(struct All_variables *E)
                     E->refstate.filename, background_rows, E->mesh.noz);
             parallel_process_termination();
         }
-        E->refstate.temperature_cmb =
-            3.0*first_temperature[1] - 3.0*first_temperature[2]
-            + first_temperature[3];
-        E->refstate.temperature_surface =
-            3.0*last_temperature[2] - 3.0*last_temperature[1]
-            + last_temperature[0];
+        if(E->control.eba_formulation) {
+            E->refstate.temperature_cmb = first_temperature[0];
+            E->refstate.temperature_surface = last_temperature[3];
+        }
+        else {
+            E->refstate.temperature_cmb =
+                3.0*first_temperature[1] - 3.0*first_temperature[2]
+                + first_temperature[3];
+            E->refstate.temperature_surface =
+                3.0*last_temperature[2] - 3.0*last_temperature[1]
+                + last_temperature[0];
+        }
     }
     else if(cmb_columns >= 8)
         E->refstate.temperature_cmb = cmb_values[6];
@@ -745,7 +749,7 @@ static void read_refstate(struct All_variables *E)
         fprintf(stderr,
                 "Read strict ALA reference state '%s': "
                 "rho g Tref alpha Cp beta Gamma_eff; "
-                "unclosed T_K endpoints CMB=%e surface=%e\n",
+                "Tref endpoints CMB=%e surface=%e\n",
                 E->refstate.filename, E->refstate.temperature_cmb,
                 E->refstate.temperature_surface);
     }

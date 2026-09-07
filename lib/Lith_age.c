@@ -140,7 +140,7 @@ void lith_age_construct_tic(struct All_variables *E)
   gnox=E->mesh.nox;
   if(!E->refstate.has_temperature) {
     fprintf(stderr,
-            "lith_age_construct_tic requires an initial background geotherm "
+            "lith_age_construct_tic requires a thermodynamic Tref profile "
             "(ALA/EBA column 3; legacy extended column 7)\n");
     parallel_process_termination();
   }
@@ -173,17 +173,15 @@ void lith_age_construct_tic(struct All_variables *E)
     parallel_process_termination();
   }
 
-  /* Establish the complete initial Katsura background geotherm first. This is
-     initialization data, not an active thermodynamic ALA reference profile.
-     Interior samples are copied directly; only the endpoint-closed ALA/EBA
-     rows use the unclosed values recovered by read_refstate(). */
+  /* Start total-temperature initialization from the fixed thermodynamic Tref.
+     Boundary layers and other anomalies are superposed below. */
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=noy;i++)
       for(j=1;j<=nox;j++)
 	for(k=1;k<=noz;k++) {
 	  node=k+(j-1)*noz+(i-1)*nox*noz;
 	  radial_index = k+E->lmesh.nzs-1;
-	  background_temperature = E->refstate.temperature[k];
+	  background_temperature = E->refstate.Tref[k];
 	  if((E->control.ala_pressure_buoyancy ||
 	      E->control.eba_formulation) && radial_index == 1)
 	    background_temperature = E->refstate.temperature_cmb;

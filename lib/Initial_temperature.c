@@ -40,6 +40,7 @@ void myerror(struct All_variables *, char *);
 #include "initial_temperature.h"
 void debug_tic(struct All_variables *);
 void read_tic_from_file(struct All_variables *);
+static void initialize_temperature_anomaly(struct All_variables *);
 
 #ifdef USE_GZDIR
 void restart_tic_from_gzdir_file(struct All_variables *);
@@ -204,10 +205,30 @@ void convection_initial_temperature(struct All_variables *E)
   /* Note: it is the callee's responsibility to conform tbc. */
   /* like a call to temperatures_conform_bcs(E); */
 
+  initialize_temperature_anomaly(E);
+
   if (E->control.verbose)
     debug_tic(E);
 
   return;
+}
+
+
+/* E->T remains the evolving total temperature. DataT records the initial
+ * anomaly relative to the fixed thermodynamic reference profile. */
+static void initialize_temperature_anomaly(struct All_variables *E)
+{
+  int cap, node, nz;
+
+  for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+    for(node=1; node<=E->lmesh.nno; node++) {
+      nz = ((node-1) % E->lmesh.noz) + 1;
+      if((E->control.ala_pressure_buoyancy || E->control.eba_formulation) &&
+         E->refstate.has_temperature && E->refstate.Tref != NULL)
+        E->DataT[cap][node] = E->T[cap][node] - E->refstate.Tref[nz];
+      else
+        E->DataT[cap][node] = 0.0;
+    }
 }
 
 
