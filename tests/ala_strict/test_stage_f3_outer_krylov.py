@@ -95,7 +95,8 @@ class StageF3Tests(unittest.TestCase):
         self.assertTrue(metrics["kappa_2_is_infinite"])
         json.dumps(metrics, allow_nan=False)
 
-    def make_case(self, directory, htrue_valid=True):
+    def make_case(self, directory, htrue_valid=True,
+                  fixed_reference_available=True):
         root = Path(directory)
         thresholds = RUNS / "cmbhf_ALA_strict_stage_F3_thresholds.json"
         weights = [0.85, 0.095, 0.016]
@@ -112,7 +113,7 @@ class StageF3Tests(unittest.TestCase):
         raw.write_text(json.dumps({
             "S_ref_validation_pass": True,
             "H_true_validation_pass": htrue_valid,
-            "H_right_fixed_operator_valid": True,
+            "H_right_fixed_operator_valid": fixed_reference_available,
             "H_true_minimum_symmetric_eigenvalue": 1.0,
             "reference_action_norm_scale": 1.0,
             "numerical_floor": 1e-14,
@@ -242,6 +243,26 @@ class StageF3Tests(unittest.TestCase):
             decision = json.loads(args.output.read_text())
             self.assertEqual(decision["decision"], "INVALID_EXPERIMENT")
 
+    def test_fixed_reference_failure_keeps_trajectory_experiment_valid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.make_case(directory,
+                fixed_reference_available=False)
+            self.assertEqual(F3.analyze(args), 0)
+            decision = json.loads(args.output.read_text())
+            self.assertTrue(decision["valid"])
+            self.assertTrue(decision["trajectory_only"])
+            self.assertFalse(
+                decision["fixed_reference_spectral_branch_available"])
+            self.assertEqual(decision["decision"],
+                             "OUTER_BOTTLENECK_UNRESOLVED")
+            self.assertEqual(decision["unresolved_reason"],
+                "FIXED_REFERENCE_SPECTRAL_ATTRIBUTION_UNAVAILABLE")
+            self.assertEqual(decision["adverse_causes"], [])
+            projected = json.loads(
+                args.projected_operator_output.read_text())
+            self.assertFalse(
+                projected["spectral_interpretation_authoritative"])
+
     def test_early_joint_convergence_is_valid_shortened_window(self):
         with tempfile.TemporaryDirectory() as directory:
             args = self.make_case(directory)
@@ -302,6 +323,14 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("E2_snapshots.sha256", text)
         self.assertIn("MPI_cap_decomposition", text)
         self.assertIn("STRICT_STAGE_F3_${LSB_JOBID}", text)
+        self.assertIn("unset STRICT_ALA_STAGE_F3_PRECHECK", text)
+        self.assertIn(
+            'rm -f "${N}/DATA/0/global.strict_ala_stage_C_inner_solves.csv"',
+            text)
+        precheck_block = text[text.index(
+            'if [[ "${STRICT_ALA_STAGE_F3_PRECHECK:-0}" == "1" ]]'):
+            text.index("PHASE=numerical_F3_BASE")]
+        self.assertNotIn('test "${rc}" -eq 0', precheck_block)
         self.assertNotIn("F2H", text)
 
     def test_precheck_is_before_production_trajectory(self):

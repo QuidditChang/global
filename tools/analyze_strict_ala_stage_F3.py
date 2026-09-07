@@ -555,33 +555,42 @@ def analyze(args):
     projected_closed = all(leakages[mid - 1] <= t["projected_subspace_mode_leakage_limit"]
                            for mid in important_ids) and \
         weighted_leakage <= t["projected_subspace_weighted_leakage_limit"]
-    if not reference.get("S_ref_validation_pass"):
-        errors.append("S_ref validation failed")
-    if not reference.get("H_true_validation_pass"):
-        errors.append("H_true validation failed")
-    if not reference.get("H_right_fixed_operator_valid"):
-        errors.append("H_right fixed-operator validation failed")
+    fixed_reference_available = bool(
+        reference.get("H_right_fixed_operator_valid"))
+    spectral_unavailable_reason = (None if fixed_reference_available else
+        "FIXED_REFERENCE_SPECTRAL_ATTRIBUTION_UNAVAILABLE")
+    # A failed fixed-reference gate disables spectral attribution, but does
+    # not invalidate the independently instrumented production trajectory.
+    # When the fixed-reference branch declares itself available, all of its
+    # supporting validation gates remain fail-closed.
+    if fixed_reference_available:
+        if not reference.get("S_ref_validation_pass"):
+            errors.append("S_ref validation failed")
+        if not reference.get("H_true_validation_pass"):
+            errors.append("H_true validation failed")
     if reference.get("raw_vector_action_nonfinite") is not False:
         errors.append("raw vector/action nonfinite or unverified")
-    if (true_metrics["symmetry_relative_defect"] >
+    if (fixed_reference_available and
+            true_metrics["symmetry_relative_defect"] >
             t["H_true_symmetry_relative_tolerance"]):
         errors.append("H_true symmetry threshold failed")
     raw_minimum = reference.get("H_true_minimum_symmetric_eigenvalue")
     raw_scale = reference.get("reference_action_norm_scale")
     raw_floor = reference.get("numerical_floor")
-    if not all(finite(x) for x in (raw_minimum, raw_scale, raw_floor)):
-        errors.append("H_true curvature validation diagnostics nonfinite")
-    elif float(raw_minimum) < -t["H_true_negative_curvature_relative_tolerance"] * \
-            max(abs(float(raw_scale)), float(raw_floor)):
-        errors.append("H_true negative-curvature threshold failed")
+    if fixed_reference_available:
+        if not all(finite(x) for x in (raw_minimum, raw_scale, raw_floor)):
+            errors.append("H_true curvature validation diagnostics nonfinite")
+        elif float(raw_minimum) < -t["H_true_negative_curvature_relative_tolerance"] * \
+                max(abs(float(raw_scale)), float(raw_floor)):
+            errors.append("H_true negative-curvature threshold failed")
 
     plateau = (reproduction_pass and runtime.get("iterations") == 60 and
                not runtime.get("joint_target_reached") and
                float(runtime["best_R_cont"]) > float(runtime["R_cont_target"]))
     adverse = []
-    if not projected_closed:
+    if fixed_reference_available and not projected_closed:
         adverse.append("POD_SUBSPACE_LEAKAGE")
-    elif reference.get("H_right_fixed_operator_valid"):
+    elif fixed_reference_available:
         if right_metrics["kappa_2_is_infinite"] or \
                 right_metrics["kappa_2"] >= t["projected_condition_number_adverse"]:
             adverse.append("ILL_CONDITIONED")
@@ -619,8 +628,10 @@ def analyze(args):
         "projected_subspace_closed": projected_closed,
         "leakage_per_mode": json_safe(leakages),
         "leakage_weighted": json_safe(weighted_leakage),
+        "fixed_reference_spectral_branch_available": fixed_reference_available,
+        "spectral_unavailable_reason": spectral_unavailable_reason,
         "spectral_interpretation_authoritative": bool(projected_closed and
-            reference["H_right_fixed_operator_valid"]),
+            fixed_reference_available),
         "Y_space_interpretation":"empirical_actual_production_Schur_image_space_not_fixed_operator_spectrum",
         "complete":True,
     }
@@ -633,6 +644,8 @@ def analyze(args):
         "H_right_metrics": right_metrics,
         "derived_infinite_condition_number_is_valid": True,
         "raw_vector_action_nonfinite_invalid": True,
+        "fixed_reference_spectral_branch_available": fixed_reference_available,
+        "spectral_unavailable_reason": spectral_unavailable_reason,
         "complete":True,
     })
     write_json(args.reference_validation_output, reference_final)
@@ -641,6 +654,11 @@ def analyze(args):
         "stage_id":STAGE_ID,"manifest_sha256":manifest_hash,
         "decision": decision, "next_authorized_task": next_task,
         "valid": not errors, "complete": True, "validity_errors": errors,
+        "fixed_reference_spectral_branch_available": fixed_reference_available,
+        "trajectory_only": not fixed_reference_available,
+        "spectral_unavailable_reason": spectral_unavailable_reason,
+        "unresolved_reason": (spectral_unavailable_reason if
+            decision == "OUTER_BOTTLENECK_UNRESOLVED" else None),
         "base_reproduction_pass": reproduction_pass,
         "base_reproduction_max_relative_difference": reproduction_max,
         "base_plateau_confirmed": plateau,
