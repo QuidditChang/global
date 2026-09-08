@@ -654,7 +654,7 @@ void count_tracers_of_flavors(struct All_variables *E)
     int numtracers,nox,noy,intage,num1,num2,num3;;
     int ii,jj,zz,node,nodeg;
     float rad, phi, theta, age, age1, dist, dist2, new_flag_depth, flag_depth1, flag_depth2, r_craton, dge_wid, craton_depth;
-    const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17,chem=18,chem2=19;
+    const int oc=1,obc=2,ol=3,opl=4,oecl=5,weakarc=6,cuc=7,clc=8,cul=9,cml=10,cll=11,cratuc=12,cratlc=13,cratul=14,cratml=15,cratll=16,cecl=17;
     double PI=3.1415926;
     double inputdata,tmp1,tmp2,*geomx1,*geomy1,*geomx2,*geomy2,*geomx3,*geomy3;
     double temp1,temp2,temp3,temp4;
@@ -762,6 +762,17 @@ void count_tracers_of_flavors(struct All_variables *E)
                             flavor, E->trace.nflavors-1);
                     parallel_process_termination();
                 }
+                E->trace.ntracer_flavor[j][flavor][e]++;
+                continue;
+            }
+
+            /*
+             * The primordial thermo-chemical reservoir is a material identity,
+             * not a plate-reconstruction lithology.  Keep it immutable while
+             * allowing the legacy age/geometry rules below to reclassify the
+             * background mantle.
+             */
+            if(flavor == E->control.kC_primordial_flavor) {
                 E->trace.ntracer_flavor[j][flavor][e]++;
                 continue;
             }
@@ -989,11 +1000,8 @@ void count_tracers_of_flavors(struct All_variables *E)
                  E->trace.extraq[j][0][kk]=0.0;
 	      }*/
 
-	    /* add a chemical layer above CMB */
-            if(rad < E->sphere.ri+100.0/6371.0 && E->monitor.solution_cycles==0)
-                 E->trace.extraq[j][0][kk]=chem;
-            //if(rad < E->sphere.ri+7.0/6371.0 && E->monitor.solution_cycles==0)
-            //     E->trace.extraq[j][0][kk]=chem2;
+	    /* Flavors 18 and 19 are reserved and are not generated.  The
+	       primordial CMB reservoir is represented exclusively by flavor 24. */
 
 	    flavor = E->trace.extraq[j][0][kk];
             E->trace.ntracer_flavor[j][flavor][e]++;
