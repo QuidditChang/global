@@ -325,6 +325,12 @@ class StageF3Tests(unittest.TestCase):
         self.assertIn("STRICT_STAGE_F3_${LSB_JOBID}", text)
         self.assertIn("unset STRICT_ALA_STAGE_F3_PRECHECK", text)
         self.assertIn(
+            'EXPERIMENT_VALID=$(env -u PYTHONHOME "${PYTHON3}" -c',
+            text)
+        self.assertIn(
+            'FIXED_REFERENCE_PASS=$(env -u PYTHONHOME "${PYTHON3}" -c',
+            text)
+        self.assertIn(
             'rm -f "${N}/DATA/0/global.strict_ala_stage_C_inner_solves.csv"',
             text)
         precheck_block = text[text.index(
