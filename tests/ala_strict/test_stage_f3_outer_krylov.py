@@ -3,6 +3,8 @@ import importlib.util
 import hashlib
 import json
 import tempfile
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -489,6 +491,94 @@ class StageF3Tests(unittest.TestCase):
         source=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
         self.assertIn("projected2+=coefficient*coefficient",source)
         self.assertIn("projected2/max(norm*norm",source)
+
+    def test_pod_refresh_captures_exact_window_and_y_at_40(self):
+        source=(ROOT/"lib/Strict_ala_stage_f3.inc").read_text()
+        self.assertIn("#define ALA_F3_REFRESH_FIRST 20",source)
+        self.assertIn("#define ALA_F3_REFRESH_LAST 40",source)
+        self.assertIn("pod_refresh_snapshot[s->pod_refresh_count]",source)
+        self.assertIn("pod_refresh_y_at_40",source)
+        self.assertIn("&s->pod_refresh_y_at_40",source)
+        self.assertIn("ala_e2_pod(cov,ALA_F3_REFRESH_COUNT,0",source)
+        refresh=source[source.index("static void ala_f3_pod_refresh_finalize"):
+                       source.index("static int ala_f3_accuracy_solve")]
+        self.assertNotIn("ala_f3_reference_action",refresh)
+
+    def test_pod_refresh_thresholds_and_lsf_branch_are_fail_closed(self):
+        thresholds=json.loads((RUNS/
+            "cmbhf_ALA_strict_stage_F3_pod_refresh_thresholds.json").read_text())
+        self.assertEqual(thresholds["plateau_first_iteration"],20)
+        self.assertEqual(thresholds["plateau_last_iteration"],40)
+        self.assertEqual(thresholds["selected_cumulative_energy_minimum"],.95)
+        self.assertEqual(thresholds["selected_mode_hard_cap"],8)
+        self.assertFalse(thresholds["production_default_change_authorized"])
+        lsf=(RUNS/"cmbhf_ALA_strict_stage_F3.lsf").read_text()
+        self.assertIn("STRICT_STAGE_F3_POD_REFRESH_${LSB_JOBID}",lsf)
+        self.assertIn("POD_SUBSPACE_NO_LONGER_EXPLAINS_PLATEAU",lsf)
+        self.assertIn("analyze_strict_ala_stage_F3_pod_refresh.py",lsf)
+        self.assertIn("STRICT_ALA_STAGE_F3_POD_REFRESH_JOB_COMPLETE",lsf)
+
+    def test_pod_refresh_analyzer_selects_global_reachability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            threshold=RUNS/"cmbhf_ALA_strict_stage_F3_pod_refresh_thresholds.json"
+            raw=root/"raw.json"
+            raw.write_text(json.dumps({"reference_operator_actions_performed":False,
+                "plateau_window":[20,40],"snapshot_count":21,
+                "selected_mode_count":1,"selected_cumulative_energy":.96,
+                "orthogonality_max_abs_defect":0.0,
+                "median_f_Q":.95,"f_Q_at_40":.95,
+                "weighted_E_Y_at_40":.9,"well_explained":True,
+                "Y_reachable_at_40":False,"dominant_slow_mode_present":True,
+                "preliminary_next_direction":"GLOBAL_REACHABILITY_OR_DEFLATION_DESIGN"}))
+            spectrum=root/"spectrum.csv"
+            write_csv(spectrum,("mode_id","singular_value","singular_value_squared",
+                "energy_fraction","cumulative_energy","selected","checksum"),
+                [{"mode_id":1,"singular_value":1,"singular_value_squared":1,
+                  "energy_fraction":.96,"cumulative_energy":.96,
+                  "selected":1,"checksum":"abc"}])
+            modes=root/"modes.csv"
+            write_csv(modes,("mode_id","energy_fraction","A_pre","rho_mode",
+                "mode_status","E_Y_at_40","dominant"),
+                [{"mode_id":1,"energy_fraction":.96,"A_pre":1,"rho_mode":1,
+                  "mode_status":"STAGNATING","E_Y_at_40":.9,"dominant":1}])
+            trajectory=root/"trajectory.csv"
+            write_csv(trajectory,("iteration","residual_global_pdot_norm",
+                "new_POD_f_Q","mode_id","absolute_modal_amplitude"),
+                [{"iteration":k,"residual_global_pdot_norm":1,
+                  "new_POD_f_Q":.95,"mode_id":1,
+                  "absolute_modal_amplitude":1} for k in range(20,41)])
+            overlap=root/"overlap.csv"
+            write_csv(overlap,("old_E2_mode","new_F3_mode",
+                "absolute_global_pdot_overlap"),
+                [{"old_E2_mode":i,"new_F3_mode":1,
+                  "absolute_global_pdot_overlap":.5} for i in (1,2)])
+            fields=("case","iteration","restart_cycle","krylov_recursive",
+                "krylov_explicit","krylov_drift","continuity_numerator",
+                "continuity_denominator","continuity_relative","momentum_numerator",
+                "momentum_denominator","momentum_relative","momentum_rms",
+                "cumulative_inner_solves","cumulative_inner_cycles",
+                "cumulative_K_gamma_applications","cumulative_schur_actions",
+                "cumulative_preconditioner_applications","restart_boundary",
+                "best_iterate","final_iterate")
+            run_rows=[]
+            for k in range(1,61):
+                row={name:1 for name in fields}; row.update({"case":"F3_BASE",
+                    "iteration":k,"restart_cycle":1+(k-1)//50})
+                run_rows.append(row)
+            current=root/"current.csv"; source=root/"source.csv"
+            write_csv(current,fields,run_rows); write_csv(source,fields,run_rows)
+            decision=root/"decision.json"; audit=root/"audit.json"
+            subprocess.run([sys.executable,str(ROOT/"tools/analyze_strict_ala_stage_F3_pod_refresh.py"),
+                "--thresholds",str(threshold),"--raw",str(raw),
+                "--spectrum",str(spectrum),"--modes",str(modes),
+                "--trajectory",str(trajectory),"--overlap",str(overlap),
+                "--current-iterations",str(current),"--source-iterations",str(source),
+                "--decision",str(decision),"--audit",str(audit)],check=True)
+            value=json.loads(decision.read_text())
+            self.assertTrue(value["experiment_valid"])
+            self.assertEqual(value["NEXT_DIRECTION"],
+                             "GLOBAL_REACHABILITY_OR_DEFLATION_DESIGN")
 
 
 if __name__ == "__main__":

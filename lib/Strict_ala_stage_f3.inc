@@ -13,6 +13,10 @@
 #define ALA_F3_SPACES 3
 #define ALA_F3_ALL 0
 #define ALA_F3_CYCLE 1
+#define ALA_F3_REFRESH_FIRST 20
+#define ALA_F3_REFRESH_LAST 40
+#define ALA_F3_REFRESH_COUNT 21
+#define ALA_F3_REFRESH_MAX_MODES 8
 
 struct ala_f3_basis {
     double **q[ALA_F3_MAX_BASIS];
@@ -35,6 +39,22 @@ struct ala_f3_state {
     double viscosity_min,viscosity_max,viscosity_contrast;
     double viscosity_lower_fraction,viscosity_upper_fraction;
     long long viscosity_count;
+    int pod_refresh_enabled,pod_refresh_count;
+    int pod_refresh_iterations[ALA_F3_REFRESH_COUNT];
+    double **pod_refresh_snapshot[ALA_F3_REFRESH_COUNT];
+    double pod_refresh_cumulative_energy;
+    double pod_refresh_explanation_median;
+    double pod_refresh_explanation_at_40;
+    double pod_refresh_weighted_y_error;
+    int pod_refresh_selected,pod_refresh_well_explained;
+    int pod_refresh_y_reachable;
+    double pod_refresh_energy_target,pod_refresh_dominant_floor;
+    double pod_refresh_explanation_median_gate;
+    double pod_refresh_explanation_final_gate;
+    double pod_refresh_y_mode_gate,pod_refresh_y_weighted_gate;
+    double pod_refresh_significance_floor;
+    double pod_refresh_stagnating_gate,pod_refresh_decaying_gate;
+    struct ala_f3_basis pod_refresh_y_at_40;
 };
 
 static int strict_ala_stage_f3_fixed_reference_pass(void *state)
@@ -75,6 +95,19 @@ static int ala_f3_parse_csv_ints(const char *text,int *values,int count)
         else if(*end!='\0') return 0;
     }
     return 1;
+}
+
+static double ala_f3_required_env_double(struct All_variables *E,
+                                         const char *name)
+{
+    const char *text=getenv(name);
+    char *end;
+    double value;
+    if(text==NULL) myerror(E,"Missing strict-ALA F3 POD-refresh threshold");
+    value=strtod(text,&end);
+    if(end==text || *end!='\0' || !isfinite(value))
+        myerror(E,"Invalid strict-ALA F3 POD-refresh threshold");
+    return value;
 }
 
 /* EVI at levmax is the integration-point field consumed by stiffness
@@ -345,6 +378,41 @@ static void *strict_ala_stage_f3_begin(struct All_variables *E,int lev,
     s->fixed_reference_pass=0;
     if(getenv("STRICT_ALA_STAGE_F3_FIXED_REFERENCE_PASS")!=NULL)
         s->fixed_reference_pass=(strcmp(getenv("STRICT_ALA_STAGE_F3_FIXED_REFERENCE_PASS"),"1")==0);
+    s->pod_refresh_enabled=getenv("STRICT_ALA_STAGE_F3_POD_REFRESH")!=NULL &&
+        strcmp(getenv("STRICT_ALA_STAGE_F3_POD_REFRESH"),"1")==0;
+    if(s->pod_refresh_enabled) {
+        const char *first_env=getenv("STRICT_ALA_STAGE_F3_REFRESH_FIRST");
+        const char *last_env=getenv("STRICT_ALA_STAGE_F3_REFRESH_LAST");
+        const char *cap_env=getenv("STRICT_ALA_STAGE_F3_REFRESH_MODE_CAP");
+        if(first_env==NULL || last_env==NULL || cap_env==NULL ||
+           atoi(first_env)!=ALA_F3_REFRESH_FIRST ||
+           atoi(last_env)!=ALA_F3_REFRESH_LAST ||
+           atoi(cap_env)!=ALA_F3_REFRESH_MAX_MODES)
+            myerror(E,"F3 POD-refresh integer threshold contract mismatch");
+        s->pod_refresh_energy_target=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_ENERGY_TARGET");
+        s->pod_refresh_dominant_floor=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_DOMINANT_ENERGY_FLOOR");
+        s->pod_refresh_explanation_median_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_EXPLANATION_MEDIAN_GATE");
+        s->pod_refresh_explanation_final_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_EXPLANATION_FINAL_GATE");
+        s->pod_refresh_y_mode_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_Y_MODE_GATE");
+        s->pod_refresh_y_weighted_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_Y_WEIGHTED_GATE");
+        s->pod_refresh_significance_floor=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_SIGNIFICANCE_FLOOR");
+        s->pod_refresh_stagnating_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_STAGNATING_GATE");
+        s->pod_refresh_decaying_gate=ala_f3_required_env_double(E,
+            "STRICT_ALA_STAGE_F3_REFRESH_DECAYING_GATE");
+        if(s->pod_refresh_energy_target<=0.0 ||
+           s->pod_refresh_energy_target>1.0 ||
+           s->pod_refresh_dominant_floor<0.0 ||
+           s->pod_refresh_dominant_floor>1.0)
+            myerror(E,"Invalid strict-ALA F3 POD-refresh threshold range");
+    }
     snprintf(s->output_dir,sizeof(s->output_dir),"%s",output_dir);
     snprintf(s->manifest_sha256,sizeof(s->manifest_sha256),"%.64s",manifest_env);
     snprintf(s->threshold_contract_sha256,sizeof(s->threshold_contract_sha256),
@@ -506,6 +574,16 @@ static void strict_ala_stage_f3_direction(struct All_variables *E,void *state,
         ala_f3_qr_insert(E,s,&s->basis[x][ALA_F3_CYCLE],vector[x],
             ala_f3_space_name[x],"CYCLE",iteration,qr_floor,rank_fp);
     }
+    if(s->pod_refresh_enabled && iteration==ALA_F3_REFRESH_LAST) {
+        struct ala_f3_basis *source=&s->basis[2][ALA_F3_ALL];
+        if(s->pod_refresh_y_at_40.rank!=0)
+            myerror(E,"F3 POD-refresh duplicate Y_40 capture");
+        for(i=0;i<source->rank;i++) {
+            s->pod_refresh_y_at_40.q[i]=ala_schur_alloc_pressure(E,s->lev);
+            ala_f3_copy(E,s->pod_refresh_y_at_40.q[i],source->q[i],s->lev);
+            s->pod_refresh_y_at_40.rank++;
+        }
+    }
     if(rank_fp) fclose(rank_fp);
     if(E->parallel.me==0)
         projection_fp=ala_f3_open_root(E,s,
@@ -548,6 +626,19 @@ static void strict_ala_stage_f3_residual(struct All_variables *E,void *state,
     if(s==NULL || !s->enabled) return;
     norm=ala_f3_norm(E,residual,s->lev);
     if(norm<0.0) myerror(E,"Stage-F3 nonfinite pressure residual");
+    if(s->pod_refresh_enabled && iteration>=ALA_F3_REFRESH_FIRST &&
+       iteration<=ALA_F3_REFRESH_LAST) {
+        if(s->pod_refresh_count>=ALA_F3_REFRESH_COUNT ||
+           (s->pod_refresh_count>0 &&
+            s->pod_refresh_iterations[s->pod_refresh_count-1]>=iteration))
+            myerror(E,"F3 POD-refresh residual schedule mismatch");
+        s->pod_refresh_snapshot[s->pod_refresh_count]=
+            ala_schur_alloc_pressure(E,s->lev);
+        ala_f3_copy(E,s->pod_refresh_snapshot[s->pod_refresh_count],
+                    residual,s->lev);
+        s->pod_refresh_iterations[s->pod_refresh_count]=iteration;
+        s->pod_refresh_count++;
+    }
     if(E->parallel.me==0)
         mode_fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_mode_coefficients.csv","a");
     for(i=0;i<s->selected;i++) {
@@ -582,6 +673,246 @@ static void strict_ala_stage_f3_residual(struct All_variables *E,void *state,
             fclose(restart_fp);
         }
     }
+}
+
+static double ala_f3_refresh_median(double *input,int count)
+{
+    double work[ALA_F3_REFRESH_COUNT],value;
+    int i,j;
+    for(i=0;i<count;i++) work[i]=input[i];
+    for(i=1;i<count;i++) {
+        value=work[i];
+        for(j=i;j>0 && work[j-1]>value;j--) work[j]=work[j-1];
+        work[j]=value;
+    }
+    if(count%2) return work[count/2];
+    return 0.5*(work[count/2-1]+work[count/2]);
+}
+
+/* Complete the bounded F3-to-F4 bridge while the actual production Q_Y basis
+ * and the k=20..40 residual snapshots are still resident.  No reference
+ * Schur action is performed in this path. */
+static void ala_f3_pod_refresh_finalize(struct All_variables *E,
+    struct ala_f3_state *s)
+{
+    double cov[ALA_F3_REFRESH_COUNT*ALA_F3_REFRESH_COUNT];
+    double values[ALA_F3_REFRESH_COUNT];
+    double vectors[ALA_F3_REFRESH_COUNT*ALA_F3_REFRESH_COUNT];
+    double norms[ALA_F3_REFRESH_COUNT];
+    double **mode[ALA_F3_REFRESH_MAX_MODES];
+    double energy[ALA_F3_REFRESH_MAX_MODES];
+    double yerror[ALA_F3_REFRESH_MAX_MODES];
+    double rho[ALA_F3_REFRESH_MAX_MODES];
+    double apre[ALA_F3_REFRESH_MAX_MODES];
+    double amplitude[ALA_F3_REFRESH_MAX_MODES][ALA_F3_REFRESH_COUNT];
+    double f_q[ALA_F3_REFRESH_COUNT],residual_norm[ALA_F3_REFRESH_COUNT];
+    double overlap[ALA_F3_MAX_MODES][ALA_F3_REFRESH_MAX_MODES];
+    double pre_values[10],late_values[10],rpre_values[10];
+    double total=0.0,cumulative=0.0,projected2,coefficient,mode_norm;
+    double weighted_y2=0.0,selected_weight=0.0,rpre;
+    double max_abs,sign_coefficient,orth_defect=0.0,dot;
+    unsigned long long checksums[ALA_F3_REFRESH_MAX_MODES];
+    const char *status[ALA_F3_REFRESH_MAX_MODES];
+    const char *direction;
+    FILE *fp=NULL;
+    double *local_cov;
+    int i,j,k,m,e,max_index,dominant_slow=0,dominant_count=0;
+    int all_dominant_reachable=1;
+    int compact,explanation_pass;
+    if(s->pod_refresh_count!=ALA_F3_REFRESH_COUNT)
+        myerror(E,"F3 POD-refresh plateau snapshots incomplete");
+    for(i=0;i<ALA_F3_REFRESH_COUNT;i++) {
+        if(s->pod_refresh_iterations[i]!=ALA_F3_REFRESH_FIRST+i)
+            myerror(E,"F3 POD-refresh plateau window is not contiguous");
+    }
+    local_cov=(double *)calloc(ALA_F3_REFRESH_COUNT*ALA_F3_REFRESH_COUNT,
+                               sizeof(double));
+    if(local_cov==NULL) myerror(E,"F3 POD-refresh covariance allocation failed");
+    for(i=0;i<ALA_F3_REFRESH_COUNT;i++) for(j=i;j<ALA_F3_REFRESH_COUNT;j++) {
+        dot=0.0;
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(e=1;e<=E->lmesh.NPNO[s->lev];e++)
+                dot+=s->pod_refresh_snapshot[i][m][e]
+                    *s->pod_refresh_snapshot[j][m][e];
+        local_cov[i*ALA_F3_REFRESH_COUNT+j]=
+            local_cov[j*ALA_F3_REFRESH_COUNT+i]=dot;
+    }
+    MPI_Allreduce(local_cov,cov,ALA_F3_REFRESH_COUNT*ALA_F3_REFRESH_COUNT,
+                  MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    free(local_cov);
+    if(!ala_e2_pod(cov,ALA_F3_REFRESH_COUNT,0,values,vectors,norms))
+        myerror(E,"F3 POD-refresh eigensystem failed");
+    for(i=0;i<ALA_F3_REFRESH_COUNT;i++) total+=values[i];
+    s->pod_refresh_selected=0;
+    for(i=0;i<ALA_F3_REFRESH_COUNT &&
+              s->pod_refresh_selected<ALA_F3_REFRESH_MAX_MODES;i++) {
+        if(values[i]<=ALA_F3_REFRESH_COUNT*DBL_EPSILON*
+                      max(values[0],1.0)) break;
+        energy[s->pod_refresh_selected]=values[i]/max(total,1.0e-300);
+        cumulative+=energy[s->pod_refresh_selected];
+        s->pod_refresh_selected++;
+        if(cumulative>=s->pod_refresh_energy_target) break;
+    }
+    if(s->pod_refresh_selected<1)
+        myerror(E,"F3 POD-refresh selected no mode");
+    s->pod_refresh_cumulative_energy=cumulative;
+    for(i=0;i<s->pod_refresh_selected;i++) {
+        max_index=0; max_abs=fabs(vectors[i]);
+        for(j=1;j<ALA_F3_REFRESH_COUNT;j++)
+            if(fabs(vectors[j*ALA_F3_REFRESH_COUNT+i])>max_abs) {
+                max_abs=fabs(vectors[j*ALA_F3_REFRESH_COUNT+i]);
+                max_index=j;
+            }
+        sign_coefficient=vectors[max_index*ALA_F3_REFRESH_COUNT+i];
+        if(sign_coefficient<0.0)
+            for(j=0;j<ALA_F3_REFRESH_COUNT;j++)
+                vectors[j*ALA_F3_REFRESH_COUNT+i]=
+                    -vectors[j*ALA_F3_REFRESH_COUNT+i];
+        mode[i]=ala_schur_alloc_pressure(E,s->lev);
+        for(j=0;j<ALA_F3_REFRESH_COUNT;j++) {
+            coefficient=vectors[j*ALA_F3_REFRESH_COUNT+i];
+            ala_f3_axpy(E,mode[i],coefficient,s->pod_refresh_snapshot[j],s->lev);
+        }
+        mode_norm=ala_f3_norm(E,mode[i],s->lev);
+        if(!isfinite(mode_norm) || mode_norm<=1.0e-30)
+            myerror(E,"F3 POD-refresh mode normalization failed");
+        ala_f3_scale(E,mode[i],1.0/mode_norm,s->lev);
+        checksums[i]=ala_f3_mode_checksum(E,mode[i],s->lev);
+        yerror[i]=ala_f3_projection_error(E,mode[i],
+            &s->pod_refresh_y_at_40,s->lev);
+        weighted_y2+=energy[i]*yerror[i]*yerror[i];
+        selected_weight+=energy[i];
+        if(energy[i]>=s->pod_refresh_dominant_floor) {
+            dominant_count++;
+            if(yerror[i]>s->pod_refresh_y_mode_gate)
+                all_dominant_reachable=0;
+        }
+        for(j=0;j<s->selected;j++)
+            overlap[j][i]=fabs(global_pdot(E,s->mode[j],mode[i],s->lev));
+    }
+    s->pod_refresh_weighted_y_error=sqrt(weighted_y2/
+        max(selected_weight,1.0e-300));
+    s->pod_refresh_y_reachable=dominant_count>0 && all_dominant_reachable &&
+        s->pod_refresh_weighted_y_error<=s->pod_refresh_y_weighted_gate;
+    for(i=0;i<s->pod_refresh_selected;i++) for(j=0;j<s->pod_refresh_selected;j++) {
+        dot=global_pdot(E,mode[i],mode[j],s->lev)-(i==j ? 1.0 : 0.0);
+        orth_defect=max(orth_defect,fabs(dot));
+    }
+    for(k=0;k<ALA_F3_REFRESH_COUNT;k++) {
+        residual_norm[k]=ala_f3_norm(E,s->pod_refresh_snapshot[k],s->lev);
+        projected2=0.0;
+        for(i=0;i<s->pod_refresh_selected;i++) {
+            coefficient=global_pdot(E,mode[i],s->pod_refresh_snapshot[k],s->lev);
+            amplitude[i][k]=fabs(coefficient);
+            projected2+=coefficient*coefficient;
+        }
+        f_q[k]=projected2/max(residual_norm[k]*residual_norm[k],1.0e-300);
+        if(k<10) rpre_values[k]=residual_norm[k];
+    }
+    s->pod_refresh_explanation_median=ala_f3_refresh_median(
+        f_q,ALA_F3_REFRESH_COUNT);
+    s->pod_refresh_explanation_at_40=f_q[ALA_F3_REFRESH_COUNT-1];
+    rpre=ala_f3_refresh_median(rpre_values,10);
+    for(i=0;i<s->pod_refresh_selected;i++) {
+        for(k=0;k<10;k++) pre_values[k]=amplitude[i][k];
+        for(k=0;k<10;k++) late_values[k]=amplitude[i][k+11];
+        apre[i]=ala_f3_refresh_median(pre_values,10);
+        if(apre[i]<s->pod_refresh_significance_floor*rpre) {
+            rho[i]=-1.0; status[i]="BELOW_SIGNIFICANCE_FLOOR";
+        }
+        else {
+            rho[i]=ala_f3_refresh_median(late_values,10)/apre[i];
+            if(rho[i]>=s->pod_refresh_stagnating_gate)
+                status[i]="STAGNATING";
+            else if(rho[i]<=s->pod_refresh_decaying_gate)
+                status[i]="DECAYING";
+            else status[i]="WEAK_DECAY";
+            if(energy[i]>=s->pod_refresh_dominant_floor &&
+               strcmp(status[i],"DECAYING")!=0) dominant_slow=1;
+        }
+    }
+    compact=cumulative>=s->pod_refresh_energy_target;
+    explanation_pass=s->pod_refresh_explanation_median>=
+            s->pod_refresh_explanation_median_gate &&
+        s->pod_refresh_explanation_at_40>=
+            s->pod_refresh_explanation_final_gate;
+    s->pod_refresh_well_explained=compact && explanation_pass;
+    if(!s->pod_refresh_well_explained)
+        direction="RESIDUAL_SUBSPACE_NOT_LOW_DIMENSIONAL_ENOUGH";
+    else if(dominant_slow && !s->pod_refresh_y_reachable)
+        direction="GLOBAL_REACHABILITY_OR_DEFLATION_DESIGN";
+    else
+        direction="SCHUR_PRECONDITIONER_OR_OPERATOR_REDESIGN";
+    if(E->parallel.me==0) {
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_refresh_spectrum.csv","w");
+        fprintf(fp,"mode_id,singular_value,singular_value_squared,energy_fraction,cumulative_energy,selected,checksum\n");
+        cumulative=0.0;
+        for(i=0;i<ALA_F3_REFRESH_COUNT;i++) {
+            cumulative+=values[i]/max(total,1.0e-300);
+            fprintf(fp,"%d,%.17e,%.17e,%.17e,%.17e,%d,",
+                i+1,sqrt(max(values[i],0.0)),values[i],
+                values[i]/max(total,1.0e-300),cumulative,
+                i<s->pod_refresh_selected);
+            if(i<s->pod_refresh_selected) fprintf(fp,"%016llx",checksums[i]);
+            fprintf(fp,"\n");
+        }
+        fclose(fp);
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_refresh_overlap.csv","w");
+        fprintf(fp,"old_E2_mode,new_F3_mode,absolute_global_pdot_overlap\n");
+        for(j=0;j<s->selected;j++) for(i=0;i<s->pod_refresh_selected;i++)
+            fprintf(fp,"%d,%d,%.17e\n",j+1,i+1,overlap[j][i]);
+        fclose(fp);
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_refresh_modes.csv","w");
+        fprintf(fp,"mode_id,energy_fraction,A_pre,rho_mode,mode_status,E_Y_at_40,dominant\n");
+        for(i=0;i<s->pod_refresh_selected;i++) {
+            fprintf(fp,"%d,%.17e,%.17e,",i+1,energy[i],apre[i]);
+            if(rho[i]>=0.0) fprintf(fp,"%.17e",rho[i]);
+            fprintf(fp,",%s,%.17e,%d\n",status[i],yerror[i],
+                energy[i]>=s->pod_refresh_dominant_floor);
+        }
+        fclose(fp);
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_refresh_trajectory.csv","w");
+        fprintf(fp,"iteration,residual_global_pdot_norm,new_POD_f_Q,mode_id,absolute_modal_amplitude\n");
+        for(k=0;k<ALA_F3_REFRESH_COUNT;k++)
+            for(i=0;i<s->pod_refresh_selected;i++)
+                fprintf(fp,"%d,%.17e,%.17e,%d,%.17e\n",
+                    s->pod_refresh_iterations[k],residual_norm[k],f_q[k],i+1,
+                    amplitude[i][k]);
+        fclose(fp);
+        fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_pod_refresh_raw.json","w");
+        fprintf(fp,"{\n  \"schema\":\"strict-ala-stage-F3-pod-refresh-raw-v1\",\n"
+            "  \"pressure_inner_product\":\"global_pdot_euclidean_pressure\",\n"
+            "  \"plateau_window\":[20,40],\n"
+            "  \"snapshot_count\":%d,\n  \"selected_mode_count\":%d,\n"
+            "  \"selected_cumulative_energy\":%.17e,\n"
+            "  \"orthogonality_max_abs_defect\":%.17e,\n"
+            "  \"median_f_Q\":%.17e,\n  \"f_Q_at_40\":%.17e,\n"
+            "  \"weighted_E_Y_at_40\":%.17e,\n"
+            "  \"well_explained\":%s,\n  \"Y_reachable_at_40\":%s,\n"
+            "  \"dominant_slow_mode_present\":%s,\n"
+            "  \"preliminary_next_direction\":\"%s\",\n"
+            "  \"deterministic_sign_rule\":\"largest_absolute_chronological_snapshot_coefficient_positive_earliest_tie\",\n"
+            "  \"reference_operator_actions_performed\":false,\n"
+            "  \"production_default_change_authorized\":false,\n"
+            "  \"complete\":true\n}\n",ALA_F3_REFRESH_COUNT,
+            s->pod_refresh_selected,s->pod_refresh_cumulative_energy,
+            orth_defect,s->pod_refresh_explanation_median,
+            s->pod_refresh_explanation_at_40,
+            s->pod_refresh_weighted_y_error,
+            s->pod_refresh_well_explained ? "true" : "false",
+            s->pod_refresh_y_reachable ? "true" : "false",
+            dominant_slow ? "true" : "false",direction);
+        fclose(fp);
+        fprintf(E->fp,"STRICT_ALA_STAGE_F3_POD_REFRESH_COMPLETE modes=%d "
+            "energy=%.17e median_f_Q=%.17e E_Y_weighted=%.17e direction=%s\n",
+            s->pod_refresh_selected,s->pod_refresh_cumulative_energy,
+            s->pod_refresh_explanation_median,
+            s->pod_refresh_weighted_y_error,direction);
+        fprintf(stderr,"STRICT_ALA_STAGE_F3_POD_REFRESH_COMPLETE modes=%d "
+            "direction=%s\n",s->pod_refresh_selected,direction);
+        fflush(E->fp); fflush(stderr);
+    }
+    for(i=0;i<s->pod_refresh_selected;i++) ala_schur_free_field(E,mode[i]);
 }
 
 static int ala_f3_accuracy_solve(struct All_variables *E, double **x,
@@ -1004,6 +1335,51 @@ static void strict_ala_stage_f3_finalize(struct All_variables *E,void *state,
     FILE *fp=NULL,*matrix_fp=NULL;
     if(s==NULL || !s->enabled || s->finalized) return;
     s->finalized=1;
+    if(s->pod_refresh_enabled) {
+        ala_f3_pod_refresh_finalize(E,s);
+        if(E->parallel.me==0) {
+            fp=ala_f3_open_root(E,s,"strict_ala_stage_F3_runtime.json","w");
+            fprintf(fp,"{\n  \"schema_id\":\"strict-ala-stage-F3-pod-refresh-runtime-raw\",\n"
+                "  \"actual_mpi_world_size\":%d,\n"
+                "  \"actual_restart\":%d,\n  \"actual_outer_budget\":%d,\n"
+                "  \"iterations\":%d,\n  \"joint_target_reached\":%s,\n"
+                "  \"best_R_cont\":%.17e,\n  \"final_R_cont\":%.17e,\n"
+                "  \"R_cont_target\":%.17e,\n"
+                "  \"plateau_window\":[20,40],\n"
+                "  \"stored_residual_vectors\":%d,\n"
+                "  \"Y_rank_at_iteration_40\":%d,\n"
+                "  \"bytes_per_pressure_vector_per_rank\":%lld,\n"
+                "  \"additional_refresh_bytes_per_rank\":%lld,\n"
+                "  \"reference_operator_actions_performed\":false,\n"
+                "  \"production_default_change_authorized\":false,\n"
+                "  \"complete\":true\n}\n",E->parallel.nproc,s->restart,
+                s->outer_budget,iterations,joint_target_reached ? "true" : "false",
+                best_continuity,final_continuity,continuity_target,
+                s->pod_refresh_count,s->pod_refresh_y_at_40.rank,
+                s->bytes_per_pressure_vector,
+                s->bytes_per_pressure_vector*(long long)(s->pod_refresh_count+
+                    s->pod_refresh_y_at_40.rank));
+            fclose(fp);
+            fprintf(E->fp,"STRICT_ALA_STAGE_F3_NUMERICAL_COMPLETE iterations=%d "
+                "pod_refresh=1 reference_actions=0\n",iterations);
+            fprintf(stderr,"STRICT_ALA_STAGE_F3_NUMERICAL_COMPLETE iterations=%d "
+                "pod_refresh=1 reference_actions=0\n",iterations);
+            fflush(E->fp); fflush(stderr);
+        }
+        for(i=0;i<s->pod_refresh_count;i++)
+            ala_schur_free_field(E,s->pod_refresh_snapshot[i]);
+        for(i=0;i<s->selected;i++) ala_schur_free_field(E,s->mode[i]);
+        for(i=s->selected;i<3;i++)
+            ala_schur_free_field(E,s->additivity_probe[i]);
+        for(i=0;i<ALA_F3_SPACES;i++) {
+            ala_f3_clear_basis(E,&s->basis[i][ALA_F3_ALL]);
+            ala_f3_clear_basis(E,&s->basis[i][ALA_F3_CYCLE]);
+        }
+        ala_f3_clear_basis(E,&s->pod_refresh_y_at_40);
+        ala_e2_free_observer(E,s->e0); ala_e2_free_observer(E,s->e1);
+        free(s);
+        return;
+    }
     for(i=0;i<s->selected;i++) { Sref[i]=NULL; Aq[i]=NULL; }
     for(i=0;i<3;i++) Aprobe[i]=NULL;
     for(i=0;i<s->selected;i++) {
