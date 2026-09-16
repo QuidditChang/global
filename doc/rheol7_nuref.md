@@ -19,8 +19,9 @@ viscosity eta/rho. No instantaneous temperature, visc0 multiplier, viscE/viscT,
 activation-volume or strain-rate law is introduced in this base calculation.
 Az equals Araw from the accepted Figure1 fits, excluding the B/C normalization
 offsets. Cold scaling affects only the anomaly exponent and leaves nuref unchanged.
-No input temperature clipping or empirical viscT offset is used: positive absolute
-temperature is required. Nonfinite or nonrepresentable float viscosities fail
+The solver clips rheology-input nodal temperatures to the configured bounds
+before interpolation (see below); the Kelvin kernel requires positive absolute
+temperature and uses no empirical viscT offset. Nonfinite or nonrepresentable float viscosities fail
 explicitly; the usual physical min/max caps are applied downstream.
 
 ## Frozen stages in lib/Steinberger_nuref.h
@@ -104,10 +105,12 @@ The existing limits remain after temperature/composition/strain-rate/plasticity/
 plate-boundary/channel corrections, before the two GP-to-node-to-GP filtering
 cycles. The maximum is visc_max where element-center radius > 0.89641 and
 5*visc_max below; the minimum is visc_min. These physical limits are not relocated.
-For rheol7, finite nodal temperatures used for viscosity are now clipped to [0,1]
-before Gauss-point interpolation, matching rheol3. E->T and Tref are unchanged.
-With T_K = Ttop + ref_temperature*T_nd, these bounds are 300 and 3700 K for
-the current experiments, matching their top and bottom boundary temperatures.
+For rheol7, finite nodal temperatures used for viscosity are clipped inline to
+the nondimensional interval [0,1] before Gauss-point interpolation, matching
+rheol3 and the last cluster-tested implementation. E->T and Tref are unchanged.
+The dimensional mapping remains cfg-driven:
+T_K = Ttop + (Tbottom-Ttop)*T_nd. The bounds therefore map to 300 and 3700 K
+for the current experiments, but those Kelvin values are not hardcoded.
 Nonfinite temperatures still fail validation. This protects rheology from finite
 thermal overshoots; it does not fix overshoots in the evolved temperature field.
 Invalid or unrepresentable raw viscosity
@@ -121,16 +124,24 @@ the rank log; MPI_Abort terminates the solver communicator so other ranks do not
 remain waiting for the failing rank. Other rheologies retain their error paths.
 
 Failures additionally carry the marker `rheol7_clip_diag_v1`, temperature scales,
-boundary types/values, effective clip bounds and individual failed-check flags
-(1 means failed). Each node reports its original and clipped temperature plus
+boundary types/values and the effective [0,1] clip bounds. Each node reports its
+original and clipped temperature plus
 the Gauss interpolation weight. A nonfinite interpolated rheology temperature
 is identified before calling the viscosity kernel. Finite out-of-range inputs
-are clipped; invalid settings/nonfinite inputs return NaN and abort, without a
-silent fallback to [0,1]. These diagnostics do not change the clipping policy.
+are clipped; nonfinite inputs remain nonfinite and abort.
 
 Run `python3 tests/test_rheol7_runtime.py` for the production bridge and diagnostic
 helpers with mocked Python property APIs and real two-process MPI abort tests.
 This does not replace a build and end-to-end run with the cluster's Python2/Pyre.
+
+Temperature scaling is already cfg-driven: DeltaT=Tbottom-Ttop and the offset
+is Ttop/DeltaT. The solver uses T_K=Ttop+DeltaT*T_nd for both actual and reference
+temperatures; 300, 3400 and 0.0882353 are not production rheol7 constants.
+refvisc, cold_scale and radius likewise come from solver inputs. The 1e21 Pa s
+factor in nuref is the dimensional calibration of the fitted profile, divided by
+the configurable refvisc; replacing that calibration with refvisc would change
+the physical fit. The fitted phase depths, Az, B/C and M2 coefficients remain
+frozen intentionally, as do the pre-existing downstream viscosity-limit rules.
 
 Run `python3 tests/test_rheol7_temperature_clip.py` to check the production nodal
 interpolation block with finite overshoots, unchanged in-range inputs, and
