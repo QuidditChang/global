@@ -74,8 +74,6 @@ void validate_rheol7_settings(struct All_variables *E)
     }
 }
 
-static double rheol7_nodal_temperature(struct All_variables *E, double temperature);
-
 static void rheol7_failure(struct All_variables *E, const char *reason,
                           int cap, int element, int gp, double depth,
                           double temperature_nd, double tref_K, double viscosity)
@@ -87,9 +85,8 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
     double az = steinberger_Az(depth);
     double scale = tk < tref_K ? E->viscosity.cold_scale : 1.0;
     double logeta = reference > 0.0 ? log(reference) : NAN;
-    double lower = E->mesh.toptbc == 1 ? E->control.TBCtopval : 0.0;
-    double upper = E->mesh.bottbc == 1 ? E->control.TBCbotval :
-                   (E->data.Tbottom-E->data.Ttop)/E->data.ref_temperature;
+    const double lower = 0.0;
+    const double upper = 1.0;
     if(E->viscosity.TDEPV)
         logeta += scale*az*(1.0/tk-1.0/tref_K);
     for(stream=0;stream<2;stream++) {
@@ -123,32 +120,21 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
         for(a=1;a<=enodes[E->mesh.nsd];a++) {
             int node = E->ien[cap][element].node[a];
             double raw = E->T[cap][node];
+            double clipped = raw;
             double weight = E->N.vpt[GNVINDEX(a,gp)];
+            if(isfinite(clipped)) {
+                if(clipped < lower) clipped = lower;
+                if(clipped > upper) clipped = upper;
+            }
             fprintf(fp,"rank=%d node=%d T_nd=%.9g node_nonfinite=%d "
                     "clipped_T_nd=%.17g weight=%.17g weight_nonfinite=%d\n",
                     E->parallel.me,node,raw,!isfinite(raw),
-                    rheol7_nodal_temperature(E,raw),weight,!isfinite(weight));
+                    clipped,weight,!isfinite(weight));
         }
         fflush(fp);
     }
     MPI_Abort(E->parallel.world,8);
     exit(8);
-}
-
-/* Boundary values are temperatures only for Dirichlet (type 1) BCs. */
-static double rheol7_nodal_temperature(struct All_variables *E, double temperature)
-{
-    double lower = E->mesh.toptbc == 1 ? E->control.TBCtopval : 0.0;
-    double upper = E->mesh.bottbc == 1 ? E->control.TBCbotval :
-                   (E->data.Tbottom-E->data.Ttop)/E->data.ref_temperature;
-    if(!isfinite(temperature) || !isfinite(lower) || !isfinite(upper) ||
-       !isfinite(E->data.Ttop) || !isfinite(E->data.ref_temperature) ||
-       E->data.ref_temperature <= 0.0 || lower >= upper ||
-       E->data.Ttop + E->data.ref_temperature*lower <= 0.0)
-        return NAN;
-    if(temperature < lower) return lower;
-    if(temperature > upper) return upper;
-    return temperature;
 }
 
 static double strict_rheology_reference_temperature(struct All_variables *E,
@@ -492,9 +478,13 @@ void visc_from_T(E,EEta,propogate)
                     double depth_km = 0.0;
                     double tref_K, temperature_nd = 0.0, viscosity;
                     for(kk=1;kk<=ends;kk++) {
-                        /* Bound rheology inputs using cfg before interpolation. */
-                        double nodal_temperature = rheol7_nodal_temperature(E,
-                            E->T[m][E->ien[m][i].node[kk]]);
+                        double nodal_temperature = E->T[m][E->ien[m][i].node[kk]];
+                        /* Match rheol=3: bound the nondimensional rheology input.
+                         * Ttop and DeltaT remain cfg-driven in the Kelvin conversion. */
+                        if(isfinite(nodal_temperature)) {
+                            if(nodal_temperature < 0.0) nodal_temperature = 0.0;
+                            if(nodal_temperature > 1.0) nodal_temperature = 1.0;
+                        }
                         depth_km += (1.0-E->sx[m][3][E->ien[m][i].node[kk]])
                                   * E->data.radius_km * E->N.vpt[GNVINDEX(kk,jj)];
                         temperature_nd += nodal_temperature

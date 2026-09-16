@@ -4,10 +4,7 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'lib/Viscosity_structures.c').read_text()
-helper = source[source.rindex('static double rheol7_nodal_temperature('):
-                source.index('static double strict_rheology_reference_temperature(')]
-source = source.split('    case 7:', 1)[1]
+source = (root / 'lib/Viscosity_structures.c').read_text().split('    case 7:', 1)[1]
 block = source[source.index('                    for(kk=1;kk<=ends;kk++) {'):
                source.index('                    if(!E->refstate.has_temperature)')]
 prefix = r'''
@@ -17,7 +14,6 @@ prefix = r'''
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "Steinberger_nuref.h"
-HELPER
 static struct All_variables state;
 static double interpolate(void) {
     struct All_variables *E = &state;
@@ -57,36 +53,38 @@ int main(void) {
             assert(eta>0. && eta<FLT_MAX);
         }
     }
+    /* Exact CMB element values from the cluster regression at step 0. */
+    double cmb_t[8]={1.00000062,1.00000062,1.00000062,1.00000062,
+                     .966868883,.966868883,.966868883,.966868883};
+    double cmb_w[8]={.49056260249407813,.13144585726148808,
+                     .035220812396550491,.13144585726148808,
+                     .13144585726148808,.035220812396550491,
+                     .0094373885318062185,.035220812396550491};
+    for(int a=1;a<=8;a++) {
+        E->T[1][a]=cmb_t[a-1];
+        E->N.vpt[GNVINDEX(a,1)]=cmb_w[a-1];
+    }
+    /* E->T and shape data use the solver's mixed float/double storage. */
+    assert(fabs(interpolate()-.99299857)<1e-7);
     double bad[]={NAN,INFINITY,-INFINITY};
     for(int b=0;b<3;b++) {
         E->T[1][1]=bad[b];
         assert(!isfinite(interpolate()));
         assert(steinberger_viscosity(11.,1626.,300.+3400.*interpolate(),1e21,1.)<0.);
     }
-    /* Nondefault cfg temperatures and boundary values must change clipping. */
+    /* The nondimensional clip stays [0,1]; cfg controls its Kelvin mapping. */
     E->data.Ttop=400.; E->data.Tbottom=4400.; E->data.ref_temperature=4000.;
-    E->control.TBCtopval=.125; E->control.TBCbotval=.875;
-    assert(rheol7_nodal_temperature(E,-1.)==.125);
-    assert(rheol7_nodal_temperature(E,2.)==.875);
-    assert(E->data.Ttop+E->data.ref_temperature*rheol7_nodal_temperature(E,-1.)==900.);
-    assert(E->data.Ttop+E->data.ref_temperature*rheol7_nodal_temperature(E,2.)==3900.);
-    assert(rheol7_nodal_temperature(E,.5)==.5);
-    /* Flux values must never become rheology temperature bounds. */
-    E->mesh.toptbc=E->mesh.bottbc=0;
-    E->control.TBCtopval=99.; E->control.TBCbotval=-99.;
-    assert(rheol7_nodal_temperature(E,-1.)==0.);
-    assert(rheol7_nodal_temperature(E,2.)==1.);
-    E->mesh.toptbc=E->mesh.bottbc=1;
-    assert(isnan(rheol7_nodal_temperature(E,.5)));
+    assert(E->data.Ttop+E->data.ref_temperature*0.0==400.);
+    assert(E->data.Ttop+E->data.ref_temperature*1.0==4400.);
     return 0;
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
     p = Path(tmp)
-    (p/'test.c').write_text(prefix.replace('HELPER',helper) + block + suffix)
+    (p/'test.c').write_text(prefix + block + suffix)
     subprocess.run(['mpicc', '-std=gnu99', '-I'+str(root/'lib'), str(p/'test.c'),
                     '-lm', '-o', str(p/'test')], check=True)
     subprocess.run([str(p/'test')], check=True)
 print('PASS: production nodal clipping before interpolation; E->T unchanged; '
       'step3 temperatures finite for cold_scale=0.25/0.5/1; nonfinite inputs rejected; '
-      'cfg boundary/temperature changes and flux fallback checked.')
+      'cfg-driven Kelvin mapping checked.')

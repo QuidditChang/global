@@ -105,14 +105,12 @@ The existing limits remain after temperature/composition/strain-rate/plasticity/
 plate-boundary/channel corrections, before the two GP-to-node-to-GP filtering
 cycles. The maximum is visc_max where element-center radius > 0.89641 and
 5*visc_max below; the minimum is visc_min. These physical limits are not relocated.
-For rheol7, finite nodal temperatures used for viscosity are clipped before
-Gauss-point interpolation. Bounds come from cfg toptbcval/bottbcval for fixed
-temperature (type 1) boundaries. For a non-Dirichlet boundary its bound instead
-uses the nondimensional Ttop/Tbottom endpoint; flux values are never interpreted
-as temperatures. Invalid, reversed or nonpositive-Kelvin bounds fail validation.
-The current cfg gives [0,1], matching rheol3. E->T and Tref are unchanged.
-With T_K = Ttop + ref_temperature*T_nd, these bounds are 300 and 3700 K for
-the current experiments, matching their top and bottom boundary temperatures.
+For rheol7, finite nodal temperatures used for viscosity are clipped inline to
+the nondimensional interval [0,1] before Gauss-point interpolation, matching
+rheol3 and the last cluster-tested implementation. E->T and Tref are unchanged.
+The dimensional mapping remains cfg-driven:
+T_K = Ttop + (Tbottom-Ttop)*T_nd. The bounds therefore map to 300 and 3700 K
+for the current experiments, but those Kelvin values are not hardcoded.
 Nonfinite temperatures still fail validation. This protects rheology from finite
 thermal overshoots; it does not fix overshoots in the evolved temperature field.
 Invalid or unrepresentable raw viscosity
@@ -126,12 +124,11 @@ the rank log; MPI_Abort terminates the solver communicator so other ranks do not
 remain waiting for the failing rank. Other rheologies retain their error paths.
 
 Failures additionally carry the marker `rheol7_clip_diag_v1`, temperature scales,
-boundary types/values, effective clip bounds and individual failed-check flags
-(1 means failed). Each node reports its original and clipped temperature plus
+boundary types/values and the effective [0,1] clip bounds. Each node reports its
+original and clipped temperature plus
 the Gauss interpolation weight. A nonfinite interpolated rheology temperature
 is identified before calling the viscosity kernel. Finite out-of-range inputs
-are clipped; invalid settings/nonfinite inputs return NaN and abort, without a
-silent fallback to [0,1]. These diagnostics do not change the clipping policy.
+are clipped; nonfinite inputs remain nonfinite and abort.
 
 Run `python3 tests/test_rheol7_runtime.py` for the production bridge and diagnostic
 helpers with mocked Python property APIs and real two-process MPI abort tests.
