@@ -452,9 +452,16 @@ void visc_from_T(E,EEta,propogate)
                     double depth_km = 0.0;
                     double tref_K, temperature_nd = 0.0, viscosity;
                     for(kk=1;kk<=ends;kk++) {
+                        double nodal_temperature = E->T[m][E->ien[m][i].node[kk]];
+                        /* Match rheol=3: bound rheology inputs before interpolation.
+                         * Preserve E->T and let nonfinite inputs fail validation. */
+                        if(isfinite(nodal_temperature)) {
+                            if(nodal_temperature < 0.0) nodal_temperature = 0.0;
+                            if(nodal_temperature > 1.0) nodal_temperature = 1.0;
+                        }
                         depth_km += (1.0-E->sx[m][3][E->ien[m][i].node[kk]])
                                   * E->data.radius_km * E->N.vpt[GNVINDEX(kk,jj)];
-                        temperature_nd += E->T[m][E->ien[m][i].node[kk]]
+                        temperature_nd += nodal_temperature
                                         * E->N.vpt[GNVINDEX(kk,jj)];
                     }
                     if(!E->refstate.has_temperature)
