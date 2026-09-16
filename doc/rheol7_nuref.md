@@ -125,6 +125,14 @@ logarithm, plus element nodal temperatures. Runtime diagnostics go to stderr and
 the rank log; MPI_Abort terminates the solver communicator so other ranks do not
 remain waiting for the failing rank. Other rheologies retain their error paths.
 
+Failures additionally carry the marker `rheol7_clip_diag_v1`, temperature scales,
+boundary types/values, effective clip bounds and individual failed-check flags
+(1 means failed). Each node reports its original and clipped temperature plus
+the Gauss interpolation weight. A nonfinite interpolated rheology temperature
+is identified before calling the viscosity kernel. Finite out-of-range inputs
+are clipped; invalid settings/nonfinite inputs return NaN and abort, without a
+silent fallback to [0,1]. These diagnostics do not change the clipping policy.
+
 Run `python3 tests/test_rheol7_runtime.py` for the production bridge and diagnostic
 helpers with mocked Python property APIs and real two-process MPI abort tests.
 This does not replace a build and end-to-end run with the cluster's Python2/Pyre.

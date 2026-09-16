@@ -74,6 +74,8 @@ void validate_rheol7_settings(struct All_variables *E)
     }
 }
 
+static double rheol7_nodal_temperature(struct All_variables *E, double temperature);
+
 static void rheol7_failure(struct All_variables *E, const char *reason,
                           int cap, int element, int gp, double depth,
                           double temperature_nd, double tref_K, double viscosity)
@@ -85,6 +87,9 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
     double az = steinberger_Az(depth);
     double scale = tk < tref_K ? E->viscosity.cold_scale : 1.0;
     double logeta = reference > 0.0 ? log(reference) : NAN;
+    double lower = E->mesh.toptbc == 1 ? E->control.TBCtopval : 0.0;
+    double upper = E->mesh.bottbc == 1 ? E->control.TBCbotval :
+                   (E->data.Tbottom-E->data.Ttop)/E->data.ref_temperature;
     if(E->viscosity.TDEPV)
         logeta += scale*az*(1.0/tk-1.0/tref_K);
     for(stream=0;stream<2;stream++) {
@@ -101,9 +106,28 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
                 reference,viscosity,logeta,(double)FLT_MAX,
                 E->viscosity.MIN,E->viscosity.min_value,
                 E->viscosity.MAX,E->viscosity.max_value);
+        fprintf(fp,"rheol7_clip_diag_v1 rank=%d Ttop_K=%.17g Tbottom_K=%.17g "
+                "DeltaT_K=%.17g toptbc=%d bottbc=%d toptbcval=%.17g bottbcval=%.17g\n"
+                "clip_lower_nd=%.17g clip_upper_nd=%.17g clip_lower_K=%.17g "
+                "clip_upper_K=%.17g\n"
+                "clip_checks_failed: lower_nonfinite=%d upper_nonfinite=%d "
+                "Ttop_nonfinite=%d DeltaT_nonfinite=%d DeltaT_nonpositive=%d "
+                "bounds_unordered=%d lower_K_nonpositive=%d\n",
+                E->parallel.me,E->data.Ttop,E->data.Tbottom,E->data.ref_temperature,
+                E->mesh.toptbc,E->mesh.bottbc,E->control.TBCtopval,E->control.TBCbotval,
+                lower,upper,E->data.Ttop+E->data.ref_temperature*lower,
+                E->data.Ttop+E->data.ref_temperature*upper,
+                !isfinite(lower),!isfinite(upper),!isfinite(E->data.Ttop),
+                !isfinite(E->data.ref_temperature),E->data.ref_temperature<=0.0,
+                lower>=upper,E->data.Ttop+E->data.ref_temperature*lower<=0.0);
         for(a=1;a<=enodes[E->mesh.nsd];a++) {
             int node = E->ien[cap][element].node[a];
-            fprintf(fp,"node=%d T_nd=%.9g\n",node,E->T[cap][node]);
+            double raw = E->T[cap][node];
+            double weight = E->N.vpt[GNVINDEX(a,gp)];
+            fprintf(fp,"rank=%d node=%d T_nd=%.9g node_nonfinite=%d "
+                    "clipped_T_nd=%.17g weight=%.17g weight_nonfinite=%d\n",
+                    E->parallel.me,node,raw,!isfinite(raw),
+                    rheol7_nodal_temperature(E,raw),weight,!isfinite(weight));
         }
         fflush(fp);
     }
@@ -481,6 +505,9 @@ void visc_from_T(E,EEta,propogate)
                                        depth_km,temperature_nd,NAN,NAN);
                     tref_K = E->data.Ttop + E->data.ref_temperature
                            * strict_rheology_reference_temperature(E,m,i,jj);
+                    if(E->viscosity.TDEPV && !isfinite(temperature_nd))
+                        rheol7_failure(E,"nonfinite rheology temperature: inspect clipping checks, nodes and weights",
+                                       m,i,jj,depth_km,temperature_nd,tref_K,NAN);
                     viscosity = steinberger_nuref(depth_km,tref_K,E->data.ref_viscosity);
                     if(viscosity <= 0.)
                         rheol7_failure(E,"invalid reference viscosity",m,i,jj,
