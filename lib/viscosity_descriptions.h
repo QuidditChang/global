@@ -81,6 +81,7 @@ struct VISC_OPT {
 
     int SDEPV;
     float sdepv_misfit;
+    float cold_scale; /* rheol=7 cold-side activation multiplier, default 0.5 */
     int sdepv_normalize,sdepv_visited;
     float sdepv_expt[40];
     float sdepv_trns[40];

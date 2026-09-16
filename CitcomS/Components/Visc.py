@@ -80,6 +80,7 @@ class Visc(CitcomComponent):
 
         TDEPV = pyre.inventory.bool("TDEPV", default=False)
         rheol = pyre.inventory.int("rheol", default=3)
+        cold_scale = pyre.inventory.float("cold_scale", default=0.5)
         viscE = pyre.inventory.list("viscE", default=[1, 1, 1, 1])
         viscT = pyre.inventory.list("viscT", default=[1, 1, 1, 1])
         viscZ = pyre.inventory.list("viscZ", default=[1, 1, 1, 1])

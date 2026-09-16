@@ -31,10 +31,12 @@
 
 
 #include <math.h>
+#include <float.h>
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "parsing.h"
+#include "Steinberger_nuref.h"
 
 
 void myerror(struct All_variables *,char *);
@@ -101,6 +103,10 @@ void viscosity_system_input(struct All_variables *E)
     /* read in information */
     input_boolean("VISC_UPDATE",&(E->viscosity.update_allowed),"on",m);
     input_int("rheol",&(E->viscosity.RHEOL),"3",m);
+    input_float("cold_scale",&(E->viscosity.cold_scale),"0.5",m);
+    if(E->viscosity.RHEOL == 7 &&
+       (!isfinite(E->viscosity.cold_scale) || E->viscosity.cold_scale < 0.0))
+        myerror(E,"rheol=7 requires finite cold_scale >= 0");
     input_int("num_mat",&(E->viscosity.num_mat),"1",m);
     input_float_vector("visc0",E->viscosity.num_mat,(E->viscosity.N0),m);
 
@@ -237,7 +243,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
 	find_trench_location(E);
     }*/
 
-    if(E->viscosity.TDEPV)
+    if(E->viscosity.TDEPV || E->viscosity.RHEOL == 7)
         visc_from_T(E,evisc,propogate);
     else
         visc_from_mat(E,evisc);
@@ -385,6 +391,34 @@ void visc_from_T(E,EEta,propogate)
     imark = 0;
 
     switch (E->viscosity.RHEOL)   {
+    case 7: /* M2-A nuref times Az temperature correction; cold scale from cfg. */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++)
+                for(jj=1;jj<=vpts;jj++) {
+                    double depth_km = 0.0;
+                    double tref_K, temperature_nd = 0.0, viscosity;
+                    for(kk=1;kk<=ends;kk++)
+                        depth_km += (1.0-E->sx[m][3][E->ien[m][i].node[kk]])
+                                  * E->data.radius_km * E->N.vpt[GNVINDEX(kk,jj)];
+                    tref_K = E->data.Ttop + E->data.ref_temperature
+                           * strict_rheology_reference_temperature(E,m,i,jj);
+                    viscosity = steinberger_nuref(depth_km,tref_K,E->data.ref_viscosity);
+                    if(viscosity <= 0.)
+                        myerror(E,"rheol=7 requires 0-2891 km, positive Tref(K) and refvisc");
+                    if(E->viscosity.TDEPV) {
+                        for(kk=1;kk<=ends;kk++)
+                            temperature_nd += E->T[m][E->ien[m][i].node[kk]]
+                                            * E->N.vpt[GNVINDEX(kk,jj)];
+                        viscosity = steinberger_viscosity(depth_km,tref_K,
+                            E->data.Ttop + E->data.ref_temperature*temperature_nd,
+                            E->data.ref_viscosity,E->viscosity.cold_scale);
+                    }
+                    if(viscosity <= 0. || viscosity > FLT_MAX)
+                        myerror(E,"rheol=7: invalid temperature or viscosity outside float range");
+                    EEta[m][(i-1)*vpts+jj] = viscosity;
+                }
+        break;
+
     case 1:                     /* eta = N_0 exp( E * (T_0 - T))  */
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(i=1;i<=nel;i++)   {

@@ -76,6 +76,7 @@ sources = \
 	element_definitions.h \
 	General_matrix_functions.c \
 	global_defs.h \
+	Steinberger_nuref.h \
 	Ggrd_handling.c \
 	Global_operations.c \
 	hdf5_related.h \
