@@ -53,10 +53,67 @@ static void record_tracer_visc();
 static void read_tracer_visc();
 static void read_tracer_visc22();
 static void get_shape_functions();
+void parallel_process_termination();
+
+/* Shared by the standalone parser and the Pyre property bridge. */
+void validate_rheol7_settings(struct All_variables *E)
+{
+    if(E->viscosity.RHEOL != 7)
+        return;
+    if(!isfinite(E->viscosity.cold_scale) || E->viscosity.cold_scale < 0.0) {
+        fprintf(stderr,"rheol=7 rank=%d: cold_scale must be finite and >= 0; got %.9g\n",
+                E->parallel.me,E->viscosity.cold_scale);
+        fflush(stderr);
+        MPI_Abort(E->parallel.world,8);
+        exit(8);
+    }
+    if(E->parallel.me == 0) {
+        fprintf(stderr,"rheol=7: TDEPV=%d cold_scale=%.9g hot_scale=1\n",
+                E->viscosity.TDEPV,E->viscosity.cold_scale);
+        fflush(stderr);
+    }
+}
+
+static void rheol7_failure(struct All_variables *E, const char *reason,
+                          int cap, int element, int gp, double depth,
+                          double temperature_nd, double tref_K, double viscosity)
+{
+    int a, stream;
+    FILE *fp;
+    double tk = E->data.Ttop + E->data.ref_temperature*temperature_nd;
+    double reference = steinberger_nuref(depth,tref_K,E->data.ref_viscosity);
+    double az = steinberger_Az(depth);
+    double scale = tk < tref_K ? E->viscosity.cold_scale : 1.0;
+    double logeta = reference > 0.0 ? log(reference) : NAN;
+    if(E->viscosity.TDEPV)
+        logeta += scale*az*(1.0/tk-1.0/tref_K);
+    for(stream=0;stream<2;stream++) {
+        fp = stream == 0 ? stderr : E->fp;
+        if(!fp || (stream == 1 && fp == stderr)) continue;
+        fprintf(fp,"rheol=7 fatal: %s; rank=%d step=%d cap=%d element=%d gp=%d\n"
+                "depth_km=%.17g T_nd=%.17g T_K=%.17g Tref_K=%.17g "
+                "refvisc=%.17g Az_K=%.17g cold_scale=%.9g side_scale=%.17g TDEPV=%d\n"
+                "nuref=%.17g eta=%.17g ln_eta=%.17g FLT_MAX=%.9g "
+                "VMIN=%d min=%.9g VMAX=%d max=%.9g (limits applied later)\n",
+                reason,E->parallel.me,E->monitor.solution_cycles,cap,element,gp,
+                depth,temperature_nd,tk,tref_K,E->data.ref_viscosity,az,
+                E->viscosity.cold_scale,scale,E->viscosity.TDEPV,
+                reference,viscosity,logeta,(double)FLT_MAX,
+                E->viscosity.MIN,E->viscosity.min_value,
+                E->viscosity.MAX,E->viscosity.max_value);
+        for(a=1;a<=enodes[E->mesh.nsd];a++) {
+            int node = E->ien[cap][element].node[a];
+            fprintf(fp,"node=%d T_nd=%.9g\n",node,E->T[cap][node]);
+        }
+        fflush(fp);
+    }
+    MPI_Abort(E->parallel.world,8);
+    exit(8);
+}
+
 static double strict_rheology_reference_temperature(struct All_variables *E,
                                                      int cap, int element,
                                                      int gp);
-void parallel_process_termination();
 
 
 void viscosity_system_input(struct All_variables *E)
@@ -85,13 +142,11 @@ void viscosity_system_input(struct All_variables *E)
     input_boolean("VISC_UPDATE",&(E->viscosity.update_allowed),"on",m);
     input_int("rheol",&(E->viscosity.RHEOL),"3",m);
     input_float("cold_scale",&(E->viscosity.cold_scale),"0.5",m);
-    if(E->viscosity.RHEOL == 7 &&
-       (!isfinite(E->viscosity.cold_scale) || E->viscosity.cold_scale < 0.0))
-        myerror(E,"rheol=7 requires finite cold_scale >= 0");
     input_int("num_mat",&(E->viscosity.num_mat),"1",m);
     input_float_vector("visc0",E->viscosity.num_mat,(E->viscosity.N0),m);
 
     input_boolean("TDEPV",&(E->viscosity.TDEPV),"on",m);
+    validate_rheol7_settings(E);
     if (E->viscosity.TDEPV) {
         input_float_vector("viscT",E->viscosity.num_mat,(E->viscosity.T),m);
         input_float_vector("viscE",E->viscosity.num_mat,(E->viscosity.E),m);
@@ -413,24 +468,30 @@ void visc_from_T(E,EEta,propogate)
                 for(jj=1;jj<=vpts;jj++) {
                     double depth_km = 0.0;
                     double tref_K, temperature_nd = 0.0, viscosity;
-                    for(kk=1;kk<=ends;kk++)
+                    for(kk=1;kk<=ends;kk++) {
                         depth_km += (1.0-E->sx[m][3][E->ien[m][i].node[kk]])
                                   * E->data.radius_km * E->N.vpt[GNVINDEX(kk,jj)];
+                        temperature_nd += E->T[m][E->ien[m][i].node[kk]]
+                                        * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(!E->refstate.has_temperature)
+                        rheol7_failure(E,"missing reference-state Tref",m,i,jj,
+                                       depth_km,temperature_nd,NAN,NAN);
                     tref_K = E->data.Ttop + E->data.ref_temperature
                            * strict_rheology_reference_temperature(E,m,i,jj);
                     viscosity = steinberger_nuref(depth_km,tref_K,E->data.ref_viscosity);
                     if(viscosity <= 0.)
-                        myerror(E,"rheol=7 requires 0-2891 km, positive Tref(K) and refvisc");
+                        rheol7_failure(E,"invalid reference viscosity",m,i,jj,
+                                       depth_km,temperature_nd,tref_K,viscosity);
                     if(E->viscosity.TDEPV) {
-                        for(kk=1;kk<=ends;kk++)
-                            temperature_nd += E->T[m][E->ien[m][i].node[kk]]
-                                            * E->N.vpt[GNVINDEX(kk,jj)];
                         viscosity = steinberger_viscosity(depth_km,tref_K,
                             E->data.Ttop + E->data.ref_temperature*temperature_nd,
                             E->data.ref_viscosity,E->viscosity.cold_scale);
                     }
-                    if(viscosity <= 0. || viscosity > FLT_MAX)
-                        myerror(E,"rheol=7: invalid temperature or viscosity outside float range");
+                    if(!isfinite(viscosity) || viscosity <= 0. || viscosity > FLT_MAX ||
+                       (float)viscosity == 0.0f)
+                        rheol7_failure(E,"invalid temperature or viscosity outside float range",
+                                       m,i,jj,depth_km,temperature_nd,tref_K,viscosity);
                     EEta[m][(i-1)*vpts+jj] = viscosity;
                 }
         break;
