@@ -87,7 +87,33 @@ the current depth-dependent viscosity limits. Actual production uses Gauss-point
 viscosity; nodal limited values in the plot are illustrative. Outputs are in
 output/rheol7_initial_validation. This is not a full3D initialization or MPI solve.
 
-`cold_scale` is declared in both Pyre Visc inventory and the C parser. It must be
+`cold_scale` is declared in the Pyre Visc inventory, transferred to the C state
+by `pyCitcom_Visc_set_properties`, and read by the standalone C parser. It must be
 finite and nonnegative; 0 disables cold strengthening, 1 restores full Az.
 The hot-side exponent is independent of cold_scale. Rebuild the EBA solver including
 the Python component before using the new cfg/lsf; jobs are not auto-submitted.
+
+## Runtime binding and failure diagnostics
+
+Both input paths validate cold_scale and print rheol=7, TDEPV, cold_scale and
+hot_scale at startup. The property bridge also records cold_scale in its normal
+parameter output. This fixes an omitted Pyre-to-C assignment that left the
+malloc-allocated cold_scale field uninitialized.
+
+The existing limits remain after temperature/composition/strain-rate/plasticity/
+plate-boundary/channel corrections, before the two GP-to-node-to-GP filtering
+cycles. The maximum is visc_max where element-center radius > 0.89641 and
+5*visc_max below; the minimum is visc_min. No temperature clipping or relocation
+of these physical limits is introduced. Invalid or unrepresentable raw viscosity
+still fails before these limits; the kernel's fit and temperature formula are
+unchanged.
+
+Rheol7 failures report rank, step, local cap/element/Gauss point, depth, actual
+and reference temperature, Az, cold_scale, nuref, raw viscosity and its natural
+logarithm, plus element nodal temperatures. Runtime diagnostics go to stderr and
+the rank log; MPI_Abort terminates the solver communicator so other ranks do not
+remain waiting for the failing rank. Other rheologies retain their error paths.
+
+Run `python3 tests/test_rheol7_runtime.py` for the production bridge and diagnostic
+helpers with mocked Python property APIs and real two-process MPI abort tests.
+This does not replace a build and end-to-end run with the cluster's Python2/Pyre.

@@ -873,6 +873,7 @@ char pyCitcom_Visc_set_properties__name__[] = "Visc_set_properties";
 
 PyObject * pyCitcom_Visc_set_properties(PyObject *self, PyObject *args)
 {
+    void validate_rheol7_settings(struct All_variables *);
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
@@ -911,6 +912,8 @@ PyObject * pyCitcom_Visc_set_properties(PyObject *self, PyObject *args)
 
     getIntProperty(properties, "TDEPV", E->viscosity.TDEPV, fp);
     getIntProperty(properties, "rheol", E->viscosity.RHEOL, fp);
+    getFloatProperty(properties, "cold_scale", E->viscosity.cold_scale, fp);
+    validate_rheol7_settings(E);
     getFloatVectorProperty(properties, "viscE",
                            E->viscosity.E, num_mat, fp);
     getFloatVectorProperty(properties, "viscT",
