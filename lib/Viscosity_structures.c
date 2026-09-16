@@ -111,6 +111,22 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
     exit(8);
 }
 
+/* Boundary values are temperatures only for Dirichlet (type 1) BCs. */
+static double rheol7_nodal_temperature(struct All_variables *E, double temperature)
+{
+    double lower = E->mesh.toptbc == 1 ? E->control.TBCtopval : 0.0;
+    double upper = E->mesh.bottbc == 1 ? E->control.TBCbotval :
+                   (E->data.Tbottom-E->data.Ttop)/E->data.ref_temperature;
+    if(!isfinite(temperature) || !isfinite(lower) || !isfinite(upper) ||
+       !isfinite(E->data.Ttop) || !isfinite(E->data.ref_temperature) ||
+       E->data.ref_temperature <= 0.0 || lower >= upper ||
+       E->data.Ttop + E->data.ref_temperature*lower <= 0.0)
+        return NAN;
+    if(temperature < lower) return lower;
+    if(temperature > upper) return upper;
+    return temperature;
+}
+
 static double strict_rheology_reference_temperature(struct All_variables *E,
                                                      int cap, int element,
                                                      int gp)
@@ -452,13 +468,9 @@ void visc_from_T(E,EEta,propogate)
                     double depth_km = 0.0;
                     double tref_K, temperature_nd = 0.0, viscosity;
                     for(kk=1;kk<=ends;kk++) {
-                        double nodal_temperature = E->T[m][E->ien[m][i].node[kk]];
-                        /* Match rheol=3: bound rheology inputs before interpolation.
-                         * Preserve E->T and let nonfinite inputs fail validation. */
-                        if(isfinite(nodal_temperature)) {
-                            if(nodal_temperature < 0.0) nodal_temperature = 0.0;
-                            if(nodal_temperature > 1.0) nodal_temperature = 1.0;
-                        }
+                        /* Bound rheology inputs using cfg before interpolation. */
+                        double nodal_temperature = rheol7_nodal_temperature(E,
+                            E->T[m][E->ien[m][i].node[kk]]);
                         depth_km += (1.0-E->sx[m][3][E->ien[m][i].node[kk]])
                                   * E->data.radius_km * E->N.vpt[GNVINDEX(kk,jj)];
                         temperature_nd += nodal_temperature

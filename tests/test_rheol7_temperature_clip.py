@@ -4,7 +4,10 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'lib/Viscosity_structures.c').read_text().split('    case 7:', 1)[1]
+source = (root / 'lib/Viscosity_structures.c').read_text()
+helper = source[source.index('static double rheol7_nodal_temperature('):
+                source.index('static double strict_rheology_reference_temperature(')]
+source = source.split('    case 7:', 1)[1]
 block = source[source.index('                    for(kk=1;kk<=ends;kk++) {'):
                source.index('                    if(!E->refstate.has_temperature)')]
 prefix = r'''
@@ -14,6 +17,7 @@ prefix = r'''
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "Steinberger_nuref.h"
+HELPER
 static struct All_variables state;
 static double interpolate(void) {
     struct All_variables *E = &state;
@@ -31,6 +35,9 @@ int main(void) {
         {0,1,.2,.4,.6,.8,.3,.7}
     };
     double expected[] = {.120888173/8.,.5,.5};
+    E->data.Ttop=300.; E->data.Tbottom=3700.; E->data.ref_temperature=3400.;
+    E->mesh.toptbc=E->mesh.bottbc=1;
+    E->control.TBCtopval=0.; E->control.TBCbotval=1.;
     E->ien[1] = calloc(2,sizeof(*E->ien[1]));
     E->T[1] = calloc(9,sizeof(*E->T[1]));
     E->sx[1][3] = calloc(9,sizeof(*E->sx[1][3]));
@@ -56,14 +63,30 @@ int main(void) {
         assert(!isfinite(interpolate()));
         assert(steinberger_viscosity(11.,1626.,300.+3400.*interpolate(),1e21,1.)<0.);
     }
+    /* Nondefault cfg temperatures and boundary values must change clipping. */
+    E->data.Ttop=400.; E->data.Tbottom=4400.; E->data.ref_temperature=4000.;
+    E->control.TBCtopval=.125; E->control.TBCbotval=.875;
+    assert(rheol7_nodal_temperature(E,-1.)==.125);
+    assert(rheol7_nodal_temperature(E,2.)==.875);
+    assert(E->data.Ttop+E->data.ref_temperature*rheol7_nodal_temperature(E,-1.)==900.);
+    assert(E->data.Ttop+E->data.ref_temperature*rheol7_nodal_temperature(E,2.)==3900.);
+    assert(rheol7_nodal_temperature(E,.5)==.5);
+    /* Flux values must never become rheology temperature bounds. */
+    E->mesh.toptbc=E->mesh.bottbc=0;
+    E->control.TBCtopval=99.; E->control.TBCbotval=-99.;
+    assert(rheol7_nodal_temperature(E,-1.)==0.);
+    assert(rheol7_nodal_temperature(E,2.)==1.);
+    E->mesh.toptbc=E->mesh.bottbc=1;
+    assert(isnan(rheol7_nodal_temperature(E,.5)));
     return 0;
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
     p = Path(tmp)
-    (p/'test.c').write_text(prefix + block + suffix)
+    (p/'test.c').write_text(prefix.replace('HELPER',helper) + block + suffix)
     subprocess.run(['mpicc', '-std=gnu99', '-I'+str(root/'lib'), str(p/'test.c'),
                     '-lm', '-o', str(p/'test')], check=True)
     subprocess.run([str(p/'test')], check=True)
 print('PASS: production nodal clipping before interpolation; E->T unchanged; '
-      'step3 temperatures finite for cold_scale=0.25/0.5/1; nonfinite inputs rejected.')
+      'step3 temperatures finite for cold_scale=0.25/0.5/1; nonfinite inputs rejected; '
+      'cfg boundary/temperature changes and flux fallback checked.')
