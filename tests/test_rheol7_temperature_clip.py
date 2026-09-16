@@ -4,7 +4,10 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'lib/Viscosity_structures.c').read_text().split('    case 7:', 1)[1]
+source = (root / 'lib/Viscosity_structures.c').read_text()
+helper = source[source.rindex('static double rheol7_nodal_temperature('):
+                source.index('static double strict_rheology_reference_temperature(')]
+source = source.split('    case 7:', 1)[1]
 block = source[source.index('                    for(kk=1;kk<=ends;kk++) {'):
                source.index('                    if(!E->refstate.has_temperature)')]
 prefix = r'''

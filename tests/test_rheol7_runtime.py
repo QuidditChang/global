@@ -102,7 +102,9 @@ with tempfile.TemporaryDirectory() as tmp:
                             capture_output=True, text=True, timeout=20)
     assert result.returncode != 0
     for token in ('rank=1 step=4 cap=1 element=1 gp=1', 'T_K=', 'Tref_K=',
-                  'cold_scale=0.5', 'ln_eta=', 'node=8'):
+                  'cold_scale=0.5', 'ln_eta=', 'node=8', 'rheol7_clip_diag_v1',
+                  'Ttop_K=300', 'DeltaT_K=3400', 'clip_lower_nd=0',
+                  'bounds_unordered=1', 'clipped_T_nd=nan', 'weight_nonfinite=0'):
         assert token in result.stderr, result.stderr
 print('PASS: production bridge transfers 0/0.25/0.5/1; startup logging; '
       'invalid settings and runtime failure abort both MPI ranks with diagnostics.')
