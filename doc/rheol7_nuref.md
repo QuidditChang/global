@@ -103,12 +103,18 @@ malloc-allocated cold_scale field uninitialized.
 The existing limits remain after temperature/composition/strain-rate/plasticity/
 plate-boundary/channel corrections, before the two GP-to-node-to-GP filtering
 cycles. The maximum is visc_max where element-center radius > 0.89641 and
-5*visc_max below; the minimum is visc_min. No temperature clipping or relocation
-of these physical limits is introduced. Invalid or unrepresentable raw viscosity
+5*visc_max below; the minimum is visc_min. These physical limits are not relocated.
+For rheol7, finite nodal temperatures used for viscosity are now clipped to [0,1]
+before Gauss-point interpolation, matching rheol3. E->T and Tref are unchanged.
+With T_K = Ttop + ref_temperature*T_nd, these bounds are 300 and 3700 K for
+the current experiments, matching their top and bottom boundary temperatures.
+Nonfinite temperatures still fail validation. This protects rheology from finite
+thermal overshoots; it does not fix overshoots in the evolved temperature field.
+Invalid or unrepresentable raw viscosity
 still fails before these limits; the kernel's fit and temperature formula are
 unchanged.
 
-Rheol7 failures report rank, step, local cap/element/Gauss point, depth, actual
+Rheol7 failures report rank, step, local cap/element/Gauss point, depth, rheology-input
 and reference temperature, Az, cold_scale, nuref, raw viscosity and its natural
 logarithm, plus element nodal temperatures. Runtime diagnostics go to stderr and
 the rank log; MPI_Abort terminates the solver communicator so other ranks do not
@@ -117,3 +123,7 @@ remain waiting for the failing rank. Other rheologies retain their error paths.
 Run `python3 tests/test_rheol7_runtime.py` for the production bridge and diagnostic
 helpers with mocked Python property APIs and real two-process MPI abort tests.
 This does not replace a build and end-to-end run with the cluster's Python2/Pyre.
+
+Run `python3 tests/test_rheol7_temperature_clip.py` to check the production nodal
+interpolation block with finite overshoots, unchanged in-range inputs, and
+nonfinite temperatures, including the nodal temperatures from the step3 failure.
