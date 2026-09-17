@@ -1,0 +1,81 @@
+{
+  "source_head": "324ecda15d06bc2f3bd4af50f12782cf97a2e780",
+  "scope": "actual isolated C spherical elements plus independent reference-parcel audit; not full MPI evolution",
+  "normalization_relative_errors": {
+    "phase_depth": 0.0,
+    "phase_width": 1.7347234759768073e-16,
+    "phase_clapeyron": 0.0,
+    "phase_transT": 1.0019203710753265e-15,
+    "phase_delta_s": 0.0
+  },
+  "measurements": [
+    {
+      "phase_depth_km": 410,
+      "fixture": {
+        "theta_half_rad": 0.012,
+        "phi_half_rad": 0.014,
+        "delta_T_nd": 0.01,
+        "dT_dt_nd": 0.03,
+        "u_r_nd": 0.2
+      },
+      "arithmetic_Qphase": 0.11023928007971488,
+      "volume_weighted_Qphase": 0.11020112460956323,
+      "relative_quadrature_difference": 0.0003462348527461456,
+      "relative_residual_integral_error": 1.4993167321781552e-09,
+      "reference_parcel_target_K": 60,
+      "reference_parcel_integral_K": 59.999999999999986
+    },
+    {
+      "phase_depth_km": 520,
+      "fixture": {
+        "theta_half_rad": 0.012,
+        "phi_half_rad": 0.014,
+        "delta_T_nd": 0.01,
+        "dT_dt_nd": 0.03,
+        "u_r_nd": 0.2
+      },
+      "arithmetic_Qphase": 0.09636807298133963,
+      "volume_weighted_Qphase": 0.09643468809261385,
+      "relative_quadrature_difference": 0.000690779558598689,
+      "relative_residual_integral_error": 1.4180145001944771e-09,
+      "reference_parcel_target_K": 43,
+      "reference_parcel_integral_K": 43.0
+    },
+    {
+      "phase_depth_km": 660,
+      "fixture": {
+        "theta_half_rad": 0.012,
+        "phi_half_rad": 0.014,
+        "delta_T_nd": 0.01,
+        "dT_dt_nd": 0.03,
+        "u_r_nd": 0.2
+      },
+      "arithmetic_Qphase": -0.061305110762418506,
+      "volume_weighted_Qphase": -0.061178545145979896,
+      "relative_quadrature_difference": 0.002068790883088323,
+      "relative_residual_integral_error": 1.2631043057134854e-09,
+      "reference_parcel_target_K": -34,
+      "reference_parcel_integral_K": -34.00000000000001
+    }
+  ],
+  "reference_sha256": {
+    "refstate_ALA_strict.txt": "36a43a62688644b23040287269d0c80d7cbc3d2db5e3c5d0a35637304d992850",
+    "interval_ALA_strict.txt": "c7bbe4347d235c36ce5f1fbdf55647e1de2c2d6878a741810e71f90567e0c255"
+  },
+  "old_geometry_negative_control": {
+    "complete_element_energy_cases_failed": 12,
+    "nodal_density_tests_passed": true
+  },
+  "diagnostic_limitations": [
+    "Qphase is arithmetic GP mean, not Jacobian-weighted mean",
+    "Qphase is last pre-corrector residual evaluation; Qadi is recomputed after the final corrector/assimilation",
+    "legacy .heating third column is reset heating_latent=1, not Qphase"
+  ],
+  "production_pg_shape_function_executed": true,
+  "test_summary": {
+    "strict_suite_total": 342,
+    "passed": 341,
+    "preexisting_failure": "test_cfg_changes_only_strict_inputs_through_stage9d: rheol7/cold_scale",
+    "related_tests_after_pg_harness_extension": "3 passed"
+  }
+}

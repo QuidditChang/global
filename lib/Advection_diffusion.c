@@ -1042,7 +1042,9 @@ static void element_residual(struct All_variables *E, int el,
         struct Phase_transition *phase = &E->control.phase[phase_index];
         if(phase->entropy_jump == 0.0)
           continue;
-        phase_change_state(phase, E->sphere.ro-rtf[3][i], tgp[i],
+        /* form_rtf_bc stores inverse radius for spherical derivatives.
+         * Phase thermodynamics takes depth, using the actual GP radius. */
+        phase_change_state(phase, E->sphere.ro-1.0/rtf[3][i], tgp[i],
                            1.0, rho_g, d_rho_g_dr,
                            &q, &fraction, &dX_dT, &dX_dr_pressure);
         phase_energy[i] += rho_gp[i]
