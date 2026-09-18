@@ -38,6 +38,7 @@ double global_vdot();
 double vnorm_nonnewt();
 
 static void write_stokes_diagnostics(struct All_variables *E);
+static void write_eba_mechanical_power(struct All_variables *E);
 
 
 /************************************************************/
@@ -855,8 +856,238 @@ static void write_ala_residual(struct All_variables *E)
 
 static void write_stokes_diagnostics(struct All_variables *E)
 {
+    if(E->control.eba_formulation && !E->control.ala_pressure_buoyancy) {
+        write_eba_mechanical_power(E);
+        return;
+    }
     if(!E->control.ala_pressure_buoyancy)
         return;
     write_mechanical_power(E);
     write_ala_residual(E);
+}
+
+
+const char *const eba_power_names[EBA_POWER_COUNT] = {
+    "Pplate", "Pother", "Wtraction", "Wbody", "Dvisc_operator", "Qvisc",
+    "Wthermal", "Wchemical", "Wphase_410", "Wphase_520", "Wphase_660",
+    "Wphase_total", "Wpressure", "Rmechanical", "Roperator",
+    "Rbody_split", "Rheating_operator"
+};
+static struct Eba_power_snapshot eba_power_cache;
+static struct All_variables *eba_power_owner;
+
+const struct Eba_power_snapshot *eba_power_snapshot(struct All_variables *E)
+{
+    return eba_power_owner == E ? &eba_power_cache : NULL;
+}
+
+static void eba_shell_add(struct All_variables *E, int term, int element,
+                          double integral)
+{
+    int z = E->lmesh.ezs + (element-1) % E->lmesh.elz;
+    int depth = eba_power_cache.depth_count - 1 - z;
+    eba_power_cache.shell_integrals[term*eba_power_cache.depth_count+depth]
+        += integral;
+}
+
+/* Use the same spherical basis rotation and quadrature as get_elt_f, rather
+ * than multiplying interpolated scalar radial velocities in different bases. */
+static void eba_radial_work(struct All_variables *E, double **force, int term,
+                            double scale)
+{
+    int m, e, i, a, d, node, eq;
+    double f, ur, integral, weight, rtf[4][9];
+    struct Shape_function GN;
+    struct Shape_function_dx GNx;
+    struct Shape_function_dA dOmega;
+    void get_global_shape_fn();
+    void construct_c3x3matrix_el();
+    const int lev = E->mesh.levmax;
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(e=1; e<=E->lmesh.nel; e++) {
+            get_global_shape_fn(E,e,&GN,&GNx,&dOmega,0,1,rtf,lev,m);
+            if((e-1)%E->lmesh.elz == 0)
+                construct_c3x3matrix_el(E,e,&E->element_Cc,&E->element_Ccx,
+                                        lev,m,0);
+            integral = 0.0;
+            for(i=1; i<=vpoints[E->mesh.nsd]; i++) {
+                f = ur = 0.0;
+                for(a=1; a<=enodes[E->mesh.nsd]; a++) {
+                    node = E->ien[m][e].node[a];
+                    weight = E->N.vpt[GNVINDEX(a,i)];
+                    f += weight * force[m][node];
+                    for(d=1; d<=E->mesh.nsd; d++) {
+                        eq = E->id[m][node].doff[d];
+                        ur += weight * E->element_Cc.vpt[BVINDEX(3,d,a,i)]
+                            * E->U[m][eq];
+                    }
+                }
+                integral += scale*f*ur*dOmega.vpt[i]
+                    * g_point[i].weight[E->mesh.nsd-1];
+            }
+            eba_shell_add(E,term,e,integral);
+        }
+}
+
+static double eba_element_work(struct All_variables *E, int m, int e,
+                                const double *force)
+{
+    int a, d, node, eq;
+    double result = 0.0;
+    for(a=1; a<=enodes[E->mesh.nsd]; a++) {
+        node = E->ien[m][e].node[a];
+        for(d=1; d<=E->mesh.nsd; d++) {
+            eq = E->id[m][node].doff[d];
+            result += E->U[m][eq] * force[(a-1)*E->mesh.nsd+d-1];
+        }
+    }
+    return result;
+}
+
+static void write_eba_mechanical_power(struct All_variables *E)
+{
+    int m,e,i,a,d,node,eq,nz,j,k,top,term,depth;
+    const int lev = E->mesh.levmax, neq = E->lmesh.neq;
+    const int vpts = vpoints[E->mesh.nsd];
+    const unsigned int flags[4] = {0,VBX,VBY,VBZ};
+    double scale = E->control.disptn_number/E->control.Atemp;
+    double elt_f[24], reaction, viscosity, value, local_traction=0.0;
+    double **ku, **gradp, **external, **ubc, **uother, **divu;
+    double **thermal, **chemical, **phase[PHASE_TRANSITIONS];
+    double *totals = eba_power_cache.total;
+    float *strain;
+    void assemble_del2_u();
+    void assemble_div_u();
+    void get_elt_f();
+    void get_elt_tr();
+    void strain_rate_2_inv();
+    void remove_horiz_ave2();
+
+    eba_power_owner = NULL;
+    free(eba_power_cache.shell_integrals);
+    eba_power_cache.depth_count = E->mesh.noz-1;
+    eba_power_cache.shell_integrals = (double *)calloc(
+        EBA_POWER_COUNT*eba_power_cache.depth_count,sizeof(double));
+    if(!eba_power_cache.shell_integrals) MPI_Abort(E->parallel.world,1);
+    memset(totals,0,sizeof(eba_power_cache.total));
+    eba_power_cache.step = E->monitor.solution_cycles;
+    eba_power_cache.elapsed_time = E->monitor.elapsed_time;
+    eba_power_cache.scale = scale;
+    ku=allocate_equation_field(E); gradp=allocate_equation_field(E);
+    external=allocate_equation_field(E); ubc=allocate_equation_field(E);
+    uother=allocate_equation_field(E); divu=allocate_element_field(E);
+    assemble_del2_u(E,E->U,ku,lev,0);
+    assemble_grad_p_unstripped(E,gradp);
+    assemble_div_u(E,E->U,divu,lev);
+    totals[EBA_DOPERATOR]=scale*global_vdot(E,E->U,ku,lev);
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        for(e=1; e<=E->lmesh.nel; e++) {
+            get_elt_f(E,e,elt_f,0,m);
+            add_element_force_to(E,e,elt_f,m,external);
+            eba_shell_add(E,EBA_WBODY,e,scale*eba_element_work(E,m,e,elt_f));
+            /* divu is G^T u, with G the assembled pressure-gradient matrix.
+             * Pressure contributes -u^T G p; EBA has no -beta*p body force. */
+            eba_shell_add(E,EBA_WPRESSURE,e,-scale*E->P[m][e]*divu[m][e]);
+        }
+        for(i=1; i<=E->boundary.nel; i++) {
+            e=E->boundary.element[m][i];
+            memset(elt_f,0,sizeof(elt_f));
+            for(a=SIDE_BEGIN; a<=SIDE_END; a++) get_elt_tr(E,i,a,elt_f,m);
+            add_element_force_to(E,e,elt_f,m,external);
+            local_traction += scale*eba_element_work(E,m,e,elt_f);
+        }
+    }
+    (E->solver.exchange_id_d)(E,external,lev);
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        for(i=0; i<neq; i++)
+            external[m][i]=ku[m][i]+gradp[m][i]-external[m][i];
+        for(node=1; node<=E->lmesh.nno; node++) {
+            top=(E->parallel.me_loc[3]==E->parallel.nprocz-1
+                 && node%E->lmesh.noz==0);
+            for(d=1; d<=E->mesh.nsd; d++) if(E->node[m][node]&flags[d]) {
+                eq=E->id[m][node].doff[d];
+                if(top) ubc[m][eq]=E->U[m][eq];
+                else uother[m][eq]=E->U[m][eq];
+            }
+        }
+    }
+    totals[EBA_PPLATE]=scale*global_vdot(E,ubc,external,lev);
+    totals[EBA_POTHER]=scale*global_vdot(E,uother,external,lev);
+    MPI_Allreduce(&local_traction,&totals[EBA_WTRACTION],1,MPI_DOUBLE,
+                  MPI_SUM,E->parallel.world);
+
+    thermal=allocate_nodal_field(E); chemical=allocate_nodal_field(E);
+    for(k=0; k<PHASE_TRANSITIONS; k++) phase[k]=allocate_nodal_field(E);
+    for(m=1; m<=E->sphere.caps_per_proc; m++)
+        for(node=1; node<=E->lmesh.nno; node++) {
+            nz=(node-1)%E->lmesh.noz+1;
+            thermal[m][node]=E->control.Atemp*E->refstate.rho[nz]
+                *E->refstate.thermal_expansivity[nz]*E->T[m][node];
+            if(E->control.tracer && E->composition.ichemical_buoyancy)
+                for(j=0; j<E->composition.ncomp; j++)
+                    chemical[m][node]-=E->control.Atemp
+                        *E->composition.buoyancy_ratio[j]
+                        *E->composition.comp_node[m][j][node];
+            thermal[m][node]*=E->refstate.gravity[nz];
+            chemical[m][node]*=E->refstate.gravity[nz];
+            for(k=0; k<PHASE_TRANSITIONS; k++)
+                if(E->control.phase[k].Ra!=0.0)
+                    phase[k][m][node]=-E->control.phase[k].Ra
+                        *(E->phase_B[k][m][node]
+                          -phase_change_reference_fraction(E,k,m,node))
+                        *E->refstate.gravity[nz];
+        }
+    remove_horiz_ave2(E,thermal); remove_horiz_ave2(E,chemical);
+    eba_radial_work(E,thermal,EBA_WTHERMAL,scale);
+    eba_radial_work(E,chemical,EBA_WCHEMICAL,scale);
+    for(k=0; k<PHASE_TRANSITIONS; k++) {
+        remove_horiz_ave2(E,phase[k]);
+        eba_radial_work(E,phase[k],EBA_W410+k,scale);
+        free_nodal_field(E,phase[k]);
+    }
+    strain=(float *)malloc((E->lmesh.nel+1)*sizeof(float));
+    if(!strain) MPI_Abort(E->parallel.world,1);
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
+        strain_rate_2_inv(E,m,strain,0);
+        for(e=1; e<=E->lmesh.nel; e++) {
+            viscosity=0.0;
+            for(i=1; i<=vpts; i++) viscosity+=E->EVi[m][(e-1)*vpts+i];
+            value=scale*viscosity/vpts*strain[e]*E->eco[m][e].area;
+            eba_shell_add(E,EBA_QVISC,e,value);
+        }
+    }
+    MPI_Allreduce(MPI_IN_PLACE,eba_power_cache.shell_integrals,
+                  EBA_POWER_COUNT*eba_power_cache.depth_count,MPI_DOUBLE,
+                  MPI_SUM,E->parallel.world);
+    for(depth=0; depth<eba_power_cache.depth_count; depth++) {
+        double *shell=eba_power_cache.shell_integrals;
+        int n=eba_power_cache.depth_count;
+        shell[EBA_WPHASE*n+depth]=shell[EBA_W410*n+depth]
+            +shell[EBA_W520*n+depth]+shell[EBA_W660*n+depth];
+    }
+    for(term=0; term<EBA_POWER_COUNT; term++)
+        for(depth=0; depth<eba_power_cache.depth_count; depth++)
+            totals[term]+=eba_power_cache.shell_integrals[
+                term*eba_power_cache.depth_count+depth];
+    reaction=totals[EBA_PPLATE]+totals[EBA_POTHER]+totals[EBA_WTRACTION]
+        +totals[EBA_WBODY]+totals[EBA_WPRESSURE];
+    totals[EBA_RMECHANICAL]=reaction-totals[EBA_QVISC];
+    totals[EBA_ROPERATOR]=reaction-totals[EBA_DOPERATOR];
+    totals[EBA_RBODY_SPLIT]=totals[EBA_WBODY]-totals[EBA_WTHERMAL]
+        -totals[EBA_WCHEMICAL]-totals[EBA_WPHASE];
+    totals[EBA_RHEATING_OPERATOR]=totals[EBA_DOPERATOR]-totals[EBA_QVISC];
+    eba_power_owner=E;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"MECHANICAL_POWER  step=%d  scale=Di/Atemp  formulation=EBA  elapsed_time=%.17g  state=pre_rigid_rotation\n",
+                eba_power_cache.step,eba_power_cache.elapsed_time);
+        fprintf(E->fp,"%-20s  %24s\n","TERM","TOTAL");
+        for(term=0; term<EBA_POWER_COUNT; term++)
+            fprintf(E->fp,"%-20s  %+.17e\n",eba_power_names[term],totals[term]);
+        fflush(E->fp);
+    }
+    free(strain);
+    free_nodal_field(E,thermal); free_nodal_field(E,chemical);
+    free_equation_field(E,ku); free_equation_field(E,gradp);
+    free_equation_field(E,external); free_equation_field(E,ubc);
+    free_equation_field(E,uother); free_element_field(E,divu);
 }

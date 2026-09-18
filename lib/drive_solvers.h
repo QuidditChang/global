@@ -32,6 +32,23 @@
 extern "C" {
 #endif
 
+/* Cached, pre-rigid-rotation EBA Stokes snapshot. Powers use Di/Atemp;
+ * shell integrals have the same units as totals, ordered surface to CMB. */
+enum Eba_power_term {
+    EBA_PPLATE, EBA_POTHER, EBA_WTRACTION, EBA_WBODY, EBA_DOPERATOR,
+    EBA_QVISC, EBA_WTHERMAL, EBA_WCHEMICAL, EBA_W410, EBA_W520,
+    EBA_W660, EBA_WPHASE, EBA_WPRESSURE, EBA_RMECHANICAL,
+    EBA_ROPERATOR, EBA_RBODY_SPLIT, EBA_RHEATING_OPERATOR, EBA_POWER_COUNT
+};
+struct Eba_power_snapshot {
+    int step, depth_count;
+    double elapsed_time, scale;
+    double total[EBA_POWER_COUNT];
+    double *shell_integrals;
+};
+extern const char *const eba_power_names[EBA_POWER_COUNT];
+const struct Eba_power_snapshot *eba_power_snapshot(struct All_variables *E);
+
 void general_stokes_solver(struct All_variables*);
 void general_stokes_solver_setup(struct All_variables*);
 

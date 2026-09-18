@@ -8,6 +8,7 @@
 
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "drive_solvers.h"
 #include "material_properties.h"
 #include "npz_writer.h"
 #include "output.h"
@@ -792,6 +793,45 @@ static int add_f64(struct Npz_writer *writer, const char *name,
     return npz_add_f64(writer, name, data, ndim, shape);
 }
 
+static int write_eba_power_npz(struct Npz_writer *writer, struct All_variables *E)
+{
+    int status = 0;
+    size_t shape[1];
+    /* Snapshot copied from the completed Stokes solve, never recomputed from
+     * potentially newer thermal fields here. Missing snapshots are explicit. */
+    if(E->control.eba_formulation && !E->control.ala_pressure_buoyancy) {
+        const struct Eba_power_snapshot *power = eba_power_snapshot(E);
+        int valid = power != NULL;
+        int pre_rigid_rotation = 1;
+        int term;
+        char key[128];
+        status |= npz_add_i32(writer, "mechanical_valid", &valid, 0, NULL);
+        if(valid) {
+            status |= npz_add_i32(writer, "mechanical_step", &power->step, 0, NULL);
+            status |= add_f64(writer, "mechanical_elapsed_time",
+                              &power->elapsed_time, 0, NULL);
+            status |= add_f64(writer, "mechanical_scale_Di_over_Atemp",
+                              &power->scale, 0, NULL);
+            status |= npz_add_i32(writer, "mechanical_pre_rigid_rotation",
+                                  &pre_rigid_rotation, 0, NULL);
+            for(term=0; term<EBA_POWER_COUNT; term++) {
+                snprintf(key,sizeof(key),"mechanical_%s",eba_power_names[term]);
+                status |= add_f64(writer,key,&power->total[term],0,NULL);
+                if(term==EBA_WBODY || (term>=EBA_QVISC && term<=EBA_WPRESSURE)) {
+                    snprintf(key,sizeof(key),"mechanical_%s_shell_integral",
+                             eba_power_names[term]);
+                    shape[0]=power->depth_count;
+                    status |= add_f64(writer,key,power->shell_integrals
+                                      +term*power->depth_count,1,shape);
+                }
+            }
+        }
+    }
+
+    return status;
+}
+
+
 static int write_result(struct Npz_writer *writer,
                         const struct Profile_result *result,
                         const double *depth_coordinates,
@@ -949,7 +989,7 @@ static int write_profiles_npz(struct All_variables *E, int cycles,
     }
 
     status = 0;
-    schema_version = 2;
+    schema_version = 3;
     status |= npz_add_i32(&writer, "schema_version", &schema_version, 0, NULL);
     status |= npz_add_i32(&writer, "step", &cycles, 0, NULL);
     elapsed_time = E->monitor.elapsed_time;
@@ -958,6 +998,8 @@ static int write_profiles_npz(struct All_variables *E, int cycles,
     status |= add_f64(&writer, "elapsed_time", &elapsed_time, 0, NULL);
     status |= add_f64(&writer, "DeltaT", &delta_temperature, 0, NULL);
     status |= add_f64(&writer, "T_surface_K", &surface_temperature, 0, NULL);
+
+    status |= write_eba_power_npz(&writer, E);
 
     shape[0] = node_depth_count;
     status |= add_f64(&writer, "node_depth_km", node_depth, 1, shape);
