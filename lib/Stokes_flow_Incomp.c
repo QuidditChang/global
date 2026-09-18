@@ -678,6 +678,8 @@ static void strict_ala_stage_e_begin(struct All_variables *E,
         }
     }
     observer->enabled=E->control.ala_stage_e_diagnostic;
+    if(required_env && !observer->enabled)
+        myerror(E,"Required Stage-E instrumentation was not propagated to C");
     if(case_contract && !observer->enabled)
         myerror(E,"Stage-E case reached FGMRES without active instrumentation");
     if(!observer->enabled) return;
@@ -2913,7 +2915,8 @@ static void strict_ala_pressure_depth_action_audit(
                 /max(global[3*bin+0],1.0e-300));
             fprintf(E->fp,"ALA PRESSURE DEPTH ACTION AUDIT iteration=%d "
                     "bin=%d depth_km=[%e,%e) residual_fraction=%e "
-                    "action_to_residual=%e cosine=%e optimal_scale=%e\n",
+                    "action_to_residual=%e cosine=%e optimal_scale=%e "
+                    "quantity=arnoldi_or_block_direction unweighted=1\n",
                     iteration,bin,boundaries[bin],boundaries[bin+1],
                     global[3*bin+0]/max(total_r2,1.0e-300),
                     action_to_residual,cosine,optimal_scale);

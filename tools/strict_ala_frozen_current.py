@@ -15,6 +15,7 @@ import shutil
 import subprocess
 
 CASES = ("ADJOINT", "BASE", "TIGHT", "BPI", "UNSCALED")
+FOLLOWUP_CASES = ("ADJOINT", "BASE", "BPI", "BPI_LONG50", "BPI_LONG64")
 VS = "CitcomS.solver.vsolver"
 COMMON = {
     ("CitcomS", "steps"): "1",
@@ -44,6 +45,11 @@ VARIANTS = {
     "BPI": {(VS, "ala_shallow_patch_preconditioner"): "off"},
     "UNSCALED": {(VS, "ala_shallow_patch_mid_action_scale"): "1.0",
                  (VS, "ala_shallow_patch_transition_action_scale"): "1.0"},
+    "BPI_LONG50": {(VS, "ala_shallow_patch_preconditioner"): "off",
+                   (VS, "piterations"): "300", (VS, "ala_stage_e_diagnostic"): "off"},
+    "BPI_LONG64": {(VS, "ala_shallow_patch_preconditioner"): "off",
+                   (VS, "piterations"): "300", (VS, "ala_stage_e_diagnostic"): "off",
+                   (VS, "ala_pcg_restart_interval"): "64"},
 }
 INPUTS = ("cmbhf_ALA_strict.cfg", "GLB.coor.global.dat",
           "refstate_ALA_strict.txt", "interval_ALA_strict.txt")
@@ -184,8 +190,33 @@ def validate_inputs(runs):
     return cfg
 
 
-def prepare(runs, code, root, hpc):
+def prepare(runs, code, root, hpc, campaign="current", previous_root=None):
     cfg = validate_inputs(runs)
+    cases = FOLLOWUP_CASES if campaign == "followup" else CASES
+    previous = None
+    if campaign == "followup":
+        if previous_root is None:
+            raise ValueError("followup requires --previous-root")
+        old = json.loads((previous_root/"manifest.json").read_text())
+        if any(digest(runs/n) != old["inputs"][n] for n in INPUTS[1:]):
+            raise ValueError("canonical inputs differ from previous experiment")
+        old_cfg_path=previous_root/"BASE/case.cfg"
+        if digest(old_cfg_path)!=old["cases"]["BASE"]["cfg_sha256"]:
+            raise ValueError("previous BASE cfg differs from its manifest")
+        effective=dict(cfg)
+        effective.update(COMMON)
+        ignored={("CitcomS.solver","datadir"),("CitcomS.solver","datadir_old")}
+        old_cfg=cfg_read(old_cfg_path)
+        differences=[str(k) for k in effective.keys()|old_cfg.keys()
+                     if k not in ignored and effective.get(k)!=old_cfg.get(k)]
+        if differences:
+            raise ValueError("effective BASE settings differ: " + ", ".join(sorted(differences)))
+        if digest(code/"lib/Steinberger_nuref.h") != old["nuref_header_sha256"]:
+            raise ValueError("nuref differs from previous experiment")
+        previous = {"root": str(previous_root), "manifest_sha256": digest(previous_root/"manifest.json"),
+                    "code_commit": old["code_commit"], "runs_commit": old["runs_commit"],
+                    "effective_base_settings_match": True,
+                    "canonical_cfg_sha256": old["inputs"][INPUTS[0]]}
     if root.exists():
         raise ValueError("use a fresh experiment directory: " + str(root))
     extra = {}
@@ -204,14 +235,16 @@ def prepare(runs, code, root, hpc):
                     raise ValueError("missing reconstruction prefix: " + str(prefix) + str(year))
                 extra.update({str(p): digest(p) for p in files if p.is_file()})
     root.mkdir(parents=True)
-    manifest = {"schema": 1, "code_commit": git_head(code), "code_directory": str(code),
+    manifest = {"schema": 2, "campaign": campaign, "case_order": cases,
+                "previous_experiment": previous,
+                "code_commit": git_head(code), "code_directory": str(code),
                 "runs_commit": git_head(runs), "cases": {},
                 "inputs": {name: digest(runs/name) for name in INPUTS},
                 "nuref_header_sha256": digest(code/"lib/Steinberger_nuref.h"),
                 "reconstruction_files": extra, "hpc_preflight": hpc}
     if hpc:
         manifest["build"] = receipt
-    for case in CASES:
+    for case in cases:
         directory = root/case
         (directory/"DATA/0").mkdir(parents=True)
         (directory/"Restart").mkdir()
@@ -234,8 +267,59 @@ def rows(path):
         return list(csv.DictReader(f))
 
 
+def validate_stage_e(data, log, iterations):
+    """Require the observer's actual outputs, never infer activation from cfg."""
+    for marker in ("STRICT_ALA_STAGE_E_BEGIN", "STRICT_ALA_STAGE_E_COMPLETE"):
+        if log.count(marker) != 1:
+            raise ValueError("missing/duplicate Stage-E runtime marker: " + marker)
+    tables = {name: rows(data/("global.strict_ala_stage_E_"+name+".csv"))
+              for name in ("iterations", "correlations", "hessenberg",
+                           "work_counters", "restart", "probe_gram")}
+    final = int(iterations[-1]["iteration"])
+    expected = list(range(final+1))
+    for name in ("iterations", "work_counters"):
+        if [int(r["iteration"]) for r in tables[name]] != expected:
+            raise ValueError("incomplete Stage-E " + name)
+    for r in tables["iterations"]:
+        if r["residual_state_guard_pass"] != "1":
+            raise ValueError("Stage-E residual mutation")
+    for c,e in zip(iterations, tables["iterations"][1:]):
+        for ck,ek in (("continuity_relative","true_continuity_relative"),
+                      ("momentum_relative","true_momentum_relative")):
+            if not math.isclose(float(c[ck]),float(e[ek]),rel_tol=1e-12,abs_tol=1e-30):
+                raise ValueError("Stage-C/Stage-E residual mismatch")
+    gram = tables["probe_gram"]
+    probes = {r["probe_i"] for r in gram}
+    if len(probes)!=19 or len(gram)!=361 or {
+            (r["probe_i"],r["probe_j"]) for r in gram} != {
+            (p,q) for p in probes for q in probes}:
+        raise ValueError("incomplete Stage-E probe Gram matrix")
+    for name, indices in (("correlations", expected),
+                          ("restart", list(range(50,final+1,50)))):
+        records=tables[name]
+        if len(records)!=19*len(indices) or {
+                (int(r["iteration"]),r["probe"]) for r in records} != {
+                (i,p) for i in indices for p in probes}:
+            raise ValueError("incomplete Stage-E " + name)
+    h=tables["hessenberg"]
+    expected_h={(i//50+1,i%50,j) for i in range(final) for j in range(i%50+2)}
+    if len(h)!=len(expected_h) or {
+            (int(r["restart_cycle"]),int(r["column"]),int(r["row"])) for r in h}!=expected_h:
+        raise ValueError("incomplete Stage-E Hessenberg matrix")
+    # Every non-label column in these production schemas is numeric.
+    labels={"case","probe","probe_i","probe_j","aggregation_semantics"}
+    for records in tables.values():
+        for r in records:
+            if not all(math.isfinite(float(v)) for k,v in r.items() if k not in labels):
+                raise ValueError("nonfinite Stage-E output")
+
+
 def analyze(root):
     manifest = json.loads((root/"manifest.json").read_text())
+    cases = tuple(manifest.get("case_order", CASES))
+    expected_cases = FOLLOWUP_CASES if manifest.get("campaign") == "followup" else CASES
+    if cases != expected_cases:
+        raise ValueError("unexpected campaign case list")
     result = {"valid": True, "errors": [], "cases": {}, "interpretation": []}
     if manifest.get("hpc_preflight"):
         try:
@@ -247,7 +331,7 @@ def analyze(root):
             result["valid"] = False
             result["errors"].append(str(exc))
     hashes = []
-    for case in CASES:
+    for case in cases:
         d = root/case
         try:
             if digest(d/"case.cfg") != manifest["cases"][case]["cfg_sha256"]:
@@ -305,14 +389,18 @@ def analyze(root):
             inner = rows(d/"DATA/0/global.strict_ala_stage_C_inner_solves.csv")
             if not it or not inner or it[-1]["final_iterate"] != "1":
                 raise ValueError("incomplete trajectory")
+            if [int(r["iteration"]) for r in it] != list(range(1,int(it[-1]["iteration"])+1)):
+                raise ValueError("missing/duplicate Stage-C iteration")
             for r in it:
                 if not all(math.isfinite(float(r[k])) for k in
                            ("continuity_relative","momentum_relative","krylov_drift")):
                     raise ValueError("nonfinite trajectory")
             cfg = cfg_read(d/"case.cfg")
+            if cfg.get((VS,"ala_stage_e_diagnostic")) == "on":
+                validate_stage_e(d/"DATA/0", text, it)
             accepted = (float(it[-1]["continuity_relative"]) <= float(cfg[VS,"tole_compressibility"])
                         and float(it[-1]["momentum_relative"]) <= float(cfg[VS,"ala_unaugmented_momentum_tolerance"]))
-            if not accepted and int(it[-1]["iteration"]) != 60:
+            if not accepted and int(it[-1]["iteration"]) != int(cfg[VS,"piterations"]):
                 raise ValueError("stopped early without joint acceptance")
             summary = {"joint_converged": bool(accepted),
                 "final_iteration": int(it[-1]["iteration"]),
@@ -334,7 +422,7 @@ def analyze(root):
         result["errors"].append("different initialized physics/viscosity across cases")
     if result["valid"]:
         base = result["cases"]["BASE"]
-        for case in ("TIGHT","BPI","UNSCALED"):
+        for case in (c for c in cases if c not in ("ADJOINT", "BASE")):
             other = result["cases"][case]
             common = set(base["trajectory"]) & set(other["trajectory"])
             last = max(common, key=int)
@@ -347,7 +435,7 @@ def analyze(root):
     result["solver_attribution_allowed"] = (result["valid"]
         and result["cases"].get("ADJOINT",{}).get("operator_gate_pass",False)
         and all(result["cases"].get(c,{}).get("inner_failures",1)==0
-                for c in ("BASE","TIGHT","BPI","UNSCALED")))
+                for c in cases if c != "ADJOINT"))
     write_json(root/"analysis.json", result)
     print(json.dumps(result, indent=2))
     return 0 if result["valid"] else 2
@@ -361,13 +449,16 @@ def main():
     pre.add_argument("--code", type=Path, required=True)
     pre.add_argument("--root", type=Path, required=True)
     pre.add_argument("--hpc", action="store_true")
+    pre.add_argument("--campaign", choices=("current", "followup"), default="current")
+    pre.add_argument("--previous-root", type=Path)
     stamp = sub.add_parser("stamp-build")
     stamp.add_argument("--code", type=Path, required=True)
     ana = sub.add_parser("analyze")
     ana.add_argument("--root", type=Path, required=True)
     a = p.parse_args()
     if a.action == "prepare":
-        prepare(a.runs.resolve(), a.code.resolve(), a.root.resolve(), a.hpc)
+        prepare(a.runs.resolve(), a.code.resolve(), a.root.resolve(), a.hpc,
+                a.campaign, a.previous_root.resolve() if a.previous_root else None)
     elif a.action == "stamp-build":
         stamp_build(a.code.resolve())
     else:

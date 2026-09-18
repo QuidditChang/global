@@ -6,10 +6,13 @@ import importlib.util
 import io
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 import tempfile
 import subprocess
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT.parents[1]/"runs"
@@ -23,6 +26,26 @@ def write_csv(path, records):
         writer = csv.DictWriter(stream, fieldnames=records[0].keys())
         writer.writeheader()
         writer.writerows(records)
+
+
+def stage_e_evidence(data, trajectory):
+    probes=["probe"+str(i) for i in range(19)]
+    def save(name, records):
+        write_csv(data/("global.strict_ala_stage_E_"+name+".csv"),records)
+    initial=dict(iteration=0,true_continuity_relative=1,true_momentum_relative=1,
+                 residual_state_guard_pass=1)
+    save("iterations",[initial]+[dict(iteration=r["iteration"],
+         true_continuity_relative=r["continuity_relative"],
+         true_momentum_relative=r["momentum_relative"],residual_state_guard_pass=1)
+         for r in trajectory])
+    n=int(trajectory[-1]["iteration"])
+    save("work_counters",[dict(iteration=i) for i in range(n+1)])
+    save("correlations",[dict(iteration=i,probe=p,correlation=0) for i in range(n+1) for p in probes])
+    save("probe_gram",[dict(probe_i=p,probe_j=q,value=int(p==q)) for p in probes for q in probes])
+    save("hessenberg",[dict(restart_cycle=i//50+1,column=i%50,row=j,value=1)
+         for i in range(n) for j in range(i%50+2)])
+    save("restart",[dict(iteration=i,probe=p,residual_jump_relative=0)
+         for i in range(50,n+1,50) for p in probes])
 
 
 class FrozenCurrentTest(unittest.TestCase):
@@ -50,9 +73,13 @@ class FrozenCurrentTest(unittest.TestCase):
                           [dict(achieved_first=1e-9,achieved_second=1e-9,qT_S_gamma_q=1,
                                 BT_split_relative=0,repeat_action_relative=0)]*4)
             else:
+                log=data/"global_AhatP60_test.log"
+                log.write_text(log.read_text()+"STRICT_ALA_STAGE_E_BEGIN\nSTRICT_ALA_STAGE_E_COMPLETE\n")
+                trajectory=[dict(iteration=i,final_iterate=int(i==60),continuity_relative=.02,
+                                 momentum_relative=1e-5,krylov_drift=1) for i in range(1,61)]
                 write_csv(data/"global.strict_ala_stage_C_iterations.csv",
-                          [dict(iteration=60,final_iterate=1,continuity_relative=.02,
-                                momentum_relative=1e-5,krylov_drift=1)])
+                          trajectory)
+                stage_e_evidence(data,trajectory)
                 write_csv(data/"global.strict_ala_stage_C_inner_solves.csv",
                           [dict(status="CONVERGED",seconds=1)])
 
@@ -106,11 +133,44 @@ class FrozenCurrentTest(unittest.TestCase):
         self.evidence()
         path=self.root/"BASE/DATA/0/global.strict_ala_stage_C_iterations.csv"
         records=frozen.rows(path)
-        earlier=dict(records[0],iteration="59",final_iterate="0",continuity_relative="0.001")
-        write_csv(path,[earlier]+records)
+        records[-2]["continuity_relative"]="0.001"
+        write_csv(path,records)
+        stage_e_evidence(path.parent,records)
         result=self.analyze()
         self.assertTrue(result["valid"])
         self.assertFalse(result["cases"]["BASE"]["joint_converged"])
+
+    def test_missing_stage_e_is_not_valid_even_with_converged_inner_solves(self):
+        self.evidence()
+        (self.root/"BASE/DATA/0/global.strict_ala_stage_E_hessenberg.csv").unlink()
+        self.assertFalse(self.analyze()["valid"])
+
+    def test_followup_preserves_physics_and_bounds_long_cases(self):
+        target=Path(self.temp.name)/"followup"
+        with contextlib.redirect_stdout(io.StringIO()):
+            frozen.prepare(RUNS,ROOT,target,False,"followup",self.root)
+        a=frozen.cfg_read(target/"BPI_LONG50/case.cfg")
+        b=frozen.cfg_read(target/"BPI_LONG64/case.cfg")
+        self.assertEqual(a[frozen.VS,"piterations"],"300")
+        self.assertEqual(a[frozen.VS,"ala_stage_e_diagnostic"],"off")
+        self.assertEqual({k for k in a if a[k]!=b[k] and k[1] not in ("datadir","datadir_old")},
+                         {(frozen.VS,"ala_pcg_restart_interval")})
+
+    def test_followup_allows_output_paths_but_rejects_changed_tolerance(self):
+        runs=Path(self.temp.name)/"runs"
+        runs.mkdir()
+        for name in frozen.INPUTS:
+            shutil.copy2(RUNS/name,runs/name)
+        cfg=frozen.cfg_read(runs/frozen.INPUTS[0])
+        cfg["CitcomS.solver","datadir"]="/new/output/%RANK"
+        frozen.cfg_write(runs/frozen.INPUTS[0],cfg)
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(
+                frozen,"git_head",return_value="fixture-commit"):
+            frozen.prepare(runs,ROOT,Path(self.temp.name)/"allowed",False,"followup",self.root)
+        cfg[frozen.VS,"tole_compressibility"]="0.123"
+        frozen.cfg_write(runs/frozen.INPUTS[0],cfg)
+        with self.assertRaisesRegex(ValueError,"effective BASE settings differ"):
+            frozen.prepare(runs,ROOT,Path(self.temp.name)/"rejected",False,"followup",self.root)
 
     def test_changed_physics_invalidates_comparison(self):
         self.evidence()
@@ -217,6 +277,36 @@ int run_guard(int mode) {
     def test_temperature_clock_and_each_viscosity_level_are_protected(self):
         for mode in range(1,5):
             self.assertEqual(self.library.run_guard(mode),1)
+
+    def test_stage_e_getter_updates_actual_c_control_field(self):
+        # Compile the real getter statement against the real control struct.
+        # The Python property API is replaced by an integer fixture here.
+        source=(ROOT/"module/setProperties.c").read_text()
+        statements=re.findall(
+            r'getIntProperty\(properties,\s*"ala_stage_e_diagnostic"\s*,[^;]+;', source)
+        self.assertEqual(len(statements),1)
+        directory=Path(self.temp.name)
+        code='''
+#include "element_definitions.h"
+#include "global_defs.h"
+#define getIntProperty(properties,key,target,fp) ((target)=(properties))
+int main(void) {
+    static struct All_variables state;
+    struct All_variables *E=&state;
+    int properties;
+    for(properties=0; properties<=1; ++properties) {
+        E->control.ala_stage_e_diagnostic=1-properties;
+''' + statements[0] + '''
+        if(E->control.ala_stage_e_diagnostic!=properties) return 1;
+    }
+    return 0;
+}
+'''
+        (directory/"getter.c").write_text(code)
+        subprocess.run([os.environ.get("MPICC","mpicc"),"-std=gnu99",
+                        "-I"+str(ROOT/"lib"),str(directory/"getter.c"),
+                        "-o",str(directory/"getter")],check=True,capture_output=True)
+        subprocess.run([str(directory/"getter")],check=True)
 
 
 if __name__ == "__main__":

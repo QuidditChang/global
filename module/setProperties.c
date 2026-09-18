@@ -1129,6 +1129,8 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
                    E->control.ala_stage_abc_adjoint_diagnostic, fp);
     getIntProperty(properties, "ala_stage_abc_production_logging",
                    E->control.ala_stage_abc_production_logging, fp);
+    getIntProperty(properties, "ala_stage_e_diagnostic",
+                   E->control.ala_stage_e_diagnostic, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_layers",
                    E->control.ala_coupled_shallow_vanka_layers, fp);
     getIntProperty(properties, "ala_coupled_shallow_vanka_core_layers",
