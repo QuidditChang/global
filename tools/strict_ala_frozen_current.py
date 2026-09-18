@@ -103,10 +103,27 @@ def git_head(path):
                                    text=True).strip()
 
 
+def generated_build_path(path):
+    """Autotools/dependency files rewritten by a normal in-tree build."""
+    value = Path(path)
+    return value.name == "Makefile.in" or "/.deps/" in "/" + value.as_posix()
+
+
+def dirty_solver_sources(code):
+    output = subprocess.check_output(
+        ["git", "-C", str(code), "diff", "--name-only", "-z", "HEAD",
+         "--", "lib", "CitcomS", "module"])
+    return [path.decode("utf-8", "surrogateescape")
+            for path in output.split(b"\0") if path
+            and not generated_build_path(path.decode("utf-8", "surrogateescape"))]
+
+
 def stamp_build(code):
     # Run this only after config_script completed successfully, as in the README.
-    subprocess.run(["git", "-C", str(code), "diff", "--exit-code", "HEAD",
-                    "--", "lib", "CitcomS", "module"], check=True)
+    dirty = dirty_solver_sources(code)
+    if dirty:
+        raise ValueError("modified solver source prevents build receipt: "
+                         + ", ".join(dirty))
     receipt = code / "frozen_current_build.json"
     write_json(receipt,
                {"code_commit": git_head(code), "binaries": binary_files(code)})

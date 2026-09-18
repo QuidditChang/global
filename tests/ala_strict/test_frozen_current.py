@@ -83,6 +83,14 @@ class FrozenCurrentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stamp-build"):
             frozen.prepare(RUNS, code, Path(self.temp.name)/"hpc", True)
 
+    def test_stamp_filter_only_ignores_generated_build_files(self):
+        for path in ("lib/Makefile.in", "CitcomS/Makefile.in",
+                     "module/Exchanger/.deps/Boundary.Plo"):
+            self.assertTrue(frozen.generated_build_path(path),path)
+        for path in ("lib/Drive_solvers.c", "lib/Makefile.am",
+                     "CitcomS/Controller.py", "module/bindings.c"):
+            self.assertFalse(frozen.generated_build_path(path),path)
+
     def test_nonconvergence_is_valid_evidence_not_acceptance(self):
         self.evidence()
         result=self.analyze()
