@@ -15,6 +15,36 @@ spec.loader.exec_module(fix)
 
 
 class BuildEntryTests(unittest.TestCase):
+    def test_real_bin_install_rules_with_prefix_equal_to_build_directory(self):
+        template=(ROOT/'bin/Makefile.in').read_text()
+        programs=template.split('install-binPROGRAMS: $(bin_PROGRAMS)',1)[1].split('\nuninstall-binPROGRAMS:',1)[0]
+        scripts=template.split('install-binSCRIPTS: $(bin_SCRIPTS)',1)[1].split('\npycitcoms$(EXEEXT):',1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp)
+            binary=d/'CitcomSFull'
+            binary.write_bytes(b'compiled-executable-fixture')
+            binary.chmod(0o755)
+            (d/'citcoms').write_text('old launcher')
+            (d/'citcoms.in').write_text('#!@INTERPRETER@\n')
+            shim=d/'libtool'
+            shim.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+            shim.chmod(0o755)
+            (d/'Makefile').write_text('''bin_PROGRAMS = CitcomSFull
+bin_SCRIPTS = citcoms
+mkdir_p = /bin/mkdir -p
+binPROGRAMS_INSTALL = /usr/bin/install
+transform = s,x,x,
+do_install = sed -e s%@INTERPRETER@%/installed/pycitcoms%g
+'''+'bindir = '+str(d)+'\nLIBTOOL = '+str(shim)+'\n'+
+                'install-binPROGRAMS: $(bin_PROGRAMS)'+programs+'\n'+
+                'install-binSCRIPTS: $(bin_SCRIPTS)'+scripts+'\n')
+            old=subprocess.run(['make','install-binPROGRAMS'],cwd=d,capture_output=True)
+            self.assertNotEqual(old.returncode,0)
+            fixed=subprocess.run(['make','install-binSCRIPTS'],cwd=d,capture_output=True)
+            self.assertEqual(fixed.returncode,0,fixed.stderr)
+            self.assertEqual(binary.read_bytes(),b'compiled-executable-fixture')
+            self.assertEqual((d/'citcoms').read_text(),'#!/installed/pycitcoms\n')
+
     def test_old_generator_preserves_integers_and_expanded_paths(self):
         from lib2to3.refactor import RefactoringTool, get_fixers_from_package
         template=(ROOT/"m4/cit_python.m4").read_text()
@@ -45,6 +75,11 @@ class BuildEntryTests(unittest.TestCase):
                 d=Path(tmp)
                 (d/'tools').mkdir()
                 (d/'commands').mkdir()
+                (d/'bin').mkdir()
+                for name in ('CitcomSFull','CitcomSRegional','pycitcoms','mpipycitcoms'):
+                    exe=d/'bin'/name
+                    exe.write_text('#!/bin/sh\nexit 0\n')
+                    exe.chmod(0o755)
                 shutil.copy2(ROOT/'config_script',d/'config_script')
                 shutil.copy2(ROOT/'tools/fix_generated_pyconfig.py',d/'tools')
                 (d/'pyconfig').write_text(fix.OLD)
@@ -59,12 +94,14 @@ case "$1" in
   distclean) exit 0 ;;
   -j4) [ "$FAILURE" != compile ] ;;
   install) [ "$FAILURE" != install ] || exit 9; touch installed ;;
+  -C) touch scripts_installed ;;
   *) exit 8 ;;
 esac
 ''')
                 make.chmod(0o755)
                 (d/'tools/strict_ala_frozen_current.py').write_text('''import os, pathlib
 assert pathlib.Path('installed').exists()
+assert pathlib.Path('scripts_installed').exists()
 assert os.environ['FAILURE'] != 'receipt'
 pathlib.Path('frozen_current_build.json').write_text('fresh')
 ''')
@@ -77,6 +114,7 @@ pathlib.Path('frozen_current_build.json').write_text('fresh')
                     self.assertEqual(receipt.read_text(),'fresh')
                     self.assertIn('BUILD_COMPLETE',result.stdout)
                     self.assertIn('mkdir_p=/bin/mkdir -p',(d/'calls').read_text())
+                    self.assertNotIn('etc bin module',(d/'calls').read_text())
                 else:
                     self.assertNotEqual(result.returncode,0)
                     self.assertFalse(receipt.exists())

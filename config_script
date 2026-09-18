@@ -60,8 +60,16 @@ fi
 BUILD_PHASE=compile
 make -j4 mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
 BUILD_PHASE=install
-make install SUBDIRS="lib CitcomS etc bin module" \
+make install SUBDIRS="lib CitcomS etc module" \
     mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+# prefix is the build root: compiled bin programs already occupy their final
+# paths. Installing them again copies each file onto itself. The citcoms script
+# still needs its install-time interpreter/PYTHONPATH substitutions.
+make -C bin install-binSCRIPTS \
+    mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+for executable in CitcomSFull CitcomSRegional pycitcoms mpipycitcoms; do
+    test -x "bin/${executable}"
+done
 
 BUILD_PHASE=receipt
 "${PYTHON3}" tools/strict_ala_frozen_current.py stamp-build --code "$(pwd)"
