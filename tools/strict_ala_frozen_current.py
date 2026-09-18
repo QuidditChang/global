@@ -140,9 +140,8 @@ def build_receipt(code):
     receipt = code / "frozen_current_build.json"
     if not receipt.is_file():
         raise ValueError(
-            "missing build receipt: " + str(receipt) + "; after a successful "
-            "build run: env -u PYTHONHOME python3 "
-            "tools/strict_ala_frozen_current.py stamp-build --code " + str(code))
+            "missing build receipt: " + str(receipt) + "; run ./config_script "
+            "in the code checkout; it installs and runs stamp-build automatically")
     try:
         return json.loads(receipt.read_text())
     except (OSError, json.JSONDecodeError) as exc:

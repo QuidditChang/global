@@ -300,9 +300,7 @@ config_vars = parse_config_h(f)
 f.close()
 
 makefile_vars = parse_makefile(makefile)
-keys = makefile_vars.keys()
-for key in keys:
-    makefile_vars[key] = expand_makefile_vars(makefile_vars[key], makefile_vars)
+# parse_makefile already expands variables and preserves integer values.
 
 f = open(output, 'w')
 print >>f, "#!/usr/bin/env python"

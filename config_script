@@ -1,5 +1,19 @@
 #!/bin/bash
-set -e
+set -eE -o pipefail
+cd "$(dirname "$0")"
+BUILD_PHASE=preflight
+trap 'rc=$?; echo "BUILD_FAILED phase=${BUILD_PHASE} rc=${rc}" >&2; exit "$rc"' ERR
+# A failed rebuild must not leave a usable receipt for an older executable.
+rm -f frozen_current_build.json
+unset PYTHONHOME
+if [ -n "${STRICT_ALA_PYTHON:-}" ]; then
+    PYTHON3=${STRICT_ALA_PYTHON}
+elif [ -x /share/apps/anaconda3/2020.7/bin/python3 ]; then
+    PYTHON3=/share/apps/anaconda3/2020.7/bin/python3
+else
+    PYTHON3=$(command -v python3)
+fi
+"${PYTHON3}" -c 'import sys; assert sys.version_info >= (3, 7)'
 
 # To install Python2.6
 # Currently Loaded Modules:
@@ -15,15 +29,21 @@ if command -v module >/dev/null 2>&1; then
 fi
 
 # Clean previous build
+BUILD_PHASE=clean
 make distclean 2>/dev/null || true
 
 if [ ! -s ./configure ]; then
     autoreconf -fi
 fi
 
-./configure --prefix=$(pwd) --with-hdf5=$HDF5ROOT \
+BUILD_PHASE=configure
+./configure --prefix="$(pwd)" --with-hdf5="${HDF5ROOT:?HDF5 module did not set HDF5ROOT}" \
       CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
         LDFLAGS="-L$HDF5ROOT/lib"
+
+# Existing configure files are not tracked and can survive git pull.
+BUILD_PHASE=compatibility
+"${PYTHON3}" tools/fix_generated_pyconfig.py pyconfig
 
 [ -e aux-config/install-sh ] && chmod +x aux-config/install-sh
 [ -e aux-config/py-compile ] && chmod +x aux-config/py-compile
@@ -37,9 +57,15 @@ fi
 
 # Old Automake templates use mkdir_p; newer ones use MKDIR_P. Supply both
 # explicitly so an empty configure substitution cannot execute a directory.
+BUILD_PHASE=compile
 make -j4 mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+BUILD_PHASE=install
 make install SUBDIRS="lib CitcomS etc bin module" \
     mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+
+BUILD_PHASE=receipt
+"${PYTHON3}" tools/strict_ala_frozen_current.py stamp-build --code "$(pwd)"
+echo "BUILD_COMPLETE: compiled, installed and stamped $(pwd)"
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
