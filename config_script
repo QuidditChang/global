@@ -60,8 +60,12 @@ fi
 BUILD_PHASE=compile
 make -j4 mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
 BUILD_PHASE=install
-make install SUBDIRS="lib CitcomS etc module" \
-    mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+# Do not override SUBDIRS on the make command line: GNU make propagates it
+# into module, replacing that directory's own optional Exchanger subdirectory.
+for directory in lib CitcomS etc module; do
+    make -C "${directory}" install \
+        mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+done
 # prefix is the build root: compiled bin programs already occupy their final
 # paths. Installing them again copies each file onto itself. The citcoms script
 # still needs its install-time interpreter/PYTHONPATH substitutions.

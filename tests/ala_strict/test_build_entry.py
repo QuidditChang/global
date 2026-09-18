@@ -15,6 +15,32 @@ spec.loader.exec_module(fix)
 
 
 class BuildEntryTests(unittest.TestCase):
+    def test_install_sequence_preserves_nested_make_subdirs(self):
+        script=(ROOT/'config_script').read_text()
+        install=script.split('BUILD_PHASE=install\n',1)[1].split('BUILD_PHASE=receipt',1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp)
+            for name in ('lib','CitcomS','etc','module/Exchanger','bin'):
+                directory=d/name
+                directory.mkdir(parents=True,exist_ok=True)
+                target='install-binSCRIPTS' if name=='bin' else 'install'
+                (directory/'Makefile').write_text(target+':\n\ttouch installed\n')
+            (d/'module/Makefile').write_text(
+                'SUBDIRS = Exchanger\ninstall:\n'
+                '\t@for dir in $(SUBDIRS); do $(MAKE) -C $$dir install || exit $$?; done\n'
+                '\ttouch installed\n')
+            for name in ('CitcomSFull','CitcomSRegional','pycitcoms','mpipycitcoms'):
+                exe=d/'bin'/name
+                exe.write_text('#!/bin/sh\nexit 0\n')
+                exe.chmod(0o755)
+            old=subprocess.run(['make','-C','module','install','SUBDIRS=lib CitcomS etc module'],
+                               cwd=d,capture_output=True)
+            self.assertNotEqual(old.returncode,0)
+            result=subprocess.run(['bash','-ec',install],cwd=d,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            for name in ('lib','CitcomS','etc','module','module/Exchanger','bin'):
+                self.assertTrue((d/name/'installed').exists(),name)
+
     def test_real_bin_install_rules_with_prefix_equal_to_build_directory(self):
         template=(ROOT/'bin/Makefile.in').read_text()
         programs=template.split('install-binPROGRAMS: $(bin_PROGRAMS)',1)[1].split('\nuninstall-binPROGRAMS:',1)[0]
@@ -93,8 +119,9 @@ echo "$*" >> calls
 case "$1" in
   distclean) exit 0 ;;
   -j4) [ "$FAILURE" != compile ] ;;
-  install) [ "$FAILURE" != install ] || exit 9; touch installed ;;
-  -C) touch scripts_installed ;;
+  -C)
+    [ "$FAILURE" != install ] || exit 9
+    if [ "$2" = bin ]; then touch scripts_installed; else touch installed; fi ;;
   *) exit 8 ;;
 esac
 ''')
@@ -115,6 +142,7 @@ pathlib.Path('frozen_current_build.json').write_text('fresh')
                     self.assertIn('BUILD_COMPLETE',result.stdout)
                     self.assertIn('mkdir_p=/bin/mkdir -p',(d/'calls').read_text())
                     self.assertNotIn('etc bin module',(d/'calls').read_text())
+                    self.assertNotIn('SUBDIRS=',(d/'calls').read_text())
                 else:
                     self.assertNotEqual(result.returncode,0)
                     self.assertFalse(receipt.exists())
