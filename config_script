@@ -35,8 +35,11 @@ if [ -f examples/Makefile ]; then
     perl -0pi -e 's|MKDIR_P = \@MKDIR_P\@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
 fi
 
-make -j4
-make install SUBDIRS="lib CitcomS etc bin module" -i
+# Old Automake templates use mkdir_p; newer ones use MKDIR_P. Supply both
+# explicitly so an empty configure substitution cannot execute a directory.
+make -j4 mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
+make install SUBDIRS="lib CitcomS etc bin module" \
+    mkdir_p="/bin/mkdir -p" MKDIR_P="/bin/mkdir -p"
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
