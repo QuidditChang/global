@@ -77,6 +77,12 @@ class FrozenCurrentTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             frozen.prepare(RUNS, ROOT, self.root, False)
 
+    def test_hpc_preflight_explains_missing_build_receipt(self):
+        code=Path(self.temp.name)/"unstamped-code"
+        code.mkdir()
+        with self.assertRaisesRegex(ValueError, "stamp-build"):
+            frozen.prepare(RUNS, code, Path(self.temp.name)/"hpc", True)
+
     def test_nonconvergence_is_valid_evidence_not_acceptance(self):
         self.evidence()
         result=self.analyze()

@@ -107,8 +107,23 @@ def stamp_build(code):
     # Run this only after config_script completed successfully, as in the README.
     subprocess.run(["git", "-C", str(code), "diff", "--exit-code", "HEAD",
                     "--", "lib", "CitcomS", "module"], check=True)
-    write_json(code / "frozen_current_build.json",
+    receipt = code / "frozen_current_build.json"
+    write_json(receipt,
                {"code_commit": git_head(code), "binaries": binary_files(code)})
+    print("wrote build receipt: " + str(receipt))
+
+
+def build_receipt(code):
+    receipt = code / "frozen_current_build.json"
+    if not receipt.is_file():
+        raise ValueError(
+            "missing build receipt: " + str(receipt) + "; after a successful "
+            "build run: env -u PYTHONHOME python3 "
+            "tools/strict_ala_frozen_current.py stamp-build --code " + str(code))
+    try:
+        return json.loads(receipt.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid build receipt: " + str(receipt) + ": " + str(exc))
 
 
 def validate_inputs(runs):
@@ -158,7 +173,7 @@ def prepare(runs, code, root, hpc):
         raise ValueError("use a fresh experiment directory: " + str(root))
     extra = {}
     if hpc:
-        receipt = json.loads((code / "frozen_current_build.json").read_text())
+        receipt = build_receipt(code)
         if receipt != {"code_commit": git_head(code), "binaries": binary_files(code)}:
             raise ValueError("build receipt mismatch: rebuild and stamp")
         # Record every reconstruction file selected around this fixed start age.
