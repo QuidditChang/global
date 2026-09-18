@@ -477,6 +477,7 @@ void general_stokes_solver(struct All_variables *E)
     }
   }
 
+  strict_ala_frozen_current_guard(E,1);
   if(E->control.ala_stage_abc_adjoint_diagnostic &&
      E->monitor.solution_cycles==0)
     strict_ala_stage_B_diagnostic(E);
@@ -571,7 +572,50 @@ void general_stokes_solver(struct All_variables *E)
       strict_ala_vc1_transfer_warm_state(E,vc1_warm_output,1);
   }
 
+  strict_ala_frozen_current_guard(E,0);
   return;
+}
+
+/* Diagnostic-only guard also called by the Stage-B/Stage-C early exits.
+ * Compare locally before reduction: an XOR cancellation cannot hide mutation.
+ * The rank salt makes cross-run aggregate fingerprints less cancellation prone.
+ */
+void strict_ala_frozen_current_guard(struct All_variables *E, int begin)
+{
+  static unsigned long long saved_physical, saved_viscosity;
+  static int active=0;
+  unsigned long long physical, viscosity=1469598103934665603ULL;
+  unsigned long long global_physical, global_viscosity;
+  int m,lev,bad,global_bad;
+  const char *enabled=getenv("STRICT_ALA_FROZEN_CURRENT");
+  if(enabled==NULL || strcmp(enabled,"1")!=0) return;
+  if(E->monitor.solution_cycles!=0)
+    myerror(E,"Frozen-current experiment must not advance beyond step zero");
+  strict_ala_vc1_physical_state_hash(E,&physical);
+  physical=strict_ala_vc1_hash_bytes(physical,&E->parallel.me,sizeof(int));
+  for(lev=E->mesh.gridmin;lev<=E->mesh.levmax;lev++)
+    for(m=1;m<=E->sphere.caps_per_proc;m++)
+      viscosity=strict_ala_vc1_hash_bytes(viscosity,&E->EVI[lev][m][1],
+          E->lmesh.NEL[lev]*vpoints[E->mesh.nsd]*sizeof(float));
+  viscosity=strict_ala_vc1_hash_bytes(viscosity,&E->parallel.me,sizeof(int));
+  if(begin) {
+    saved_physical=physical; saved_viscosity=viscosity; active=1;
+  }
+  bad=!active || physical!=saved_physical || viscosity!=saved_viscosity;
+  MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+  MPI_Allreduce(&physical,&global_physical,1,MPI_UNSIGNED_LONG_LONG,
+                MPI_BXOR,E->parallel.world);
+  MPI_Allreduce(&viscosity,&global_viscosity,1,MPI_UNSIGNED_LONG_LONG,
+                MPI_BXOR,E->parallel.world);
+  if(E->parallel.me==0) {
+    fprintf(E->fp,"STRICT_ALA_FROZEN_CURRENT phase=%s physical=%016llx "
+            "viscosity=%016llx matched=%d step=%d time=%.17g\n",
+            begin ? "begin" : "end",global_physical,global_viscosity,
+            !global_bad,E->monitor.solution_cycles,E->monitor.elapsed_time);
+    fflush(E->fp);
+  }
+  if(global_bad) myerror(E,"Frozen-current physical state or viscosity changed");
+  if(!begin) active=0;
 }
 
 void general_stokes_solver_pseudo_surf(struct All_variables *E)

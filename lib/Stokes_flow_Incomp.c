@@ -34,6 +34,7 @@
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "drive_solvers.h"
 #include "ala_block_vector.h"
 #include "ala_coupled_operator.h"
 #include <stdlib.h>
@@ -1975,6 +1976,7 @@ void strict_ala_stage_B_diagnostic(struct All_variables *E)
     ala_schur_free_field(E,ct); ala_schur_free_field(E,bt);
     ala_schur_free_field(E,solution1); ala_schur_free_field(E,solution2);
     ala_schur_free_field(E,work);
+    strict_ala_frozen_current_guard(E,0);
     MPI_Barrier(E->parallel.world);
     MPI_Finalize();
     exit(EXIT_SUCCESS);
@@ -4208,6 +4210,7 @@ static float solve_ala_fgmres_core(struct All_variables *E, double **V,
             strict_ala_stage_f3_finalize(E,stage_f3_state,cache,count,0,
                 audit_best_cancellation,residual,E->control.tole_comp);
             strict_ala_stage_e_finalize(E,&stage_e_observer,cache);
+            strict_ala_frozen_current_guard(E,0);
             MPI_Finalize();
             exit(EXIT_SUCCESS);
         }

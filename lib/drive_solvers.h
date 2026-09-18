@@ -34,6 +34,7 @@ extern "C" {
 
 void general_stokes_solver(struct All_variables*);
 void general_stokes_solver_setup(struct All_variables*);
+void strict_ala_frozen_current_guard(struct All_variables*, int begin);
 
 #ifdef __cplusplus
 }

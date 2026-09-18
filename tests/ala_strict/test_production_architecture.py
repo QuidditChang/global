@@ -45,6 +45,8 @@ class StrictProductionArchitectureTest(unittest.TestCase):
         legacy = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA.cfg")
         strict = _active_cfg_lines(RUNS_ROOT / "cmbhf_ALA_strict.cfg")
         strict_keys = (
+            "rheol",
+            "cold_scale",
             "steps",
             "walltime",
             "kC_ratio",
@@ -150,6 +152,10 @@ class StrictProductionArchitectureTest(unittest.TestCase):
             _without_cfg_keys(strict, strict_keys),
         )
         strict_text = "\n".join(strict)
+        # The current frozen campaign explicitly uses the committed rheol7
+        # update; the older generic ALA cfg is not its viscosity authority.
+        self.assertEqual(_cfg_scalar(RUNS_ROOT / "cmbhf_ALA_strict.cfg", "rheol"), 7)
+        self.assertEqual(_cfg_scalar(RUNS_ROOT / "cmbhf_ALA_strict.cfg", "cold_scale"), 0.5)
         self.assertRegex(
             strict_text,
             r"(?m)^\s*refstate_file\s*=\s*refstate_ALA_strict\.txt\s*$",
