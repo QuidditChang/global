@@ -48,9 +48,12 @@ HPC build before submitting. The fixed Controller early exit permits exactly
 one remaining step. No NetCDF flags/library are required by CBF anymore.
 
 The LSF script keeps the existing model directory as cwd, checks all 384 binary
-Restart/global.chkpt.<rank>.13600 headers for step 13600 and time_nd 0.647491,
+Restart/global.chkpt.<rank>.13600 headers for step 13600 and consistent finite timing across ranks,
 and runs 384 ranks with the original 4x4x2 decomposition over 12 caps. It reads
-checkpoint time rather than inventing a cfg time override. Config intervals are
+checkpoint time rather than inventing a cfg time override. The user-reported
+0.647491 is geological age in Ma; the actual checkpoint elapsed time is
+approximately 0.000193788626348 nondimensional. Keep start_age=249.9 in cfg;
+the full checkpoint restores both elapsed_time and its original start_age. Config intervals are
 13601, so no CBF/regular/profile/checkpoint output is requested at 13600;
 13601 is the terminal step. Ordinary output uses CBF_benchmark/DATA/%RANK.
 Each boundary produces 192 rank files. Restart inputs are not modified.
