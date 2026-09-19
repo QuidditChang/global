@@ -68,7 +68,6 @@ TWB
 #include "parsing.h"
 #include "parallel_related.h"
 #include "output.h"
-#include "cbf_output.h"
 /* Big endian crap */
 #include <string.h>
 #ifdef HAVE_MALLOC_H
@@ -1216,17 +1215,24 @@ void gzdir_output_heating(struct All_variables *E, int cycles)
 }
 
 
-/* Global Appendix C CBF GRDs; the historical binding name is retained. */
+/* Native Appendix C CBF output; the historical binding name is retained. */
 void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
 {
     void heat_flux_CBF();
+    double started=MPI_Wtime(),elapsed,max_elapsed;
 
     if(!E->output.cbf_output_shflux && !E->output.cbf_output_bhflux)
         return;
 
     heat_flux_CBF(E);
 
-    cbf_output_grids(E, cycles);
+    /* The boundary assembler writes native RHS, masses, flux and faces. */
+    elapsed=MPI_Wtime()-started;
+    MPI_Reduce(&elapsed,&max_elapsed,1,MPI_DOUBLE,MPI_MAX,0,E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"CBF_NATIVE_COMPLETE step=%d max_wall_seconds=%.9g\n",cycles,max_elapsed);
+        fflush(E->fp);
+    }
 
     return;
 }

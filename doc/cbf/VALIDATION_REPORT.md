@@ -1,3 +1,10 @@
+> Current update: runtime GRD output has been replaced by native Q1 rank files.
+> See README.md for the format and one-step restart benchmark. GRD results below
+> describe the earlier output implementation, not the current runtime format.
+> Native builds require no NetCDF; 12/24-rank one-step local runs and native
+> node-equation/face-integral validation passed. HPC checkpoint benchmark has
+> been configured but not run locally (remote checkpoint data unavailable).
+
 # CBF GLL Q1 实现与验证报告
 
 日期：2026-09-19。分支：solver/runs 均为 `cmbhf_EBA`。
@@ -84,3 +91,12 @@ RMS 是规则经纬点等权统计，不是假称面积加权 FE 范数。此测
 `lib/Parsing.c` 将两处写入未初始化指针的表达式改为 `strchr` 指针赋值，检查空指针后越过逗号读取数值。不改变调用接口。回归入口为 `tests/cbf/test_parser_control.py`。
 
 最终源码构建位于 `/tmp/cbf-final-build`，记录 `parser_workaround=False`。最终 12/24 ranks 日志与文件位于 `/tmp/cbf-final-smoke-{12,24}`，两者日志均为 `cycles=1`。正常结束沿用原有退出码 8。此前细化、冻结场分区一致性和开关对照使用的是等价临时解析器修复构建；这次最终复验验证仓库正式修复的启动及实际时间推进，没有重复宣称完整 HPC 物理验证。
+
+## 原生输出改造的本地验收
+
+- 不链接 NetCDF 的完整 standalone 构建通过。
+- 12/24 ranks 真实小模型均完成一步，顶底每个边界各 12 个 rank 文件。
+- `verify_native_outputs.py` 检查全部原生节点有限值、正质量及 q=±scale*rhs/mass；按独立面权重重算功率，与头部全局功率一致。
+- 控制器测试确认 13600 -> 13601 恰好推进一次，已到终止步则不推进。
+- benchmark LSF 语法通过；384 份合成 checkpoint 头的预检通过，错误时间被拒绝。此项只验证文件头检查逻辑，不等于已读取用户 HPC checkpoint。
+- 生产 13600 checkpoint 未在本地运行；HPC 上需重建并安装当前 C 库及 Controller.py 后再提交 benchmark。

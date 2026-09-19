@@ -76,7 +76,7 @@ class Controller(Component):
     def march(self, totalTime=0, steps=0):
         """explicit time loop"""
 
-        if (self.step + 1) >= steps:
+        if steps and self.step >= steps:
             self.endSimulation()
             return
 

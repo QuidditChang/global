@@ -20,12 +20,12 @@ def main():
     source_list=(ROOT/'lib/Makefile.am').read_text().split('sources =',1)[1].split('EXTRA_DIST',1)[0]
     sources=[ROOT/'lib'/v for v in source_list.replace('\\','').split() if v.endswith('.c')]
     (build/'VALIDATION_BUILD.txt').write_text('parser_workaround=False\nsource=%s\n'%ROOT)
-    flags=shlex.split(subprocess.check_output(['nc-config','--cflags'],text=True))
-    libs=shlex.split(subprocess.check_output(['nc-config','--libs'],text=True))
+    flags=[]
+    libs=[]
     compiler=os.environ.get('MPICC','mpicc')
     command=[compiler,'-std=gnu99','-w','-Wno-error=implicit-function-declaration',
              '-Wno-error=implicit-int','-Wno-error=int-conversion','-O0','-g',
-             '-DUSE_GZDIR','-DUSE_CBF_NETCDF','-I'+str(ROOT/'lib'),
+             '-DUSE_GZDIR','-I'+str(ROOT/'lib'),
              '-I'+str(ROOT/'tests/cbf'),*flags]
     sources += [ROOT/'bin/Citcom.c',ROOT/'bin/CitcomSFull.c']
     driver=(ROOT/'bin/Citcom.c').read_text().replace('int main(argc,argv)',

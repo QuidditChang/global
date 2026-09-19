@@ -1,3 +1,10 @@
+> Current update: runtime GRD output has been replaced by native Q1 rank files.
+> See README.md for the format and one-step restart benchmark. GRD results below
+> describe the earlier output implementation, not the current runtime format.
+> Native builds require no NetCDF; 12/24-rank one-step local runs and native
+> node-equation/face-integral validation passed. HPC checkpoint benchmark has
+> been configured but not run locally (remote checkpoint data unavailable).
+
 # CBF implementation status (2026-09-19)
 
 Authorized implementation and local validation are complete on `cmbhf_EBA`.

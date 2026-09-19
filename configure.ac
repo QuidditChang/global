@@ -87,13 +87,6 @@ LT_INIT
 AC_SEARCH_LIBS([MPI_Init], [mpi mpich], [], [AC_MSG_ERROR([MPI library not found])])
 AC_SEARCH_LIBS([sqrt], [m])
 
-# Optional at build time; enabled CBF GRD output requires this library.
-AC_CHECK_HEADER([netcdf.h], [
-    AC_SEARCH_LIBS([nc_create], [netcdf], [
-        CPPFLAGS="-DUSE_CBF_NETCDF $CPPFLAGS"
-    ], [AC_MSG_WARN([NetCDF C library unavailable; CBF GRD output will be disabled])])
-], [AC_MSG_WARN([netcdf.h unavailable; CBF GRD output will be disabled])])
-
 CIT_CHECK_LIB_HDF5
 CIT_CHECK_LIB_HDF5_PARALLEL
 

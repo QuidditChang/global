@@ -38,6 +38,7 @@
 #include "material_properties.h"
 #include "advection_diffusion.h"
 #include "cbf_geometry.h"
+#include "cbf_output.h"
 #include <math.h>		/* for sqrt */
 
 
@@ -218,14 +219,15 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     const double sign=top ? 1.0 : -1.0;
     const double scale=E->data.k0*E->data.ref_temperature
                          /(E->data.radius_km*1000.0);
-    double *rhs[NCS], *mass[NCS];
+    double *rhs[NCS], *mass[NCS], *qnodal[NCS];
     double er[9],x[4][3],dm[4],totals[2]={0,0},global_totals[2];
     void parallel_process_termination();
 
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
         rhs[m]=(double *)calloc(E->lmesh.nno+2,sizeof(double));
         mass[m]=(double *)calloc(E->lmesh.nno+2,sizeof(double));
-        if(!rhs[m] || !mass[m]) bad=1;
+        qnodal[m]=(double *)calloc(E->lmesh.nno+2,sizeof(double));
+        if(!rhs[m] || !mass[m] || !qnodal[m]) bad=1;
     }
     MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
     if(global_bad) parallel_process_termination();
@@ -259,9 +261,9 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
             node=top ? E->surf_node[m][i] : E->surf_node[m][i]-E->lmesh.noz+1;
             if(!(mass[m][node]>0)) bad=1;
             else {
-                rhs[m][node]=sign*scale*rhs[m][node]/mass[m][node];
-                slice_flux[m][i]=rhs[m][node];
-                if(!isfinite(rhs[m][node])) bad=1;
+                qnodal[m][node]=sign*scale*rhs[m][node]/mass[m][node];
+                slice_flux[m][i]=qnodal[m][node];
+                if(!isfinite(qnodal[m][node])) bad=1;
             }
         }
     /* Each physical face occurs once; use its LOCAL GLL weights, not the
@@ -275,7 +277,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
             cbf_face_gll_mass(x,dm);
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
-                totals[0]+=dm[a]*rhs[m][node];
+                totals[0]+=dm[a]*qnodal[m][node];
                 totals[1]+=dm[a];
             }
         }
@@ -287,7 +289,8 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                 top ? "top" : "bottom",global_totals[0]/global_totals[1],global_totals[1]);
         fflush(E->fp);
     }
-    for(m=1;m<=E->sphere.caps_per_proc;++m) { free(rhs[m]); free(mass[m]); }
+    cbf_native_boundary(E,top,rhs,mass,qnodal,global_totals);
+    for(m=1;m<=E->sphere.caps_per_proc;++m) { free(rhs[m]); free(mass[m]); free(qnodal[m]); }
 }
 
 void heat_flux_CBF(struct All_variables *E)
