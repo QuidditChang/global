@@ -41,6 +41,21 @@ extern int Emergency_stop;
 
 void solver_init(struct All_variables *E);
 
+/* Standalone driver counterpart of Controller.save_cmbhf_CBF. */
+static void save_cbf_if_due(struct All_variables *E)
+{
+    int frequency=E->output.cmbhf_CBF_freq;
+    if(frequency<0)frequency=E->control.record_every;
+    if(frequency<=0 || E->monitor.solution_cycles%frequency)return;
+#ifdef USE_GZDIR
+    void gzdir_output_cmbhf_CBF(struct All_variables *,int);
+    gzdir_output_cmbhf_CBF(E,E->monitor.solution_cycles);
+#else
+    if(E->parallel.me==0)fprintf(stderr,"CBF requires gzip-enabled output binding\n");
+    parallel_process_termination();
+#endif
+}
+
 int main(argc,argv)
      int argc;
      char **argv;
@@ -134,6 +149,8 @@ int main(argc,argv)
 
   (E->problem_output)(E, E->monitor.solution_cycles);
 
+  save_cbf_if_due(E);
+
   /* information about simulation time and wall clock time */
   output_time(E, E->monitor.solution_cycles);
 
@@ -198,6 +215,8 @@ int main(argc,argv)
     if ((E->monitor.solution_cycles % E->control.record_every)==0) {
 	(E->problem_output)(E, E->monitor.solution_cycles);
     }
+
+    save_cbf_if_due(E);
 
     /* information about simulation time and wall clock time */
     output_time(E, E->monitor.solution_cycles);

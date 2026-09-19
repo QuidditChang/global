@@ -68,6 +68,7 @@ TWB
 #include "parsing.h"
 #include "parallel_related.h"
 #include "output.h"
+#include "cbf_output.h"
 /* Big endian crap */
 #include <string.h>
 #ifdef HAVE_MALLOC_H
@@ -1215,50 +1216,7 @@ void gzdir_output_heating(struct All_variables *E, int cycles)
 }
 
 
-static void gzdir_write_CBF_flux(struct All_variables *E, int cycles,
-                                 int top, float *slice_flux[NCS],
-                                 const char *prefix)
-{
-    int i, j;
-    char output_file[255];
-    gzFile *fp1;
-    const int target_zproc = top ? E->parallel.nprocz - 1 : 0;
-
-    if(E->parallel.me_loc[3] != target_zproc) return;
-
-    snprintf(output_file, 255, "%s/%s_CBF.%d.%d.gz",
-             E->control.data_dir, prefix, E->parallel.me, cycles);
-    fp1 = gzdir_output_open(output_file, "w");
-
-    gzprintf(fp1, "%.5e\n", E->monitor.elapsed_time);
-
-    for(j = 1; j <= E->sphere.caps_per_proc; j++) {
-        gzprintf(fp1, "%3d %7d\n", j, E->lmesh.nsf);
-        for(i = 1; i <= E->lmesh.nsf; i++)
-            gzprintf(fp1, "%.6e\n", slice_flux[j][i]);
-    }
-
-    gzclose(fp1);
-
-    return;
-}
-
-
-/* =========================================================================
-   Write row-sum lumped CBF heat flux to per-step gzip files.
-   Outputs:
-     {datadir}/shflux_CBF.{proc}.{cycles}.gz  on top ranks, if enabled
-     {datadir}/bhflux_CBF.{proc}.{cycles}.gz  on bottom ranks, if enabled
-
-   Sign conventions:
-     shflux_CBF positive = heat flow from mantle to surface
-     bhflux_CBF positive = heat flow from core into mantle
-
-   Format: elapsed_time header \n cap# nsf \n q[i] \n ...
-
-   This function keeps the legacy Python binding name output_cmbhf_CBF, but
-   the files are now symmetric shflux/bhflux CBF products.
-   ========================================================================= */
+/* Global Appendix C CBF GRDs; the historical binding name is retained. */
 void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
 {
     void heat_flux_CBF();
@@ -1268,11 +1226,7 @@ void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
 
     heat_flux_CBF(E);
 
-    if(E->output.cbf_output_shflux)
-        gzdir_write_CBF_flux(E, cycles, 1, E->slice.shflux_CBF, "shflux");
-
-    if(E->output.cbf_output_bhflux)
-        gzdir_write_CBF_flux(E, cycles, 0, E->slice.bhflux_CBF, "bhflux");
+    cbf_output_grids(E, cycles);
 
     return;
 }

@@ -148,7 +148,10 @@ class Controller(Component):
         self.solver.save(self.inventory.monitoringFrequency)
         self.solver.save_profiles(self.inventory.profileMonitoringFrequency)
         self.solver.checkpoint(self.inventory.checkpointFrequency)
-        self.solver.save_cmbhf_CBF(self.inventory.monitoringFrequency_cmbhf_CBF)
+        cbf_frequency = self.inventory.monitoringFrequency_cmbhf_CBF
+        if cbf_frequency < 0:
+            cbf_frequency = self.inventory.monitoringFrequency
+        self.solver.save_cmbhf_CBF(cbf_frequency)
         return
 
 
@@ -160,4 +163,4 @@ class Controller(Component):
         monitoringFrequency = pyre.inventory.int("monitoringFrequency", default=100)
         profileMonitoringFrequency = pyre.inventory.int("profileMonitoringFrequency", default=100)
         checkpointFrequency = pyre.inventory.int("checkpointFrequency", default=100)
-        monitoringFrequency_cmbhf_CBF = pyre.inventory.int("monitoringFrequency_cmbhf_CBF", default=0)
+        monitoringFrequency_cmbhf_CBF = pyre.inventory.int("monitoringFrequency_cmbhf_CBF", default=-1)

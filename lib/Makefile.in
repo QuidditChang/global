@@ -318,6 +318,8 @@ libCitcomS_la_SOURCES = $(sources)
 sources = \
 	Advection_diffusion.c \
 	advection_diffusion.h \
+	cbf_geometry.h \
+	cbf_output.h \
 	advection.h \
 	BC_util.c \
 	Checkpoints.c \

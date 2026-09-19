@@ -373,8 +373,8 @@ struct SLICE {    /* horizontally sliced data, including topography */
     float *tpgb[NCS];
     float *shflux[NCS];
     float *bhflux[NCS];
-    float *shflux_CBF[NCS];   /* surface heat flux via row-sum lumped CBF */
-    float *bhflux_CBF[NCS];   /* bottom/CMB heat flux via row-sum lumped CBF */
+    double *shflux_CBF[NCS];   /* surface heat flux via Appendix C Q1 GLL CBF */
+    double *bhflux_CBF[NCS];   /* bottom/CMB heat flux via Appendix C Q1 GLL CBF */
     float *divg[NCS];
     float *vort[NCS];
     float *freesurf[NCS];
@@ -731,9 +731,9 @@ struct Output {
   int write_q_files;
   FILE *fpqt,*fpqb;		/* additional heat flux output */
 
-  int cmbhf_CBF_freq;          /* legacy controller-side CBF heat-flux frequency */
-  int cbf_output_shflux;       /* 1 = write shflux_CBF surface/top files */
-  int cbf_output_bhflux;       /* 1 = write bhflux_CBF bottom/CMB files */
+  int cmbhf_CBF_freq;          /* standalone CBF frequency; -1 inherits storage_spacing */
+  int cbf_output_shflux;       /* 1 = write eshf_CBF surface/top GRDs */
+  int cbf_output_bhflux;       /* 1 = write cmbhf_CBF bottom/CMB GRDs */
   int cbf_use_advection;       /* 1 = include u.gradT term in CBF */
 };
 

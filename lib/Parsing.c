@@ -808,26 +808,26 @@ int interpret_control_string(interpret,essential,Default,minvalue,maxvalue)
          sscanf(interpret,"%lf",Default);  /* read number as a default value */
    }
 
-//  if ((substring=strstr(interpret,","))==NULL) /* minvalue */
-  *substring=strstr(interpret,",");
-  if (!*substring)
+  /* Locate the delimiter before advancing to the minimum field. */
+  substring=strchr(interpret,',');
+  if (!substring)
     { /* no minimum, no maximum */
       return(1);
     }
 
+  ++substring;
   if (!strstr(substring,"nomin"))
     sscanf(substring,"%lf",minvalue);
 
-//  if ((substring=strstr(substring,",")) == NULL) /* maxvalue */
-  *substring=strstr(substring,",");
-  if (!*substring)
+  substring=strchr(substring,',');
+  if (!substring)
     { /* no maximum */
 /*       if (DESCRIBE) */
 /* 	fprintf(stderr,"minimum but no maximum\n"); */
       return(2);
     }
 
-//  if (strstr(substring,"nomax")==NULL)
+  ++substring;
   if (!strstr(substring,"nomax"))
     sscanf(substring,"%lf",maxvalue);
 

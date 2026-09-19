@@ -1139,6 +1139,43 @@ static void element_residual(struct All_variables *E, int el,
 }
 
 
+/* Appendix C physical Galerkin RHS. Reuse the production energy kernel;
+ * do not substitute the SUPG test function for the paper's N_i. The only
+ * diagnostic side effect of element_residual is restored before returning.
+ * Sources and T/Tdot must belong to the caller's documented output state. */
+void cbf_element_thermal_residual(struct All_variables *E, int m, int el,
+                                  double rhs[9])
+{
+    struct Shape_function GN;
+    struct Shape_function_dx GNx;
+    struct Shape_function_dA dOmega;
+    double rtf[4][9], speed, factor;
+    double saved_phase = E->heating_phase[m][el];
+    float VV[4][9];
+    int a;
+    void get_global_shape_fn();
+    void velo_from_element();
+
+    velo_from_element(E, VV, m, el, 1);
+    for(a=1; a<=enodes[E->mesh.nsd]; ++a) {
+        speed = sqrt(pow(VV[1][a],2)+pow(VV[2][a],2)+pow(VV[3][a],2));
+        if(speed > 100*E->data.scalev) {
+            factor = (100*E->data.scalev)/speed;
+            VV[1][a] *= factor;
+            VV[2][a] *= factor;
+            VV[3][a] *= factor;
+        }
+    }
+    get_global_shape_fn(E, el, &GN, &GNx, &dOmega, 0, 1,
+                        rtf, E->mesh.levmax, m);
+    element_residual(E, el, E->N, GNx, dOmega, VV, E->T, E->Tdot,
+                     E->convection.heat_sources, rhs, rtf,
+                     E->control.reference_conductivity,
+                     E->sphere.cap[m].TB, E->node, m);
+    E->heating_phase[m][el] = saved_phase;
+}
+
+
 /* This function filters the temperature field. The temperature above   */
 /* Tmax0(==1.0) and Tmin0(==0.0) is removed, while conserving the total */
 /* energy. See Lenardic and Kaula, JGR, 1993.                           */
@@ -1358,6 +1395,21 @@ static void process_heating(struct All_variables *E, int psc_pass)
     return;
 }
 
+
+/* Re-evaluate physical sources for the same T/u state used by CBF, including
+ * initial output and a Stokes update after thermal advancement. The caller
+ * owns temporary output arrays and restores all persistent heating pointers. */
+void cbf_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
+{
+    if(E->control.disptn_number != 0) {
+        process_adi_heating(E,m,adi);
+        process_visc_heating(E,m,visc);
+    }
+    else {
+        memset(adi,0,(E->lmesh.nel+1)*sizeof(double));
+        memset(visc,0,(E->lmesh.nel+1)*sizeof(double));
+    }
+}
 
 static void measure_temperature_assimilation(struct All_variables *E)
 {
