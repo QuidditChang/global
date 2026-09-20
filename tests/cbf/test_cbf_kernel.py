@@ -32,7 +32,7 @@ class CBFKernel(unittest.TestCase):
         energy = energy[energy.index('static void element_thermal_transport(', energy.index('static void pg_solver(', energy.index('static void pg_solver(')+1)):]
         parts = [function(energy, 'static void element_thermal_transport('),
                  function(energy, 'static void element_residual('),
-                 function(energy, 'void CBF_element_thermal_residual(')]
+                 function(energy, 'double CBF_element_thermal_residual(')]
         phase = function((ROOT/'lib/Phase_change.c').read_text(), 'void phase_change_state(')
         prefix = r'''
 #include <math.h>
@@ -41,7 +41,8 @@ class CBFKernel(unittest.TestCase):
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "CBF_face_geometry.h"
-static double test_velocity;
+static double test_velocity, last_phase;
+static int variable_phase;
 double conductivity_element_prefactor(struct All_variables *E,int m,int el,double k) {return k;}
 double conductivity_temperature_factor(struct All_variables *E,double t) {return 1.0;}
 void parallel_process_termination(void) {abort();}
@@ -54,7 +55,7 @@ void get_global_shape_fn(struct All_variables *E,int el,struct Shape_function *G
  double rtf[4][9],int lev,int m) {
  int a,i; memset(g,0,sizeof(*g));
  for(i=1;i<=8;i++) {
-  w->vpt[i]=0.125; rtf[1][i]=1.1; rtf[3][i]=2.0;
+  w->vpt[i]=variable_phase ? i/36.0 : 0.125; rtf[1][i]=1.1; rtf[3][i]=2.0;
   for(a=1;a<=8;a++) g->vpt[GNVXINDEX(0,a,i)]=(a%2 ? -1.0:1.0)/8.0;
  }
 }
@@ -80,11 +81,14 @@ void residual(double rate,double velocity,double k,double source,double entropy,
  E->control.phase[0].clapeyron=0.3; E->control.phase[0].inv_width=2;
  for(a=1;a<=8;a++) {
   ien[1].node[a]=a; T[a]=a%2 ? 0:1; Tdot[a]=rate;
-  for(i=1;i<=8;i++) E->N.vpt[GNVINDEX(a,i)]=0.125;
+  for(i=1;i<=8;i++) E->N.vpt[GNVINDEX(a,i)]=variable_phase ? (a%2 ? 1-i/10.0 : i/10.0)/4 : 0.125;
  }
  test_velocity=velocity;
- CBF_element_thermal_residual(E,1,1,out);
+ last_phase=CBF_element_thermal_residual(E,1,1,out);
  out[0]=phase[1];
+}
+double weighted_phase(void) {
+ double out[9];variable_phase=1; residual(3,0,0,0,0.2,out);variable_phase=0;return last_phase;
 }
 '''
         src=Path(cls.tmp.name)/'fixture.c';src.write_text(prefix+phase+'\n'+'\n'.join(parts)+wrapper)
@@ -94,6 +98,7 @@ void residual(double rate,double velocity,double k,double source,double entropy,
         cls.lib.ray_value.argtypes=[ptr,ptr,ptr,ptr];
         cls.lib.mass.argtypes=[ptr,ptr]; cls.lib.jac.argtypes=[ptr,C.c_double,C.c_double];cls.lib.jac.restype=C.c_double
         cls.lib.residual.argtypes=[C.c_double]*5+[ptr]
+        cls.lib.weighted_phase.restype=C.c_double
 
     @classmethod
     def tearDownClass(cls): cls.tmp.cleanup()
@@ -140,6 +145,18 @@ void residual(double rate,double velocity,double k,double source,double entropy,
             r=(C.c_double*3)(math.cos(phi),math.sin(phi),0)
             self.assertEqual(self.lib.ray_value(x,q,r,C.byref(out)),1)
             self.assertAlmostEqual(out.value,2,places=12)
+
+    def test_phase_diagnostic_uses_volume_weights(self):
+        entropy, gamma, offset = map(lambda x:C.c_float(x).value, [.2,.3,.1])
+        values=[]
+        for i in range(1,9):
+            temperature=i/10
+            phase_q=-gamma*(temperature-.5)*2
+            derivative=-gamma/(math.cosh(phase_q)**2)
+            values.append((temperature+offset)*entropy*derivative*3)
+        expected=sum(i*v for i,v in enumerate(values,1))/36
+        self.assertAlmostEqual(self.lib.weighted_phase(),expected,places=12)
+        self.assertGreater(abs(expected-sum(values)/8),1e-3)
 
     def test_nonzero_phase_energy_is_included(self):
         out=(C.c_double*9)();self.lib.residual(3,0,0,0,0.2,out)

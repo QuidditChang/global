@@ -33,11 +33,12 @@
 extern "C" {
 #endif
 
+void print_thermal_budget(struct All_variables *);
 void PG_timestep_init(struct All_variables *);
 void PG_timestep_solve(struct All_variables *);
 void std_timestep(struct All_variables *);
 void CBF_heat_sources(struct All_variables *, int, double *, double *);
-void CBF_element_thermal_residual(struct All_variables *, int, int, double [9]);
+double CBF_element_thermal_residual(struct All_variables *, int, int, double [9]);
 
 #ifdef __cplusplus
 }

@@ -652,6 +652,9 @@ void output_time(struct All_variables *E, int cycles)
   double CPU_time0();
 
   double current_time = CPU_time0();
+  void print_thermal_budget(struct All_variables *);
+
+  print_thermal_budget(E);
 
   if (E->parallel.me == 0) {
     fprintf(E->fptime,"%d %.4e %.4e %.4e %.4e\n",

@@ -78,7 +78,7 @@ static void element_residual(struct All_variables *E, int el,
 static void filter(struct All_variables *E);
 static void process_heating(struct All_variables *E, int psc_pass);
 static void measure_temperature_assimilation(struct All_variables *E);
-static void print_thermal_budget(struct All_variables *E);
+void print_thermal_budget(struct All_variables *E);
 static void apply_smooth_sideTbc(struct All_variables *E);
 
 /* ============================================
@@ -433,7 +433,7 @@ void PG_timestep_solve(struct All_variables *E)
 
   if(E->control.disptn_number != 0)
       process_heating(E, 0);
-  print_thermal_budget(E);
+  /* Budget is evaluated by output_time, after the Stokes/tracer update. */
 
 
   return;
@@ -953,7 +953,7 @@ static void element_residual(struct All_variables *E, int el,
     double prod,sfn;
     struct Shape_function1 GM;
     struct Shape_function1_dA dGamma;
-    double temp,rho,heating;
+    double temp,rho,heating,phase_volume;
     int nz;
 
     void get_global_1d_shape_fn();
@@ -1053,8 +1053,14 @@ static void element_residual(struct All_variables *E, int el,
     }
 
     E->heating_phase[m][el] = 0.0;
-    for(i=1;i<=vpts;i++)
-      E->heating_phase[m][el] += phase_energy[i] / vpts;
+    phase_volume = 0.0;
+    for(i=1;i<=vpts;i++) {
+      double weight=dOmega.vpt[i]*g_point[i].weight[dims-1];
+      E->heating_phase[m][el] += phase_energy[i]*weight;
+      phase_volume += weight;
+    }
+    /* Diagnostic only: solver RHS below still uses phase_energy at each GP. */
+    E->heating_phase[m][el] /= phase_volume;
 
     if(E->control.disptn_number == 0)
         heating = rho * Q;
@@ -1143,15 +1149,16 @@ static void element_residual(struct All_variables *E, int el,
 /* Appendix C physical Galerkin RHS. Reuse the production energy kernel;
  * do not substitute the SUPG test function for the paper's N_i. The only
  * diagnostic side effect of element_residual is restored before returning.
- * Sources and T/Tdot must belong to the caller's documented output state. */
-void CBF_element_thermal_residual(struct All_variables *E, int m, int el,
+ * Sources and T/Tdot must belong to the caller's documented output state.
+ * Return the volume-averaged phase term without changing its stored value. */
+double CBF_element_thermal_residual(struct All_variables *E, int m, int el,
                                   double rhs[9])
 {
     struct Shape_function GN;
     struct Shape_function_dx GNx;
     struct Shape_function_dA dOmega;
     double rtf[4][9], speed, factor;
-    double saved_phase = E->heating_phase[m][el];
+    double saved_phase = E->heating_phase[m][el], phase;
     float VV[4][9];
     int a;
     void get_global_shape_fn();
@@ -1173,7 +1180,9 @@ void CBF_element_thermal_residual(struct All_variables *E, int m, int el,
                      E->convection.heat_sources, rhs, rtf,
                      E->control.reference_conductivity,
                      E->sphere.cap[m].TB, E->node, m);
+    phase=E->heating_phase[m][el];
     E->heating_phase[m][el] = saved_phase;
+    return phase;
 }
 
 
@@ -1422,7 +1431,7 @@ void CBF_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
 static void measure_temperature_assimilation(struct All_variables *E)
 {
     int m, e, i, a, node, nz;
-    double delta_t_gp, rho_cp_gp, integral, volume, weight;
+    double delta_t_gp, rho_gp, cp_gp, integral, volume, weight;
     double rtf[4][9];
     struct Shape_function GN;
     struct Shape_function_dA dOmega;
@@ -1448,18 +1457,18 @@ static void measure_temperature_assimilation(struct All_variables *E)
             volume = 0.0;
             for(i=1; i<=vpts; i++) {
                 delta_t_gp = 0.0;
-                rho_cp_gp = 0.0;
+                rho_gp = cp_gp = 0.0;
                 for(a=1; a<=ends; a++) {
                     node = E->ien[m][e].node[a];
                     nz = ((node-1) % E->lmesh.noz) + 1;
                     weight = E->N.vpt[GNVINDEX(a,i)];
                     delta_t_gp += weight * E->assim_delta_T[m][node];
-                    rho_cp_gp += weight * E->refstate.rho[nz]
-                        * E->refstate.heat_capacity[nz];
+                    rho_gp += weight * E->refstate.rho[nz];
+                    cp_gp += weight * E->refstate.heat_capacity[nz];
                 }
                 weight = dOmega.vpt[i]
                     * g_point[i].weight[E->mesh.nsd-1];
-                integral += rho_cp_gp * delta_t_gp * weight
+                integral += rho_gp * cp_gp * delta_t_gp * weight
                     / E->advection.timestep;
                 volume += weight;
             }
@@ -1475,25 +1484,47 @@ static void measure_temperature_assimilation(struct All_variables *E)
 static void print_thermal_row(FILE *fp, const char *name,
                               double total, double maximum, double minimum)
 {
-    fprintf(fp, "%-20s  %+16.8e  %+16.8e  %+16.8e\n",
+    fprintf(fp, "%-20s  %+24.16e  %+24.16e  %+24.16e\n",
             name, total, maximum, minimum);
 }
 
 
-static void print_thermal_budget(struct All_variables *E)
+void print_thermal_budget(struct All_variables *E)
 {
-    int m, e, ez;
-    double Q, rho;
+    int m, e, ez, bad=0, global_bad;
+    void parallel_process_termination();
+    double Q, rho, rhs[9], boundary[2][4], source_total_W=0.0;
     double total, maximum, minimum;
+    const double length=E->data.radius_km*1000.0;
+    const double power_scale=(double)E->data.k0*E->data.ref_temperature*length;
+    const double density_scale=power_scale/(length*length*length);
+    struct CC saved_cc=E->element_Cc;
+    struct CCX saved_ccx=E->element_Ccx;
+    void CBF_boundary_stats(struct All_variables *, double [2][4]);
     double *qtotal[NCS], *balance[NCS];
     static const char separator[] =
         "==============================================================================\n";
     static const char rule[] =
         "------------------------------------------------------------------------------\n";
 
+    /* Same output T, solver Tdot, current velocity/composition as CBF. */
+    if(E->control.disptn_number != 0) process_heating(E,0);
+    else for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        memset(E->heating_visc[m],0,(E->lmesh.nel+1)*sizeof(double));
+        memset(E->heating_visc_raw[m],0,(E->lmesh.nel+1)*sizeof(double));
+        memset(E->heating_visc_capped[m],0,(E->lmesh.nel+1)*sizeof(double));
+        memset(E->heating_adi[m],0,(E->lmesh.nel+1)*sizeof(double));
+        memset(E->heating_adi_base[m],0,(E->lmesh.nel+1)*sizeof(double));
+    }
+    CBF_boundary_stats(E,boundary);
     for(m=1; m<=E->sphere.caps_per_proc; m++) {
         qtotal[m] = (double *)malloc((E->lmesh.nel+1)*sizeof(double));
         balance[m] = (double *)malloc((E->lmesh.nel+1)*sizeof(double));
+        if(!qtotal[m] || !balance[m]) bad=1;
+    }
+    MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(global_bad) parallel_process_termination();
+    for(m=1; m<=E->sphere.caps_per_proc; m++) {
         for(e=1; e<=E->lmesh.nel; e++) {
             ez = ((e-1) % E->lmesh.elz) + 1;
             rho = 0.5 * (E->refstate.rho[ez]
@@ -1503,6 +1534,7 @@ static void print_thermal_budget(struct All_variables *E)
                 Q *= 1.0 - E->composition.comp_el[m][0][e];
                 Q += E->composition.comp_el[m][0][e] * E->control.Q0ER;
             }
+            E->heating_phase[m][e]=CBF_element_thermal_residual(E,m,e,rhs);
             E->heating_internal[m][e] = rho * Q;
             qtotal[m][e] = E->heating_internal[m][e]
                 + E->heating_visc[m][e] - E->heating_adi[m][e]
@@ -1515,21 +1547,28 @@ static void print_thermal_budget(struct All_variables *E)
 
     if(E->parallel.me == 0) {
         fputs(separator, E->fp);
-        fprintf(E->fp, "THERMAL_BUDGET  step=%d\n",
-                E->monitor.solution_cycles);
+        fprintf(E->fp, "THERMAL_BUDGET  step=%d time_nd=%.17g state=output_T_solver_Tdot_current_velocity\n",
+                E->monitor.solution_cycles,(double)E->monitor.elapsed_time);
+        fprintf(E->fp, "BUDGET_SCALES power_W=%.17g density_W_m3=%.17g volume_nd=%.17g schema=2\n",
+                power_scale,density_scale,E->mesh.volume);
+        fprintf(E->fp, "VOLUME_SOURCES: TOTAL_W; MAX/MIN=W_m-3 (element volume averages)\n");
+        fprintf(E->fp, "Qtotal=Qinternal+Qvisc-Qadi-Qphase+Qassim; Qadi/Qphase positive means sink\n");
+        fprintf(E->fp, "Qassim=accepted-step imposed lithosphere deltaT/dt; other rows are instantaneous; initial_or_restart=%d\n",
+                E->monitor.solution_cycles==E->monitor.solution_cycles_init);
         fputs(rule, E->fp);
-        fprintf(E->fp, "%-20s  %16s  %16s  %16s\n",
-                "TERM", "TOTAL", "MAX", "MIN");
+        fprintf(E->fp, "%-20s  %24s  %24s  %24s\n",
+                "TERM", "TOTAL_W", "MAX_W_m3", "MIN_W_m3");
         fputs(rule, E->fp);
     }
 
 #define PRINT_HEATING_ROW(label, field) do { \
     heating_stats(E, field, &total, &maximum, &minimum); \
     if(E->parallel.me == 0) \
-        print_thermal_row(E->fp, label, total, maximum, minimum); \
+        print_thermal_row(E->fp, label, total*power_scale, maximum*density_scale, minimum*density_scale); \
 } while(0)
 
     PRINT_HEATING_ROW("Qtotal", qtotal);
+    source_total_W=total*power_scale;
     PRINT_HEATING_ROW("Qvisc", E->heating_visc);
     PRINT_HEATING_ROW("Qvisc_raw", E->heating_visc_raw);
     PRINT_HEATING_ROW("Qvisc_capped", E->heating_visc_capped);
@@ -1552,6 +1591,14 @@ static void print_thermal_budget(struct All_variables *E)
 #undef PRINT_HEATING_ROW
 
     if(E->parallel.me == 0) {
+        fputs(rule,E->fp);
+        fprintf(E->fp,"BOUNDARY_CBF: TOTAL_W; MAX/MIN=W_m-2; q_surf positive mantle_to_surface; q_botm positive core_to_mantle\n");
+        fprintf(E->fp,"%-20s  %24s  %24s  %24s\n","TERM","TOTAL_W","MAX_W_m2","MIN_W_m2");
+        print_thermal_row(E->fp,"q_surf",boundary[0][0],boundary[0][1],boundary[0][2]);
+        print_thermal_row(E->fp,"q_botm",boundary[1][0],boundary[1][1],boundary[1][2]);
+        fprintf(E->fp,"CBF_AREAS surf_m2=%.17g botm_m2=%.17g; nan means non-Dirichlet boundary\n",boundary[0][3],boundary[1][3]);
+        fprintf(E->fp,"NET_SOURCE_PLUS_BOUNDARY_W=%.17g (Qtotal+q_botm-q_surf; not a measured storage derivative or closure residual)\n",
+                source_total_W+boundary[1][0]-boundary[0][0]);
         fputs(separator, E->fp);
         fflush(E->fp);
     }
@@ -1560,6 +1607,7 @@ static void print_thermal_budget(struct All_variables *E)
         free((void *)qtotal[m]);
         free((void *)balance[m]);
     }
+    E->element_Cc=saved_cc; E->element_Ccx=saved_ccx;
 
     return;
 }

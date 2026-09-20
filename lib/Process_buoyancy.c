@@ -39,6 +39,7 @@
 #include "advection_diffusion.h"
 #include "CBF_face_geometry.h"
 #include "CBF_native_output.h"
+#include <float.h>
 #include <math.h>		/* for sqrt */
 
 
@@ -209,7 +210,7 @@ void heat_flux(E)
  * boundary mass. All ranks participate in the existing nodal exchange, which
  * includes radial messages. Only physical-boundary rows are assembled. */
 static void heat_flux_CBF_boundary(struct All_variables *E, int top,
-                                   double *slice_flux[NCS])
+                                   double *slice_flux[NCS], int write_native, double stats[4])
 {
     int m,e,a,i,d,node,bad=0,global_bad;
     const int lev=E->mesh.levmax, elz=E->lmesh.elz;
@@ -217,10 +218,11 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     const int active=E->parallel.me_loc[3]==target;
     const int side=top ? SIDE_TOP : SIDE_BOTTOM;
     const double sign=top ? 1.0 : -1.0;
-    const double scale=E->data.k0*E->data.ref_temperature
+    const double scale=(double)E->data.k0*E->data.ref_temperature
                          /(E->data.radius_km*1000.0);
     double *rhs[NCS], *mass[NCS], *qnodal[NCS];
     double er[9],x[4][3],dm[4],totals[2]={0,0},global_totals[2];
+    double extrema[2]={-DBL_MAX,DBL_MAX}, global_extrema[2];
     void parallel_process_termination();
 
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
@@ -263,6 +265,8 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
             else {
                 qnodal[m][node]=sign*scale*rhs[m][node]/mass[m][node];
                 slice_flux[m][i]=qnodal[m][node];
+                extrema[0]=fmax(extrema[0],qnodal[m][node]);
+                extrema[1]=fmin(extrema[1],qnodal[m][node]);
                 if(!isfinite(qnodal[m][node])) bad=1;
             }
         }
@@ -284,23 +288,32 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
     if(global_bad) parallel_process_termination();
     MPI_Allreduce(totals,global_totals,2,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-    if(E->parallel.me==0) {
+    MPI_Allreduce(&extrema[0],&global_extrema[0],1,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+    MPI_Allreduce(&extrema[1],&global_extrema[1],1,MPI_DOUBLE,MPI_MIN,E->parallel.world);
+    if(stats) {
+        double length=E->data.radius_km*1000.0;
+        stats[0]=global_totals[0]*length*length;
+        stats[1]=global_extrema[0]; stats[2]=global_extrema[1];
+        stats[3]=global_totals[1]*length*length;
+    }
+    if(write_native && E->parallel.me==0) {
         fprintf(E->fp,"CBF_GLL_Q1 boundary=%s mean_W_m2=%.16e area_nd=%.16e\n",
                 top ? "top" : "bottom",global_totals[0]/global_totals[1],global_totals[1]);
         fflush(E->fp);
     }
-    CBF_native_boundary(E,top,rhs,mass,qnodal,global_totals);
+    if(write_native) CBF_native_boundary(E,top,rhs,mass,qnodal,global_totals);
     for(m=1;m<=E->sphere.caps_per_proc;++m) { free(rhs[m]); free(mass[m]); free(qnodal[m]); }
 }
 
-void heat_flux_CBF(struct All_variables *E)
+static void evaluate_heat_flux_CBF(struct All_variables *E, int write_native,
+                                   double stats[2][4])
 {
     int m,bad=0,global_bad;
     double *saved_adi[NCS],*saved_visc[NCS],*adi[NCS],*visc[NCS];
     struct CC saved_cc=E->element_Cc;
     struct CCX saved_ccx=E->element_Ccx;
     void parallel_process_termination();
-    if(!E->output.CBF_use_advection) {
+    if(write_native && !E->output.CBF_use_advection) {
         if(E->parallel.me==0) fprintf(stderr,"CBF requires CBF_use_advection=on\n");
         parallel_process_termination();
     }
@@ -316,15 +329,30 @@ void heat_flux_CBF(struct All_variables *E)
         saved_adi[m]=E->heating_adi[m];saved_visc[m]=E->heating_visc[m];
         E->heating_adi[m]=adi[m];E->heating_visc[m]=visc[m];
     }
-    if(E->output.output_q_surf_CBF)
-        heat_flux_CBF_boundary(E,1,E->slice.q_surf_CBF);
-    if(E->output.output_q_botm_CBF)
-        heat_flux_CBF_boundary(E,0,E->slice.q_botm_CBF);
+    if(write_native ? E->output.output_q_surf_CBF : E->mesh.toptbc==1)
+        heat_flux_CBF_boundary(E,1,E->slice.q_surf_CBF,write_native,stats ? stats[0]:NULL);
+    if(write_native ? E->output.output_q_botm_CBF : E->mesh.bottbc==1)
+        heat_flux_CBF_boundary(E,0,E->slice.q_botm_CBF,write_native,stats ? stats[1]:NULL);
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
         E->heating_adi[m]=saved_adi[m];E->heating_visc[m]=saved_visc[m];
         free(adi[m]);free(visc[m]);
     }
     E->element_Cc=saved_cc;E->element_Ccx=saved_ccx;
+}
+
+
+void heat_flux_CBF(struct All_variables *E)
+{
+    evaluate_heat_flux_CBF(E,1,NULL);
+}
+
+/* Every-step diagnostics use the full physical residual, independently of
+ * native-file frequency/toggles. Non-Dirichlet boundaries are unavailable. */
+void CBF_boundary_stats(struct All_variables *E, double stats[2][4])
+{
+    int i,j;
+    for(i=0;i<2;i++) for(j=0;j<4;j++) stats[i][j]=NAN;
+    evaluate_heat_flux_CBF(E,0,stats);
 }
 
 
