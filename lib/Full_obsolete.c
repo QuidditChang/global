@@ -672,7 +672,7 @@ void output_velo_related(E,file_number)
       fprintf(fp2,"%3d %7d\n",j,E->lmesh.nsf);
       for(i=1;i<=E->lmesh.nsf;i++)   {
 	s = i*E->lmesh.noz;
-        fprintf(fp2,"%.4e %.4e %.4e %.4e\n",E->slice.tpg[j][i],E->slice.shflux[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
+        fprintf(fp2,"%.4e %.4e %.4e %.4e\n",E->slice.tpg[j][i],E->slice.q_surf[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
 	}
       }
     fclose(fp2);
@@ -686,7 +686,7 @@ void output_velo_related(E,file_number)
       fprintf(fp2,"%3d %7d\n",j,E->lmesh.nsf);
       for(i=1;i<=E->lmesh.nsf;i++)  {
 	s = (i-1)*E->lmesh.noz + 1;
-        fprintf(fp2,"%.4e %.4e %.4e %.4e\n",E->slice.tpgb[j][i],E->slice.bhflux[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
+        fprintf(fp2,"%.4e %.4e %.4e %.4e\n",E->slice.tpgb[j][i],E->slice.q_botm[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
 	}
       }
     fclose(fp2);

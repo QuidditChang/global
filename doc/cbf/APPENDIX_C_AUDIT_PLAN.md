@@ -72,14 +72,14 @@ Q1 每个面节点 i 的局部对角质量为 `D_i = J_surface(xi_i,eta_i)`。�
 | 面几何近似 | `Size_does_matter.c:378` | 旋转后只用二维投影行列式；新方案需与 Q1 三维面映射一致的叉积面积元，并验几何误差 |
 | 径向 MPI 风险 | `Process_buoyancy.c:287,443–444`，`Full_parallel_related.c:1046` 后的 vertical Sendrecv | 非边界 rank 先返回，边界 rank 却调用包含径向通信的完整交换；nprocz>1 可发生通信不匹配/挂起。当前 cfg nprocz=2 |
 | RHS 支撑 | 仅边界层单元组装所有 8 个体节点 | 边界通量仅需对应边界行；不要向内部径向层传播无用残差 |
-| 单精度累计 | `float *b_cbf,*A_cbf`、exchange_node_f | 小差值相消、MPI 划分敏感；应改 double |
+| 单精度累计 | `float *b_CBF,*A_CBF`、exchange_node_f | 小差值相消、MPI 划分敏感；应改 double |
 | 非法面积静默处理 | A<=0 时写 0 | 掩盖网格/装配错误；应所有 rank 一致失败，不发布伪零通量 |
 | 已知通量边界 | 旧 CBF 无 Neumann 项、无 Dirichlet 检查 | 当前上下定温可支持；混合/定通量情形需显式支持或拒绝，不能静默当定温 |
 | 热源时刻 | 时间推进最终刷新 adi/visc，CBF 独立重建 | 必须明确初始 step 0、温度更新与 Stokes 更新之后的取值时刻，不能沿用未初始化热源 |
 | 同化/过滤 | `PG_timestep_solve:375–436` | T 被后处理而 Tdot 未同幅修正；不能无条件宣称闭域能量守恒。需保存/标记热推进态并独立报告同化增量 |
 | 监测均值 | q 四节点平均乘 eco.area | 不是所选 GLL 的直接积分；应以局部 D_i q_i 求和，每个面只算一次 |
-| 输出不足 | `Output_gzdir.c:1218–1275` | 只有 shflux/bhflux_CBF.<rank>.<step>.gz；无 lon/lat、无全局 GRD |
-| 老脚本证据失效 | 历史文档所称 scripts/make_cmbhf_CBF_grd.py 当前不存在 | 不把历史脚本结论冒充当前审计；无现成可信 GRD 桥接 |
+| 输出不足 | `Output_gzdir.c:1218–1275` | 只有 q_surf/q_botm_CBF.<rank>.<step>.gz；无 lon/lat、无全局 GRD |
+| 老脚本证据失效 | 历史文档所称 scripts/make_q_CBF_grd.py 当前不存在 | 不把历史脚本结论冒充当前审计；无现成可信 GRD 桥接 |
 | 基准覆盖不足 | 当前 tests/phase_energy 有生产相变块测试 | 未见 CBF 边界 GLL、球壳热流和径向 MPI 专项验收 |
 
 当前结果不能作为经验证的 Appendix C 生产热流产品；尤其不能仅打开频率并给 gzip 改扩展名。
@@ -89,7 +89,7 @@ Q1 每个面节点 i 的局部对角质量为 `D_i = J_surface(xi_i,eta_i)`。�
 默认产品（同一运行目录的相对路径）：
 
 ```
-PostProc/HF_CBF/cmbhf_CBF_<step>.grd
+PostProc/HF_CBF/q_CBF_<step>.grd
 PostProc/HF_CBF/eshf_CBF_<step>.grd
 ```
 
@@ -111,7 +111,7 @@ PostProc/HF_CBF/eshf_CBF_<step>.grd
 3. `element_residual` 当前会写 heating_phase：增加显式诊断只读模式，或把该赋值移回推进包装层。
 4. CBF 输出时刷新或复用有明确状态标签的热源；所有全局 collective 必须由所有 rank 进入。
 5. 同化和过滤设计先落实状态契约。至少同步记录热推进后的未修改态与最终态的差异；若仅输出最终态瞬时弱式，明确它不是严格时间离散反力。不能伪造 Tdot 或默认零瞬态项。
-6. 删除/拒绝 cbf_use_advection=off；当前 cfg on 无迁移损失。
+6. 删除/拒绝 CBF_use_advection=off；当前 cfg on 无迁移损失。
 
 ### B. GLL 面质量和 MPI
 

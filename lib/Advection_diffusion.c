@@ -1143,7 +1143,7 @@ static void element_residual(struct All_variables *E, int el,
  * do not substitute the SUPG test function for the paper's N_i. The only
  * diagnostic side effect of element_residual is restored before returning.
  * Sources and T/Tdot must belong to the caller's documented output state. */
-void cbf_element_thermal_residual(struct All_variables *E, int m, int el,
+void CBF_element_thermal_residual(struct All_variables *E, int m, int el,
                                   double rhs[9])
 {
     struct Shape_function GN;
@@ -1399,7 +1399,7 @@ static void process_heating(struct All_variables *E, int psc_pass)
 /* Re-evaluate physical sources for the same T/u state used by CBF, including
  * initial output and a Stokes update after thermal advancement. The caller
  * owns temporary output arrays and restores all persistent heating pointers. */
-void cbf_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
+void CBF_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
 {
     if(E->control.disptn_number != 0) {
         process_adi_heating(E,m,adi);

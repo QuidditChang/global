@@ -1,6 +1,6 @@
 /* Analytic sampled steady conduction on the actual CitcomS mesh.
  * This tests extraction/geometry/MPI; it is not a discrete PDE solve. */
-static void cbf_manufactured_state(struct All_variables *E)
+static void CBF_manufactured_state(struct All_variables *E)
 {
     int m,n,d;
     double B=E->sphere.ri*E->sphere.ro/(E->sphere.ro-E->sphere.ri);

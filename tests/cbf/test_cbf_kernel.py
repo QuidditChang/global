@@ -32,7 +32,7 @@ class CBFKernel(unittest.TestCase):
         energy = energy[energy.index('static void element_thermal_transport(', energy.index('static void pg_solver(', energy.index('static void pg_solver(')+1)):]
         parts = [function(energy, 'static void element_thermal_transport('),
                  function(energy, 'static void element_residual('),
-                 function(energy, 'void cbf_element_thermal_residual(')]
+                 function(energy, 'void CBF_element_thermal_residual(')]
         phase = function((ROOT/'lib/Phase_change.c').read_text(), 'void phase_change_state(')
         prefix = r'''
 #include <math.h>
@@ -40,7 +40,7 @@ class CBFKernel(unittest.TestCase):
 #include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
-#include "cbf_geometry.h"
+#include "CBF_face_geometry.h"
 static double test_velocity;
 double conductivity_element_prefactor(struct All_variables *E,int m,int el,double k) {return k;}
 double conductivity_temperature_factor(struct All_variables *E,double t) {return 1.0;}
@@ -60,9 +60,9 @@ void get_global_shape_fn(struct All_variables *E,int el,struct Shape_function *G
 }
 '''
         wrapper = r'''
-int ray_value(const double *xyz,const double *q,const double *ray,double *out) {return cbf_face_ray_value((const double (*)[3])xyz,q,ray,out);}
-void mass(const double *xyz,double *out) {cbf_face_gll_mass((const double (*)[3])xyz,out);}
-double jac(const double *xyz,double u,double v) {return cbf_face_jacobian((const double (*)[3])xyz,u,v);}
+int ray_value(const double *xyz,const double *q,const double *ray,double *out) {return CBF_face_ray_value((const double (*)[3])xyz,q,ray,out);}
+void mass(const double *xyz,double *out) {CBF_face_gll_mass((const double (*)[3])xyz,out);}
+double jac(const double *xyz,double u,double v) {return CBF_face_jacobian((const double (*)[3])xyz,u,v);}
 void residual(double rate,double velocity,double k,double source,double entropy,double *out) {
  struct All_variables state,*E=&state; struct IEN ien[2];
  double T[10],Tdot[10],rho[3]={0,1,1},cp[3]={0,1,1},gravity[3]={0,1,1};
@@ -83,7 +83,7 @@ void residual(double rate,double velocity,double k,double source,double entropy,
   for(i=1;i<=8;i++) E->N.vpt[GNVINDEX(a,i)]=0.125;
  }
  test_velocity=velocity;
- cbf_element_thermal_residual(E,1,1,out);
+ CBF_element_thermal_residual(E,1,1,out);
  out[0]=phase[1];
 }
 '''

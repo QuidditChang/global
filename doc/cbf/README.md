@@ -3,15 +3,25 @@
 Runtime now writes the original Q1 boundary data, without GRD interpolation or
 NetCDF. The Appendix C Galerkin residual and GLL flux calculation are unchanged.
 
-Set `monitoringFrequency_cmbhf_CBF=-1` to inherit monitoringFrequency, `0` to
-disable, or a positive interval. Enable cbf_output_shflux/cbf_output_bhflux.
+Set `monitoringFrequency_CBF=-1` to inherit monitoringFrequency, `0` to
+disable, or a positive interval. Enable output_q_surf_CBF/output_q_botm_CBF.
 
-Files relative to the solver working directory:
+Files in each rank's **expanded cfg datadir** (no global prefix):
 
 ```
-PostProc/HF_CBF/cmbhf_CBF_<step>.rank<rank:06d>.dat
-PostProc/HF_CBF/eshf_CBF_<step>.rank<rank:06d>.dat
+<datadir>/q.botm.<rank>.<step>
+<datadir>/q.surf.<rank>.<step>
 ```
+
+For this benchmark: `CBF_benchmark/DATA/30/q.botm.30.13601` and
+`CBF_benchmark/DATA/29/q.surf.29.13601` under the existing model directory.
+The step is the actual solver step (13601, not the example typo 13061).
+
+Canonical configuration keys: `output_q_surf_CBF`, `output_q_botm_CBF`,
+`CBF_use_advection`, `monitoringFrequency_CBF`. Standalone uses `CBF_frequency`.
+Old key names have been removed: update both C library and Python bindings and
+use the migrated cfg files. Internal legacy arrays are q_surf/q_botm;
+CBF arrays are q_surf_CBF/q_botm_CBF.
 
 Only ranks touching that physical boundary write its file. Files are text with
 17 significant digits, preserving double values through decimal round-trip.
@@ -76,3 +86,18 @@ checks node equations, finite values, positive masses, expected rank-file count
 and reconstructed face power. It requires Python 3, independently of Pyre's
 Python 2 runtime. Historical GRD validation is in VALIDATION_REPORT.md; those
 GRD-only tests were retired with the runtime GRD writer.
+
+## Existing global.surf / global.botm files
+
+These legacy ASCII products remain unchanged in layout. Each cap starts with
+`cap_local nsf`; each following node line contains four nondimensional solver
+values: (1) surface dynamic topography (or pseudo-free-surface topography when
+enabled), or bottom dynamic topography; (2) legacy q_surf / q_botm; (3) V_theta;
+(4) V_phi. Coordinates are in the normal coordinate output, with the same
+surface-node ordering. Standard topography is currently a normal-stress-derived
+diagnostic with topo_scaling=1, not a value already converted to metres. The values are printed with %.4e.
+
+The legacy heat_flux() projects u_r*T - dT/dr to nodes and extrapolates the
+boundary value. Its source explicitly notes missing conductivity, heat capacity
+and unit conversion. It is not the CBF W/m2 result and not the variable-k dTdr
+postprocessor. Renaming does not change that numerical definition.

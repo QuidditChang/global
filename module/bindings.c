@@ -243,10 +243,10 @@ struct PyMethodDef pyCitcom_methods[] = {
      METH_VARARGS,
      pyCitcom_output_checkpoint__doc__},
 
-    {pyCitcom_output_cmbhf_CBF__name__,
-     pyCitcom_output_cmbhf_CBF,
+    {pyCitcom_output_q_CBF__name__,
+     pyCitcom_output_q_CBF,
      METH_VARARGS,
-     pyCitcom_output_cmbhf_CBF__doc__},
+     pyCitcom_output_q_CBF__doc__},
 
     /* from setProperties.h */
 

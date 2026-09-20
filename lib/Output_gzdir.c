@@ -104,7 +104,7 @@ void gzdir_output_k(struct All_variables *, int);
 static void gzdir_output_conductivity_field(struct All_variables *, int,
                                             const char *, int);
 void gzdir_output_heating(struct All_variables *, int);
-void gzdir_output_cmbhf_CBF(struct All_variables *, int);
+void gzdir_output_q_CBF(struct All_variables *, int);
 
 
 void sub_netr(float, float, float, float *, float *, double *);
@@ -807,7 +807,7 @@ void gzdir_output_surf_botm(struct All_variables *E, int cycles)
         for(i=1;i<=E->lmesh.nsf;i++)   {
             s = i*E->lmesh.noz;
             gzprintf(fp2,"%.4e %.4e %.4e %.4e\n",
-		     topo[i],E->slice.shflux[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
+		     topo[i],E->slice.q_surf[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
         }
     }
     gzclose(fp2);
@@ -824,7 +824,7 @@ void gzdir_output_surf_botm(struct All_variables *E, int cycles)
       for(i=1;i<=E->lmesh.nsf;i++)  {
         s = (i-1)*E->lmesh.noz + 1;
         gzprintf(fp2,"%.4e %.4e %.4e %.4e\n",
-		 E->slice.tpgb[j][i],E->slice.bhflux[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
+		 E->slice.tpgb[j][i],E->slice.q_botm[j][i],E->sphere.cap[j].V[1][s],E->sphere.cap[j].V[2][s]);
       }
     }
     gzclose(fp2);
@@ -1216,12 +1216,12 @@ void gzdir_output_heating(struct All_variables *E, int cycles)
 
 
 /* Native Appendix C CBF output; the historical binding name is retained. */
-void gzdir_output_cmbhf_CBF(struct All_variables *E, int cycles)
+void gzdir_output_q_CBF(struct All_variables *E, int cycles)
 {
     void heat_flux_CBF();
     double started=MPI_Wtime(),elapsed,max_elapsed;
 
-    if(!E->output.cbf_output_shflux && !E->output.cbf_output_bhflux)
+    if(!E->output.output_q_surf_CBF && !E->output.output_q_botm_CBF)
         return;
 
     heat_flux_CBF(E);

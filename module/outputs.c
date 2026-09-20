@@ -144,23 +144,23 @@ PyObject * pyCitcom_output_checkpoint(PyObject *self, PyObject *args)
 }
 
 
-char pyCitcom_output_cmbhf_CBF__doc__[] = "";
-char pyCitcom_output_cmbhf_CBF__name__[] = "output_cmbhf_CBF";
+char pyCitcom_output_q_CBF__doc__[] = "";
+char pyCitcom_output_q_CBF__name__[] = "output_q_CBF";
 
-PyObject * pyCitcom_output_cmbhf_CBF(PyObject *self, PyObject *args)
+PyObject * pyCitcom_output_q_CBF(PyObject *self, PyObject *args)
 {
     PyObject *obj;
     struct All_variables* E;
     int cycles;
 
-    void gzdir_output_cmbhf_CBF();
+    void gzdir_output_q_CBF();
 
-    if (!PyArg_ParseTuple(args, "Oi:output_cmbhf_CBF", &obj, &cycles))
+    if (!PyArg_ParseTuple(args, "Oi:output_q_CBF", &obj, &cycles))
         return NULL;
 
     E = (struct All_variables*)(PyCObject_AsVoidPtr(obj));
 
-    gzdir_output_cmbhf_CBF(E, cycles);
+    gzdir_output_q_CBF(E, cycles);
 
     Py_INCREF(Py_None);
     return Py_None;

@@ -245,13 +245,13 @@ class Solver(Component):
         return
 
 
-    def save_cmbhf_CBF(self, freq):
+    def save_q_CBF(self, freq):
         if freq <= 0:
             return
         step = self.step
         if not (step % freq):
-            from CitcomSLib import output_cmbhf_CBF
-            output_cmbhf_CBF(self.all_variables, step)
+            from CitcomSLib import output_q_CBF
+            output_q_CBF(self.all_variables, step)
         return
 
 
@@ -336,9 +336,9 @@ class Solver(Component):
         #adiabaticT0 = inv.float("adiabaticT0", default=0.4)
         Q0 = inv.float("Q0", default=0.0)
 
-        cbf_output_shflux = inv.bool("cbf_output_shflux", default=True)
-        cbf_output_bhflux = inv.bool("cbf_output_bhflux", default=True)
-        cbf_use_advection = inv.bool("cbf_use_advection", default=True)
+        output_q_surf_CBF = inv.bool("output_q_surf_CBF", default=True)
+        output_q_botm_CBF = inv.bool("output_q_botm_CBF", default=True)
+        CBF_use_advection = inv.bool("CBF_use_advection", default=True)
 
         stokes_flow_only = inv.bool("stokes_flow_only", default=False)
 

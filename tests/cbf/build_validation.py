@@ -31,8 +31,8 @@ def main():
     driver=(ROOT/'bin/Citcom.c').read_text().replace('int main(argc,argv)',
                         '#include "manufactured_state.h"\nint main(argc,argv)')
     driver=driver.replace('      initial_conditions(E);',
-            '      initial_conditions(E);\n      cbf_manufactured_state(E);\n'
-            '      save_cbf_if_due(E);\n      MPI_Finalize();\n      return 0;',1)
+            '      initial_conditions(E);\n      CBF_manufactured_state(E);\n'
+            '      save_CBF_if_due(E);\n      MPI_Finalize();\n      return 0;',1)
     manufactured=build/'Citcom_manufactured.c';manufactured.write_text(driver)
     sources.append(manufactured)
     def compile_one(source):

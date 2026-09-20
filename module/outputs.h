@@ -48,9 +48,9 @@ extern char pyCitcom_output_checkpoint__name__[];
 extern char pyCitcom_output_checkpoint__doc__[];
 PyObject * pyCitcom_output_checkpoint(PyObject *, PyObject *);
 
-extern char pyCitcom_output_cmbhf_CBF__name__[];
-extern char pyCitcom_output_cmbhf_CBF__doc__[];
-PyObject * pyCitcom_output_cmbhf_CBF(PyObject *, PyObject *);
+extern char pyCitcom_output_q_CBF__name__[];
+extern char pyCitcom_output_q_CBF__doc__[];
+PyObject * pyCitcom_output_q_CBF(PyObject *, PyObject *);
 
 #endif
 

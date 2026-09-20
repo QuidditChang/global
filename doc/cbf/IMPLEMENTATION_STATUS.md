@@ -1,3 +1,6 @@
+> Naming update: native files now use expanded rank datadir/q.botm.<rank>.<step>
+> and q.surf.<rank>.<step>; see README.md. Earlier paths below are historical.
+
 > Current update: runtime GRD output has been replaced by native Q1 rank files.
 > See README.md for the format and one-step restart benchmark. GRD results below
 > describe the earlier output implementation, not the current runtime format.

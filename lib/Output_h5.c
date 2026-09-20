@@ -930,7 +930,7 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
             {
                 n = k + i*nz + j*nz*nx;
                 m = j + i*my;
-                scalar->data[m] = E->slice.shflux[1][n+1];
+                scalar->data[m] = E->slice.q_surf[1][n+1];
             }
         }
 
@@ -1000,7 +1000,7 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
             {
                 n = k + i*nz + j*nz*nx;
                 m = j + i*my;
-                scalar->data[m] = E->slice.bhflux[1][n+1];
+                scalar->data[m] = E->slice.q_botm[1][n+1];
             }
         }
         dataset = H5Dopen(file_id, "/botm/heatflux");

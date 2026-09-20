@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void cbf_io_check(struct All_variables *E, int bad)
+static void CBF_io_check(struct All_variables *E, int bad)
 {
     int global_bad;
     void parallel_process_termination();
@@ -17,7 +17,7 @@ static void cbf_io_check(struct All_variables *E, int bad)
     }
 }
 
-static void cbf_native_boundary(struct All_variables *E,int top,
+static void CBF_native_boundary(struct All_variables *E,int top,
         double *rhs[NCS],double *mass[NCS],double *q[NCS],double totals[2])
 {
     int m,i,node,e,a,d,bad=0,step=E->monitor.solution_cycles;
@@ -26,14 +26,10 @@ static void cbf_native_boundary(struct All_variables *E,int top,
     double length=E->data.radius_km*1000.,x[4][3],dm[4];
     char path[512],tmp[520];
     FILE *fp=NULL;
-    if(E->parallel.me==0) {
-        if(mkdir("PostProc",0775)!=0 && errno!=EEXIST)bad=1;
-        if(mkdir("PostProc/HF_CBF",0775)!=0 && errno!=EEXIST)bad=1;
-    }
-    cbf_io_check(E,bad);
+    /* data_dir already contains this rank's expanded cfg datadir. */
     if(active) {
-        snprintf(path,sizeof(path),"PostProc/HF_CBF/%s_CBF_%d.rank%06d.dat",
-                 top ? "eshf":"cmbhf",step,E->parallel.me);
+        snprintf(path,sizeof(path),"%s/q.%s.%d.%d",E->control.data_dir,
+                 top ? "surf":"botm",E->parallel.me,step);
         snprintf(tmp,sizeof(tmp),"%s.tmp",path);
         fp=fopen(tmp,"w");
         if(!fp) bad=1;
@@ -62,7 +58,7 @@ static void cbf_native_boundary(struct All_variables *E,int top,
                         node=E->ien[m][e].node[sidenodes[side][a+1]];
                         for(d=0;d<3;++d)x[a][d]=E->X[lev][m][d+1][node];
                     }
-                    cbf_face_gll_mass(x,dm);
+                    CBF_face_gll_mass(x,dm);
                     fprintf(fp,"F %d %d",E->sphere.capid[m],e);
                     for(a=0;a<4;++a)fprintf(fp," %d",E->ien[m][e].node[sidenodes[side][a+1]]);
                     for(a=0;a<4;++a)fprintf(fp," %.17g",dm[a]);
@@ -72,8 +68,8 @@ static void cbf_native_boundary(struct All_variables *E,int top,
             if(fclose(fp)!=0)bad=1;
         }
     }
-    cbf_io_check(E,bad);
+    CBF_io_check(E,bad);
     if(active && rename(tmp,path)!=0)bad=1;
-    cbf_io_check(E,bad);
+    CBF_io_check(E,bad);
 }
 #endif

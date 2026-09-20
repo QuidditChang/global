@@ -371,10 +371,10 @@ struct HAVE {    /* horizontal averages */
 struct SLICE {    /* horizontally sliced data, including topography */
     float *tpg[NCS];
     float *tpgb[NCS];
-    float *shflux[NCS];
-    float *bhflux[NCS];
-    double *shflux_CBF[NCS];   /* surface heat flux via Appendix C Q1 GLL CBF */
-    double *bhflux_CBF[NCS];   /* bottom/CMB heat flux via Appendix C Q1 GLL CBF */
+    float *q_surf[NCS];
+    float *q_botm[NCS];
+    double *q_surf_CBF[NCS];   /* surface heat flux via Appendix C Q1 GLL CBF */
+    double *q_botm_CBF[NCS];   /* bottom/CMB heat flux via Appendix C Q1 GLL CBF */
     float *divg[NCS];
     float *vort[NCS];
     float *freesurf[NCS];
@@ -646,7 +646,7 @@ struct DATA {
     float   density_above;
     float   density_below;
     float   gas_const;
-    float   surf_heat_flux;
+    float   q_surf;
     float  ref_viscosity;
     float   melt_viscosity;
     float   permeability;
@@ -731,10 +731,10 @@ struct Output {
   int write_q_files;
   FILE *fpqt,*fpqb;		/* additional heat flux output */
 
-  int cmbhf_CBF_freq;          /* standalone CBF frequency; -1 inherits storage_spacing */
-  int cbf_output_shflux;       /* 1 = write eshf_CBF surface/top GRDs */
-  int cbf_output_bhflux;       /* 1 = write cmbhf_CBF bottom/CMB GRDs */
-  int cbf_use_advection;       /* 1 = include u.gradT term in CBF */
+  int CBF_frequency;          /* standalone CBF frequency; -1 inherits storage_spacing */
+  int output_q_surf_CBF;       /* 1 = write native q_surf_CBF data */
+  int output_q_botm_CBF;       /* 1 = write native q_botm_CBF data */
+  int CBF_use_advection;       /* 1 = include u.gradT term in CBF */
 };
 
 

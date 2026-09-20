@@ -5,7 +5,7 @@
 /* Cyclic Q1 face nodes: (-1,-1),(1,-1),(1,1),(-1,1).
  * The area is that of the actual trilinear FE face, not its planar projection.
  * GLL weights at the four Q1 support points are all one. */
-static double cbf_face_jacobian(const double x[4][3], double u, double v)
+static double CBF_face_jacobian(const double x[4][3], double u, double v)
 {
     static const double su[4]={-1,1,1,-1}, sv[4]={-1,-1,1,1};
     double du[3]={0,0,0}, dv[3]={0,0,0}, cross[3];
@@ -20,17 +20,17 @@ static double cbf_face_jacobian(const double x[4][3], double u, double v)
     cross[2]=du[0]*dv[1]-du[1]*dv[0];
     return sqrt(cross[0]*cross[0]+cross[1]*cross[1]+cross[2]*cross[2]);
 }
-static void cbf_face_gll_mass(const double x[4][3], double mass[4])
+static void CBF_face_gll_mass(const double x[4][3], double mass[4])
 {
-    mass[0]=cbf_face_jacobian(x,-1,-1);
-    mass[1]=cbf_face_jacobian(x, 1,-1);
-    mass[2]=cbf_face_jacobian(x, 1, 1);
-    mass[3]=cbf_face_jacobian(x,-1, 1);
+    mass[0]=CBF_face_jacobian(x,-1,-1);
+    mass[1]=CBF_face_jacobian(x, 1,-1);
+    mass[2]=CBF_face_jacobian(x, 1, 1);
+    mass[3]=CBF_face_jacobian(x,-1, 1);
 }
 /* Intersect a ray with the Q1 face. Work in a tangent basis to the ray;
  * solve its two projected coordinates for (u,v), then interpolate nodal q.
  * Cartesian geometry makes the operation periodic and pole independent. */
-static int cbf_face_ray_value(const double x[4][3], const double q[4],
+static int CBF_face_ray_value(const double x[4][3], const double q[4],
                               const double ray[3], double *value)
 {
     static const double su[4]={-1,1,1,-1},sv[4]={-1,-1,1,1};

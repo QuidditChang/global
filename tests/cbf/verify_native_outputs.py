@@ -7,8 +7,8 @@ import re
 import math
 
 def verify(root, step, ranks):
-    for prefix, sign in [('cmbhf', -1), ('eshf', 1)]:
-        files = sorted((root/'PostProc/HF_CBF').glob('%s_CBF_%d.rank*.dat' % (prefix,step)))
+    for prefix, sign in [('botm', -1), ('surf', 1)]:
+        files = sorted(root.rglob('q.%s.*.%d' % (prefix,step)))
         assert len(files)==ranks, (prefix,len(files),ranks)
         total=0.; nodes_count=0; faces_count=0; expected=None
         for path in files:

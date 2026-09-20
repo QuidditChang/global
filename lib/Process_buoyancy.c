@@ -37,8 +37,8 @@
 #include "global_defs.h"
 #include "material_properties.h"
 #include "advection_diffusion.h"
-#include "cbf_geometry.h"
-#include "cbf_output.h"
+#include "CBF_face_geometry.h"
+#include "CBF_native_output.h"
 #include <math.h>		/* for sqrt */
 
 
@@ -133,28 +133,28 @@ void heat_flux(E)
   if (E->parallel.me_loc[3]==E->parallel.nprocz-1)
     for(m=1;m<=E->sphere.caps_per_proc;m++)
       for(i=1;i<=E->lmesh.nsf;i++)
-        E->slice.shflux[m][i]=2*flux[m][E->surf_node[m][i]]-flux[m][E->surf_node[m][i]-1];
+        E->slice.q_surf[m][i]=2*flux[m][E->surf_node[m][i]]-flux[m][E->surf_node[m][i]-1];
 
   if (E->parallel.me_loc[3]==0)
     for(m=1;m<=E->sphere.caps_per_proc;m++)
       for(i=1;i<=E->lmesh.nsf;i++)
-        E->slice.bhflux[m][i] = 2*flux[m][E->surf_node[m][i]-E->lmesh.noz+1]
+        E->slice.q_botm[m][i] = 2*flux[m][E->surf_node[m][i]-E->lmesh.noz+1]
                                 - flux[m][E->surf_node[m][i]-E->lmesh.noz+2];
 
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(e=1;e<=E->lmesh.snel;e++) {
-         uT =(E->slice.shflux[m][E->sien[m][e].node[1]] +
-              E->slice.shflux[m][E->sien[m][e].node[2]] +
-              E->slice.shflux[m][E->sien[m][e].node[3]] +
-              E->slice.shflux[m][E->sien[m][e].node[4]])*0.25;
+         uT =(E->slice.q_surf[m][E->sien[m][e].node[1]] +
+              E->slice.q_surf[m][E->sien[m][e].node[2]] +
+              E->slice.q_surf[m][E->sien[m][e].node[3]] +
+              E->slice.q_surf[m][E->sien[m][e].node[4]])*0.25;
          el = e*E->lmesh.elz;
          sum_h[0] += uT*E->eco[m][el].area;
          sum_h[1] += E->eco[m][el].area;
 
-         uT =(E->slice.bhflux[m][E->sien[m][e].node[1]] +
-              E->slice.bhflux[m][E->sien[m][e].node[2]] +
-              E->slice.bhflux[m][E->sien[m][e].node[3]] +
-              E->slice.bhflux[m][E->sien[m][e].node[4]])*0.25;
+         uT =(E->slice.q_botm[m][E->sien[m][e].node[1]] +
+              E->slice.q_botm[m][E->sien[m][e].node[2]] +
+              E->slice.q_botm[m][E->sien[m][e].node[3]] +
+              E->slice.q_botm[m][E->sien[m][e].node[4]])*0.25;
          el = (e-1)*E->lmesh.elz+1;
          sum_h[2] += uT*E->eco[m][el].area;
          sum_h[3] += E->eco[m][el].area;
@@ -233,13 +233,13 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     if(global_bad) parallel_process_termination();
     if(active) for(m=1;m<=E->sphere.caps_per_proc;++m)
         for(e=top ? elz : 1;e<=E->lmesh.nel;e+=elz) {
-            cbf_element_thermal_residual(E,m,e,er);
+            CBF_element_thermal_residual(E,m,e,er);
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 if(!(E->node[m][node] & TBZ)) bad=1;
                 for(d=0;d<3;++d) x[a][d]=E->X[lev][m][d+1][node];
             }
-            cbf_face_gll_mass(x,dm);
+            CBF_face_gll_mass(x,dm);
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 if(!(dm[a]>0) || !isfinite(dm[a]) ||
@@ -274,7 +274,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 for(d=0;d<3;++d) x[a][d]=E->X[lev][m][d+1][node];
             }
-            cbf_face_gll_mass(x,dm);
+            CBF_face_gll_mass(x,dm);
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 totals[0]+=dm[a]*qnodal[m][node];
@@ -289,7 +289,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
                 top ? "top" : "bottom",global_totals[0]/global_totals[1],global_totals[1]);
         fflush(E->fp);
     }
-    cbf_native_boundary(E,top,rhs,mass,qnodal,global_totals);
+    CBF_native_boundary(E,top,rhs,mass,qnodal,global_totals);
     for(m=1;m<=E->sphere.caps_per_proc;++m) { free(rhs[m]); free(mass[m]); free(qnodal[m]); }
 }
 
@@ -300,8 +300,8 @@ void heat_flux_CBF(struct All_variables *E)
     struct CC saved_cc=E->element_Cc;
     struct CCX saved_ccx=E->element_Ccx;
     void parallel_process_termination();
-    if(!E->output.cbf_use_advection) {
-        if(E->parallel.me==0) fprintf(stderr,"CBF requires cbf_use_advection=on\n");
+    if(!E->output.CBF_use_advection) {
+        if(E->parallel.me==0) fprintf(stderr,"CBF requires CBF_use_advection=on\n");
         parallel_process_termination();
     }
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
@@ -312,14 +312,14 @@ void heat_flux_CBF(struct All_variables *E)
     MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
     if(global_bad)parallel_process_termination();
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
-        cbf_heat_sources(E,m,adi[m],visc[m]);
+        CBF_heat_sources(E,m,adi[m],visc[m]);
         saved_adi[m]=E->heating_adi[m];saved_visc[m]=E->heating_visc[m];
         E->heating_adi[m]=adi[m];E->heating_visc[m]=visc[m];
     }
-    if(E->output.cbf_output_shflux)
-        heat_flux_CBF_boundary(E,1,E->slice.shflux_CBF);
-    if(E->output.cbf_output_bhflux)
-        heat_flux_CBF_boundary(E,0,E->slice.bhflux_CBF);
+    if(E->output.output_q_surf_CBF)
+        heat_flux_CBF_boundary(E,1,E->slice.q_surf_CBF);
+    if(E->output.output_q_botm_CBF)
+        heat_flux_CBF_boundary(E,0,E->slice.q_botm_CBF);
     for(m=1;m<=E->sphere.caps_per_proc;++m) {
         E->heating_adi[m]=saved_adi[m];E->heating_visc[m]=saved_visc[m];
         free(adi[m]);free(visc[m]);

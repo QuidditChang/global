@@ -1,3 +1,6 @@
+> Naming update: native files now use expanded rank datadir/q.botm.<rank>.<step>
+> and q.surf.<rank>.<step>; see README.md. Earlier paths below are historical.
+
 > Current update: runtime GRD output has been replaced by native Q1 rank files.
 > See README.md for the format and one-step restart benchmark. GRD results below
 > describe the earlier output implementation, not the current runtime format.
@@ -21,10 +24,10 @@ CBF 数值计算、双边界运行时 GRD、频率继承及回归测试已实现
 - `Advection_diffusion.c` 新增只读诊断包装，调用原 `element_residual`，选择普通 N 测试函数；共享球坐标梯度、rho/Cp、可变 k、全部显式相变能量项和源项。
 - `Process_buoyancy.c` 替换旧镜像残差，按实际 Q1 面四角 GLL 面积元组装；所有 rank 参与现有双精度节点交换，取消危险的径向提前返回。
 - 输出时重新计算当前 T/u 对应的 adi/visc 到临时数组，退出恢复原指针、phase 诊断值和应变几何工作缓存。
-- `cbf_geometry.h` 提供三维面 Jacobian 与三维射线/Q1 逆映射，避免经纬平面插值的接缝/极点问题。
-- `cbf_output.h` 原生 C NetCDF 输出 `PostProc/HF_CBF/cmbhf_CBF_<step>.grd` 和 `eshf_CBF_<step>.grd`。无需 Python 后处理。
-- `Controller.py` 的 `monitoringFrequency_cmbhf_CBF=-1` 继承普通监测频率；0 禁用；正数独立周期。主 EBA cfg 已设为 -1，因此每 50 步输出。
-- standalone `bin/Citcom.c` 支持 `cmbhf_CBF_freq` 同样语义，便于本地独立验证；其默认 0 保持兼容。
+- `CBF_geometry.h` 提供三维面 Jacobian 与三维射线/Q1 逆映射，避免经纬平面插值的接缝/极点问题。
+- `CBF_output.h` 原生 C NetCDF 输出 `PostProc/HF_CBF/q_CBF_<step>.grd` 和 `eshf_CBF_<step>.grd`。无需 Python 后处理。
+- `Controller.py` 的 `monitoringFrequency_CBF=-1` 继承普通监测频率；0 禁用；正数独立周期。主 EBA cfg 已设为 -1，因此每 50 步输出。
+- standalone `bin/Citcom.c` 支持 `CBF_frequency` 同样语义，便于本地独立验证；其默认 0 保持兼容。
 - configure 检查 NetCDF C 库。库不可用而启用 CBF 时明确失败，不能悄悄改为 gzip。
 
 ## 已完成测试
@@ -77,7 +80,7 @@ RMS 是规则经纬点等权统计，不是假称面积加权 FE 范数。此测
 
 ## 复现入口
 
-- `tests/cbf/test_cbf_kernel.py`
+- `tests/cbf/test_CBF_kernel.py`
 - `tests/cbf/test_grid_output.py`
 - `tests/cbf/build_validation.py --build-dir /tmp/cbf-validation`
 - `tests/cbf/smoke.cfg`、`refstate.txt`
@@ -100,3 +103,12 @@ RMS 是规则经纬点等权统计，不是假称面积加权 FE 范数。此测
 - 控制器测试确认 13600 -> 13601 恰好推进一次，已到终止步则不推进。
 - benchmark LSF 语法通过；384 份合成 checkpoint 头的预检通过，错误时间被拒绝。此项只验证文件头检查逻辑，不等于已读取用户 HPC checkpoint。
 - 生产 13600 checkpoint 未在本地运行；HPC 上需重建并安装当前 C 库及 Controller.py 后再提交 benchmark。
+
+## 统一命名与 rank 目录验收（2026-09-20）
+
+- C/Python 绑定、配置键和 CBF 辅助函数统一采用大写 CBF；表面/底部热流数组为 q_surf/q_botm，CBF 数组为 q_surf_CBF/q_botm_CBF。
+- 原生文件改为实际展开的 datadir 内 q.surf.<rank>.<step>、q.botm.<rank>.<step>。
+- 全部 standalone 源码编译通过；核、解析器及单步控制器回归通过。
+- 12/24 ranks 真实小模型均输出到各 rank 目录。节点方程、独立面面积分和 rank 文件数检查通过。
+- 两种分区各 24 个 step=1 原生文件，与改名前对应文件逐字节相同；此次只改命名及路径，不改热流计算结果。
+- Python 2/Pyre HPC 扩展未在本机运行；部署须同步重新编译安装绑定并更新 Python 层及 cfg。
