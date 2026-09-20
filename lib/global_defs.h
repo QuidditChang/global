@@ -559,6 +559,7 @@ struct CONTROL {
     float TBCtopval;
     float TBCbotval;
 
+    int temperature_audit; /* diagnostic stage tracing, default off */
     int qvis_mode; /* 0 off, 1 diagnose, 2 apply; EBA only */
     double qvis_cohesion_pa, qvis_friction_angle_rad;
 

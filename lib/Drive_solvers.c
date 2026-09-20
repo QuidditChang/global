@@ -873,7 +873,8 @@ const char *const eba_power_names[EBA_POWER_COUNT] = {
     "Wthermal", "Wchemical", "Wphase_410", "Wphase_520", "Wphase_660",
     "Wphase_total", "Wpressure", "Rmechanical", "Roperator",
     "Rbody_split", "Rheating_operator", "Qvisc_capped", "Qvisc_used",
-    "Qvisc_removed", "Qvisc_potential_removed", "Qvisc_limited_volume"
+    "Qvisc_removed", "Qvisc_potential_removed", "Qvisc_limited_volume",
+    "Daug_operator", "Pplate_aug_correction", "Pother_aug_correction", "Raug_operator"
 };
 static struct Eba_power_snapshot eba_power_cache;
 static struct All_variables *eba_power_owner;
@@ -946,6 +947,46 @@ static double eba_element_work(struct All_variables *E, int m, int e,
     return result;
 }
 
+/* Rebuild physical K before Dirichlet elimination. The nodal MG matrix
+ * contains w_i*w_j masks, even when assemble_del2_u(strip_bcs=0).
+ * Sum shared-node forces once through exchange, then use global_vdot's
+ * Skip_id ownership rule. No augmented-Lagrangian penalty belongs to K. */
+static void eba_full_viscous_action(struct All_variables *E, double **ku, double **au)
+{
+    int m,e,a,d,i,j,node;
+    const int lev=E->mesh.levmax, n=loc_mat_size[E->mesh.nsd];
+    double k[24*24], u[24], f[24];
+    void get_elt_k();
+    void get_aug_k();
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        for(i=0;i<E->lmesh.neq;i++) ku[m][i]=au[m][i]=0.0;
+        for(e=1;e<=E->lmesh.nel;e++) {
+            get_elt_k(E,e,k,lev,m,1);
+            for(a=1;a<=enodes[E->mesh.nsd];a++) {
+                node=E->ien[m][e].node[a];
+                for(d=1;d<=E->mesh.nsd;d++)
+                    u[(a-1)*E->mesh.nsd+d-1]=E->U[m][E->id[m][node].doff[d]];
+            }
+            for(i=0;i<n;i++) {
+                f[i]=0.0;
+                for(j=0;j<n;j++) f[i]+=k[i*n+j]*u[j];
+            }
+            add_element_force_to(E,e,f,m,ku);
+            if(E->control.augmented_Lagr) {
+                memset(k,0,sizeof(k));
+                get_aug_k(E,e,k,lev,m);
+                for(i=0;i<n;i++) {
+                    f[i]=0.0;
+                    for(j=0;j<n;j++) f[i]+=k[i*n+j]*u[j];
+                }
+                add_element_force_to(E,e,f,m,au);
+            }
+        }
+    }
+    (E->solver.exchange_id_d)(E,ku,lev);
+    (E->solver.exchange_id_d)(E,au,lev);
+}
+
 static void write_eba_mechanical_power(struct All_variables *E)
 {
     int m,e,i,a,d,node,eq,nz,j,k,top,term,depth;
@@ -954,11 +995,10 @@ static void write_eba_mechanical_power(struct All_variables *E)
     const unsigned int flags[4] = {0,VBX,VBY,VBZ};
     double scale = E->control.disptn_number/E->control.Atemp;
     double elt_f[24], reaction, viscosity, value, local_traction=0.0;
-    double **ku, **gradp, **external, **ubc, **uother, **divu;
+    double **ku, **au, **gradp, **external, **ubc, **uother, **divu;
     double **thermal, **chemical, **phase[PHASE_TRANSITIONS];
     double *totals = eba_power_cache.total;
     float *strain;
-    void assemble_del2_u();
     void assemble_div_u();
     void get_elt_f();
     void get_elt_tr();
@@ -978,7 +1018,9 @@ static void write_eba_mechanical_power(struct All_variables *E)
     ku=allocate_equation_field(E); gradp=allocate_equation_field(E);
     external=allocate_equation_field(E); ubc=allocate_equation_field(E);
     uother=allocate_equation_field(E); divu=allocate_element_field(E);
-    assemble_del2_u(E,E->U,ku,lev,0);
+    au=allocate_equation_field(E);
+    eba_full_viscous_action(E,ku,au);
+    totals[EBA_DAUG]=scale*global_vdot(E,E->U,au,lev);
     assemble_grad_p_unstripped(E,gradp);
     assemble_div_u(E,E->U,divu,lev);
     totals[EBA_DOPERATOR]=scale*global_vdot(E,E->U,ku,lev);
@@ -1013,6 +1055,8 @@ static void write_eba_mechanical_power(struct All_variables *E)
             }
         }
     }
+    totals[EBA_PPLATE_AUG]=scale*global_vdot(E,ubc,au,lev);
+    totals[EBA_POTHER_AUG]=scale*global_vdot(E,uother,au,lev);
     totals[EBA_PPLATE]=scale*global_vdot(E,ubc,external,lev);
     totals[EBA_POTHER]=scale*global_vdot(E,uother,external,lev);
     MPI_Allreduce(&local_traction,&totals[EBA_WTRACTION],1,MPI_DOUBLE,
@@ -1086,6 +1130,8 @@ static void write_eba_mechanical_power(struct All_variables *E)
         +totals[EBA_WBODY]+totals[EBA_WPRESSURE];
     totals[EBA_RMECHANICAL]=reaction-totals[EBA_QVISC];
     totals[EBA_ROPERATOR]=reaction-totals[EBA_DOPERATOR];
+    totals[EBA_RAUG]=totals[EBA_ROPERATOR]+totals[EBA_PPLATE_AUG]
+        +totals[EBA_POTHER_AUG]-totals[EBA_DAUG];
     totals[EBA_RBODY_SPLIT]=totals[EBA_WBODY]-totals[EBA_WTHERMAL]
         -totals[EBA_WCHEMICAL]-totals[EBA_WPHASE];
     totals[EBA_RHEATING_OPERATOR]=totals[EBA_DOPERATOR]-totals[EBA_QVISC];
@@ -1094,6 +1140,7 @@ static void write_eba_mechanical_power(struct All_variables *E)
     if(E->parallel.me==0) {
         fprintf(E->fp,"MECHANICAL_POWER  step=%d  scale=Di/Atemp  formulation=EBA  elapsed_time=%.17g  state=pre_rigid_rotation\n",
                 eba_power_cache.step,eba_power_cache.elapsed_time);
+        fprintf(E->fp,"EBA_FULL_K_AUDIT version=2 operator=physical_element_K penalty_excluded=1 aug_lagr=%d\n", E->control.augmented_Lagr);
         fprintf(E->fp,"QVIS_MODE %d cohesion_pa=%.17g friction_angle_rad=%.17g\n",
                 E->control.qvis_mode,E->control.qvis_cohesion_pa,
                 E->control.qvis_friction_angle_rad);
@@ -1105,6 +1152,7 @@ static void write_eba_mechanical_power(struct All_variables *E)
     }
     free(strain);
     free_nodal_field(E,thermal); free_nodal_field(E,chemical);
+    free_equation_field(E,au);
     free_equation_field(E,ku); free_equation_field(E,gradp);
     free_equation_field(E,external); free_equation_field(E,ubc);
     free_equation_field(E,uother); free_element_field(E,divu);

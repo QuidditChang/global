@@ -30,7 +30,7 @@ class MechanicalPowerTest(unittest.TestCase):
         drive = (ROOT/'lib/Drive_solvers.c').read_text()
         element = (ROOT/'lib/Element_calculations.c').read_text()
         profile = (ROOT/'lib/Profile_output.c').read_text()
-        sources = ['#include "fixture.h"']
+        sources = ['#include "fixture.h"', function((ROOT/'lib/Global_operations.c').read_text(), 'double global_vdot(E,A,B,lev)')]
         for signature in ['static double **allocate_nodal_field(',
                           'static double **allocate_element_field(',
                           'static double **allocate_equation_field(',
@@ -57,11 +57,13 @@ class MechanicalPowerTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_case(self, mode):
+    def run_case(self, mode, ranks=1):
         p = self.path/f'{mode}.npz'
-        run = subprocess.run([str(self.path/'test'),str(p),str(mode)],
-                             check=False,capture_output=True,text=True,
-                             env={**os.environ,'OMPI_MCA_btl':'self'})
+        command = [str(self.path/'test'),str(p),str(mode)]
+        if ranks>1: command = ['mpiexec','-n',str(ranks)]+command
+        run = subprocess.run(command,
+                             check=False,capture_output=True,text=True,timeout=45,
+                             env={**os.environ,'OMPI_MCA_btl':'self,sm'})
         if run.returncode: raise RuntimeError(run.stderr)
         return np.load(p),run.stdout
 
@@ -91,6 +93,28 @@ class MechanicalPowerTest(unittest.TestCase):
         a,_=self.run_case(1)
         self.assertGreater(abs(float(a['mechanical_Roperator'])),1e-6)
         self.assertAlmostEqual(float(a['mechanical_Rbody_split']),0,places=11)
+
+    def test_coupled_prescribed_and_free_row(self):
+        a,log=self.run_case(8)
+        self.assertAlmostEqual(float(a['mechanical_Roperator']),0,places=11)
+        self.assertIn('EBA_FULL_K_AUDIT version=2',log)
+        self.assertGreater(float(a['mechanical_Dvisc_operator']),0)
+
+    def test_augmented_work_is_separated_from_physical_heat(self):
+        a,_=self.run_case(9)
+        self.assertAlmostEqual(float(a['mechanical_Raug_operator']),0,places=11)
+        self.assertGreater(float(a['mechanical_Daug_operator']),0)
+        self.assertGreater(abs(float(a['mechanical_Roperator'])),1e-8)
+        self.assertAlmostEqual(float(a['mechanical_Roperator']),
+            float(a['mechanical_Daug_operator']-a['mechanical_Pplate_aug_correction']
+                -a['mechanical_Pother_aug_correction']),places=11)
+
+    def test_two_rank_shared_node_ownership(self):
+        serial,_=self.run_case(8)
+        expected={k:serial[k].copy() for k in serial.files}
+        parallel,_=self.run_case(8,ranks=2)
+        for k in expected:
+            np.testing.assert_allclose(parallel[k],expected[k],rtol=1e-12,atol=1e-12,err_msg=k)
 
     def test_missing_snapshot_is_not_zero_power(self):
         a,_=self.run_case(2)

@@ -58,6 +58,7 @@ libCitcomS_la_SOURCES = $(sources)
 sources = \
 	Advection_diffusion.c \
 	advection_diffusion.h \
+	temperature_audit.h \
 	qvis_limiter.h \
 	CBF_face_geometry.h \
 	CBF_native_output.h \

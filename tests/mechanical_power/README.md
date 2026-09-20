@@ -14,7 +14,7 @@ completed solve's U, P, viscosity and body force. The heat-source diagnostic
 `THERMAL_BUDGET` is produced elsewhere in the timestep and must not be assumed
 to describe this identical state.
 
-When profiles are enabled, `profiles_hist_<step>.npz` (schema version 3) retains
+When profiles are enabled, `profiles_hist_<step>.npz` (schema version 5) retains
 all existing fields and includes:
 
 - `mechanical_valid`: 1 if a Stokes snapshot is available; otherwise 0, with
@@ -40,7 +40,7 @@ All totals are dimensionless powers scaled by Di/Atemp to the thermal source
 integral convention. They are not watts or TW. Positive boundary/body powers
 supply mechanical energy to the mantle.
 
-Let K be the actual assembled Stokes velocity operator, G the unstripped
+Let K be the full physical element velocity operator before boundary elimination, G the unstripped
 pressure-gradient operator, f the assembled body plus applied traction loads,
 and s=Di/Atemp. Prescribed-velocity reactions are `K U + G P - f`.
 
@@ -50,7 +50,7 @@ and s=Di/Atemp. Prescribed-velocity reactions are `K U + G P - f`.
 | Pother | Same at other prescribed velocity DOFs |
 | Wtraction | s times U dotted with applied traction loads |
 | Wbody | s times U dotted with the actual element body-force loads |
-| Dvisc_operator | s U^T K U; includes any terms present in the chosen operator |
+| Dvisc_operator | s U^T K U; excludes augmented-Lagrangian penalty terms |
 | Qvisc | Recomputed using the EBA thermal-source strain/viscosity formula |
 | Wthermal, Wchemical | Thermal and chemical body-force work |
 | Wphase_410/520/660 | Individual phase buoyancy work, not latent heat |
@@ -71,8 +71,8 @@ Define `input = Pplate + Pother + Wtraction + Wbody + Wpressure`:
 
 Thus `Rmechanical = Roperator + Rheating_operator`. A nonzero Rmechanical alone
 must not be attributed to solver convergence; the heating approximation and
-operator may differ. In particular, operator penalty terms are not physical
-heating. Relative residuals should use a non-cancelling scale, e.g. the sum of
+operator may differ. Augmented-Lagrangian penalty work is reported separately
+and is not physical heating. Relative residuals should use a non-cancelling scale, e.g. the sum of
 absolute input terms plus abs(Dvisc_operator), with an appropriate small floor.
 Neither Qvisc-Qadi_base nor Qtotal is used as a substitute for Pplate.
 
@@ -117,3 +117,23 @@ NPZ schema 4 adds the thermal-only cap diagnostics documented in
 and candidate heating/removal have separate totals and shell integrals.
 `Qvisc_limited_volume` is volume, not a power. Only mode 2 modifies the thermal
 source. Thermal-budget Qvisc is always the heat actually used.
+
+## Full-K correction and augmentation audit (schema 5)
+
+The nodal multigrid matrix has prescribed-velocity rows AND columns masked
+before assemble_del2_u is called. Setting strip_bcs=0 never restored them.
+EBA now rebuilds get_elt_k on each element for the full physical action,
+exchanges shared-node contributions and uses global_vdot Skip_id ownership.
+The ALA path remains unchanged.
+
+Let A denote the separately assembled get_aug_k contribution. New totals are
+Daug_operator=s U^T A U, Pplate_aug_correction=s Ubc^T A U, and the corresponding
+Pother_aug_correction. Raug_operator=Roperator+Pplate_aug_correction+
+Pother_aug_correction-Daug_operator diagnoses the augmented solver balance.
+These global totals have no artificial radial shell distributions.
+
+The fixture now contains off-diagonal prescribed/free coupling, solves one
+free row, forbids using the masked action, separates augmentation, and compares
+serial against two MPI ranks with replicated shared nodes and unique dot-product
+ownership. The test needs local MPI IPC/socket permission. This checks the
+assembly/accounting contract, not full spherical production convergence.

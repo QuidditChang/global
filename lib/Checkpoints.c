@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <math.h>
 #include "global_defs.h"
+#include "temperature_audit.h"
 #include "composition_related.h"
 
 /* Private function prototypes */
@@ -155,6 +156,7 @@ void read_checkpoint(struct All_variables *E)
 
     /* read energy information in the checkpoint file */
     read_energy_checkpoint(E, fp);
+    audit_temperature(E,"checkpoint_loaded",0,-1);
 
     /* read momentum information in the checkpoint file */
     read_momentum_checkpoint(E, fp);

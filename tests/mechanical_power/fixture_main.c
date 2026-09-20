@@ -5,6 +5,15 @@ int main(int argc,char **argv) {
     double raw[9],avg=0;
     MPI_Init(&argc,&argv);
     E->parallel.world=MPI_COMM_WORLD;
+    MPI_Comm_rank(MPI_COMM_WORLD,&E->parallel.me);
+    MPI_Comm_size(MPI_COMM_WORLD,&fixture_size);
+    /* Replicated nodes, disjoint weighted element contributions. Rank zero
+     * owns all equations; the other rank must skip duplicate dot products. */
+    E->parallel.Skip_id[0][1]=calloc(25,sizeof(int));
+    if(E->parallel.me) {
+        E->parallel.Skip_neq[0][1]=24;
+        for(i=1;i<=24;i++) E->parallel.Skip_id[0][1][i]=i-1;
+    }
     E->parallel.nprocz=1; E->parallel.me_loc[3]=0;
     E->sphere.caps_per_proc=1;
     E->mesh.nsd=3; E->mesh.levmax=0; E->mesh.noz=2;
@@ -24,7 +33,7 @@ int main(int argc,char **argv) {
     E->U[1]=calloc(25,sizeof(double)); E->P[1]=calloc(2,sizeof(double));
     E->buoyancy[1]=calloc(9,sizeof(double));
     E->T[1]=calloc(9,sizeof(double)); E->EVi[1]=calloc(9,sizeof(float));
-    E->eco[1]=calloc(2,sizeof(*E->eco[1])); E->eco[1][1].area=1;
+    E->eco[1]=calloc(2,sizeof(*E->eco[1])); E->eco[1][1].area=1.0/fixture_size;
     E->refstate.rho=calloc(3,sizeof(double));
     E->refstate.gravity=calloc(3,sizeof(double));
     E->refstate.thermal_expansivity=calloc(3,sizeof(double));
@@ -50,7 +59,7 @@ int main(int argc,char **argv) {
         for(j=1;j<=3;j++) {
             int eq=(i-1)*3+j-1;
             E->id[1][i].doff[j]=eq; E->U[1][eq]=0.2+eq*0.01;
-            E->elt_del[0][1][1].g[eq][0]=0.02*(eq+1);
+            E->elt_del[0][1][1].g[eq][0]=0.02*(eq+1)/fixture_size;
         }
         E->N.vpt[GNVINDEX(i,i)]=1; E->EVi[1][i]=2;
         raw[i]=4*1.2*0.8*E->T[1][i]-4*0.3*0.03*i;
@@ -73,10 +82,18 @@ int main(int argc,char **argv) {
         E->data.radius_km=0.001;
         E->refstate.lithostatic_pressure_pa=calloc(3,sizeof(double));
     }
+    if(mode==8 || mode==9) {
+        double f[24];
+        E->node[1][1]&=~VBX;
+        get_elt_f(E,1,f,0,1);
+        /* Solve the one free row including its nonzero prescribed neighbor. */
+        E->control.augmented_Lagr=(mode==9);
+        E->U[1][0]=(fixture_size*f[0]-0.02*E->P[1][1]+0.5*E->U[1][1])/(mode==9 ? 2.2 : 2.0);
+    }
     if(mode!=2) write_eba_mechanical_power(E);
     /* Verify output uses the solve's metadata rather than the later state. */
     E->monitor.solution_cycles=13; E->monitor.elapsed_time=0.25;
-    if(npz_open(&writer,argv[1]) || write_eba_power_npz(&writer,E)
-       || npz_close(&writer)) return 2;
+    if(E->parallel.me==0 && (npz_open(&writer,argv[1]) || write_eba_power_npz(&writer,E)
+       || npz_close(&writer))) return 2;
     MPI_Finalize(); return 0;
 }

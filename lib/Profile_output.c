@@ -819,7 +819,7 @@ static int write_eba_power_npz(struct Npz_writer *writer, struct All_variables *
             for(term=0; term<EBA_POWER_COUNT; term++) {
                 snprintf(key,sizeof(key),"mechanical_%s",eba_power_names[term]);
                 status |= add_f64(writer,key,&power->total[term],0,NULL);
-                if(term==EBA_WBODY || (term>=EBA_QVISC && term<=EBA_WPRESSURE) || term>=EBA_QVISC_CAPPED) {
+                if(term==EBA_WBODY || (term>=EBA_QVISC && term<=EBA_WPRESSURE) || (term>=EBA_QVISC_CAPPED && term<=EBA_QVISC_LIMITED_VOLUME)) {
                     snprintf(key,sizeof(key),"mechanical_%s_shell_integral",
                              eba_power_names[term]);
                     shape[0]=power->depth_count;
@@ -991,7 +991,7 @@ static int write_profiles_npz(struct All_variables *E, int cycles,
     }
 
     status = 0;
-    schema_version = 4;
+    schema_version = 5;
     status |= npz_add_i32(&writer, "schema_version", &schema_version, 0, NULL);
     status |= npz_add_i32(&writer, "step", &cycles, 0, NULL);
     elapsed_time = E->monitor.elapsed_time;

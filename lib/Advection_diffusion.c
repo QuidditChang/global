@@ -36,6 +36,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "qvis_limiter.h"
+#include "temperature_audit.h"
 
 #include "advection_diffusion.h"
 #include "material_properties.h"
@@ -299,6 +300,7 @@ void PG_timestep_solve(struct All_variables *E)
   double *DTdot[NCS], *T1[NCS], *Tdot1[NCS];
   FILE *fp;
 
+  audit_temperature(E,"thermal_entry",0,-1);
   E->advection.timesteps++;
 
   for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -336,6 +338,7 @@ void PG_timestep_solve(struct All_variables *E)
     if (E->advection.ADVECTION) {
 
       predictor(E,E->T,E->Tdot);
+      audit_temperature(E,"predictor",E->advection.last_sub_iterations,-1);
 
       for(psc_pass=0;psc_pass<E->advection.temp_iterations;psc_pass++)   {
         /* adiabatic, dissipative and latent heating*/
@@ -345,7 +348,9 @@ void PG_timestep_solve(struct All_variables *E)
 	pg_solver(E,E->T,E->Tdot,DTdot,E->convection.heat_sources,
                   E->control.reference_conductivity,1,E->node);
 	corrector(E,E->T,E->Tdot,DTdot);
+        audit_temperature(E,"corrector",E->advection.last_sub_iterations,psc_pass);
 	temperatures_conform_bcs(E);
+        audit_temperature(E,"thermal_bcs",E->advection.last_sub_iterations,psc_pass);
 	//if(E->sphere.caps==1)  apply_smooth_sideTbc(E);
       }
 
@@ -378,9 +383,12 @@ void PG_timestep_solve(struct All_variables *E)
   }  while ( iredo==1 && E->advection.last_sub_iterations <= 5);
 
 
+  audit_temperature(E,"thermal_accepted",E->advection.last_sub_iterations,-1);
+
   /* filter temperature to remove over-/under-shoot */
   if(E->advection.filter_temperature)
     filter(E);
+  audit_temperature(E,"post_filter",E->advection.last_sub_iterations,-1);
 
   //Lijun: melt generation test 
   fp=fopen("rheo.dat","r");
@@ -401,6 +409,7 @@ void PG_timestep_solve(struct All_variables *E)
   }
     
 
+  audit_temperature(E,"post_melt",E->advection.last_sub_iterations,-1);
   //end of melt
 
   E->advection.total_timesteps++;
@@ -424,11 +433,15 @@ void PG_timestep_solve(struct All_variables *E)
       if(E->parallel.me==0) fprintf(stderr,"PG_timestep_solve\n");
       if(E->control.lith_age_time) {
           lith_age_temperature_bound_adj(E,E->mesh.levmax);
+          audit_temperature(E,"lith_age_adjust",E->advection.last_sub_iterations,-1);
       }
       lith_age_conform_tbc(E);
+      audit_temperature(E,"lith_age_bcs",E->advection.last_sub_iterations,-1);
       assimilate_lith_conform_bcs(E);
+      audit_temperature(E,"post_assimilation",E->advection.last_sub_iterations,-1);
   }
 
+  audit_temperature(E,"thermal_exit",E->advection.last_sub_iterations,-1);
   measure_temperature_assimilation(E);
 
   if(E->control.disptn_number != 0)

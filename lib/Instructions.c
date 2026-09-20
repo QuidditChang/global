@@ -492,6 +492,7 @@ void read_initial_settings(struct All_variables *E)
 
   input_float("rayleigh",&(E->control.Atemp),"essential",m);
   input_float("dissipation_number",&(E->control.disptn_number),"0.0",m);
+  input_boolean("temperature_audit", &E->control.temperature_audit, "off", m);
   input_int("qvis_mode", &E->control.qvis_mode, "0,0,2", m);
   input_double("qvis_cohesion_pa", &E->control.qvis_cohesion_pa, "1.0e7", m);
   input_double("qvis_friction_angle_rad", &E->control.qvis_friction_angle_rad, "0.085", m);
