@@ -72,6 +72,11 @@ fi
 # Checks for programs.
 AC_PROG_CC([mpicc hcc mpcc mpcc_r mpxlc cmpicc gcc cc cl icc ecc pgcc xlc xlc_r])
 AC_PROG_CXX([mpicxx mpic++ mpiCC hcp mpCC mpxlC mpxlC_r cmpic++ g++ c++ gpp aCC CC cxx cc++ cl FCC KCC RCC xlc++_r xlC_r xlC icpc ecpc pgCC])
+# Required by the static libCitcomS.a target; do not rely on an incidental
+# libtool/automake macro to export the archiver substitutions.
+AC_CHECK_TOOL([AR], [ar], [no])
+AS_IF([test "x$AR" = xno], [AC_MSG_ERROR([ar archiver not found])])
+AC_PROG_RANLIB
 if test "$want_pyre" = yes; then
     CIT_PROG_PYCONFIG
     AC_SUBST([pkgsysconfdir], [\${sysconfdir}/$PACKAGE])
