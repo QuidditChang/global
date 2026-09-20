@@ -115,5 +115,23 @@ class MechanicalPowerTest(unittest.TestCase):
                                'mechanical_Dvisc','mechanical_R')):
                 self.assertTrue(np.all(a[key]==0),key)
 
+    def test_qvis_diagnose_and_apply_keep_mechanical_balance(self):
+        base,_ = self.run_case(0)
+        diag,_ = self.run_case(6)
+        applied,_ = self.run_case(7)
+        for data in (diag,applied):
+            for name in ('Qvisc','Pplate','Dvisc_operator','Roperator','Rmechanical'):
+                self.assertEqual(data['mechanical_'+name],base['mechanical_'+name])
+            self.assertGreater(data['mechanical_Qvisc'],data['mechanical_Qvisc_capped'])
+            self.assertEqual(data['mechanical_Qvisc_limited_volume'],1.0)
+            for name in ('Qvisc_capped','Qvisc_used','Qvisc_removed','Qvisc_potential_removed','Qvisc_limited_volume'):
+                self.assertAlmostEqual(float(data['mechanical_'+name]),
+                    float(data['mechanical_'+name+'_shell_integral'].sum()),places=12)
+        self.assertEqual(diag['mechanical_Qvisc_removed'],0.0)
+        self.assertEqual(diag['mechanical_Qvisc_used'],diag['mechanical_Qvisc'])
+        self.assertEqual(applied['mechanical_Qvisc_used'],applied['mechanical_Qvisc_capped'])
+        self.assertAlmostEqual(float(applied['mechanical_Qvisc_removed']),
+                              float(diag['mechanical_Qvisc_potential_removed']),places=12)
+
 if __name__ == '__main__':
     unittest.main()

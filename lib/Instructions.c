@@ -492,6 +492,15 @@ void read_initial_settings(struct All_variables *E)
 
   input_float("rayleigh",&(E->control.Atemp),"essential",m);
   input_float("dissipation_number",&(E->control.disptn_number),"0.0",m);
+  input_int("qvis_mode", &E->control.qvis_mode, "0,0,2", m);
+  input_double("qvis_cohesion_pa", &E->control.qvis_cohesion_pa, "1.0e7", m);
+  input_double("qvis_friction_angle_rad", &E->control.qvis_friction_angle_rad, "0.085", m);
+  if(E->control.qvis_mode < 0 || E->control.qvis_mode > 2 ||
+     !isfinite(E->control.qvis_cohesion_pa) || E->control.qvis_cohesion_pa < 0.0 ||
+     !isfinite(E->control.qvis_friction_angle_rad) ||
+     E->control.qvis_friction_angle_rad < 0.0 ||
+     E->control.qvis_friction_angle_rad >= 1.5707963267948966)
+      myerror(E, "Invalid Qvis mode/cohesion/friction angle");
   input_float("gruneisen",&(tmp),"0.0",m);
   /* special case: if tmp==0, set gruneisen as inf */
   if(tmp != 0)
@@ -886,6 +895,8 @@ void allocate_common_vars(E)
   E->heating_adi_base[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_phase[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_visc[j]   = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_visc_raw[j] = (double *) calloc(nel+1,sizeof(double));
+  E->heating_visc_capped[j] = (double *) calloc(nel+1,sizeof(double));
   E->heating_latent[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_internal[j] = (double *) malloc((nel+1)*sizeof(double));
   E->heating_assim[j] = (double *) malloc((nel+1)*sizeof(double));

@@ -66,6 +66,13 @@ int main(int argc,char **argv) {
     if(mode==5) {
         for(i=0;i<24;i++) E->U[1][i]=0;
     }
+    if(mode==6 || mode==7) {
+        E->control.qvis_mode=mode==6 ? 1 : 2;
+        E->control.qvis_cohesion_pa=0.1;
+        E->data.ref_viscosity=1.0; E->data.kappa0=1.0;
+        E->data.radius_km=0.001;
+        E->refstate.lithostatic_pressure_pa=calloc(3,sizeof(double));
+    }
     if(mode!=2) write_eba_mechanical_power(E);
     /* Verify output uses the solve's metadata rather than the later state. */
     E->monitor.solution_cycles=13; E->monitor.elapsed_time=0.25;

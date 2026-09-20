@@ -35,6 +35,7 @@
 #include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "qvis_limiter.h"
 
 #include "advection_diffusion.h"
 #include "material_properties.h"
@@ -1263,7 +1264,7 @@ static void filter(struct All_variables *E)
 
 
 static void process_visc_heating(struct All_variables *E, int m,
-                                 double *heating)
+                                 double *heating, double *raw, double *capped)
 {
     void strain_rate_2_inv();
     int e, ez, i;  // DJB EBA
@@ -1288,6 +1289,12 @@ static void process_visc_heating(struct All_variables *E, int m,
             visc += E->EVi[m][(e-1)*vpts + i];
 
         heating[e] = matprop * temp * visc * strain_sqr[e];  // DJB EBA
+        if(raw) raw[e] = heating[e];
+        {
+            double factor = qvis_cap_factor(E,e,visc/vpts,strain_sqr[e]);
+            if(capped) capped[e] = heating[e]*factor;
+            if(E->control.qvis_mode == 2) heating[e] *= factor;
+        }
     }
 
     free(strain_sqr);
@@ -1384,7 +1391,8 @@ static void process_heating(struct All_variables *E, int psc_pass)
         if(psc_pass == 0) {
             /* visc heating does not change between psc_pass, compute only
              * at first psc_pass */
-            process_visc_heating(E, m, E->heating_visc[m]);
+            process_visc_heating(E, m, E->heating_visc[m],
+                                 E->heating_visc_raw[m], E->heating_visc_capped[m]);
         }
         process_adi_heating(E, m, E->heating_adi_base[m]);
         memcpy(E->heating_adi[m], E->heating_adi_base[m],
@@ -1403,7 +1411,7 @@ void CBF_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
 {
     if(E->control.disptn_number != 0) {
         process_adi_heating(E,m,adi);
-        process_visc_heating(E,m,visc);
+        process_visc_heating(E,m,visc,NULL,NULL);
     }
     else {
         memset(adi,0,(E->lmesh.nel+1)*sizeof(double));
@@ -1523,12 +1531,23 @@ static void print_thermal_budget(struct All_variables *E)
 
     PRINT_HEATING_ROW("Qtotal", qtotal);
     PRINT_HEATING_ROW("Qvisc", E->heating_visc);
+    PRINT_HEATING_ROW("Qvisc_raw", E->heating_visc_raw);
+    PRINT_HEATING_ROW("Qvisc_capped", E->heating_visc_capped);
     PRINT_HEATING_ROW("Qadi", E->heating_adi);
     PRINT_HEATING_ROW("Qadi_base", E->heating_adi_base);
     PRINT_HEATING_ROW("Qphase", E->heating_phase);
     PRINT_HEATING_ROW("Qinternal", E->heating_internal);
     PRINT_HEATING_ROW("Qassim", E->heating_assim);
     PRINT_HEATING_ROW("Qvisc-Qadi_base", balance);
+    if(E->control.qvis_mode) {
+        for(m=1; m<=E->sphere.caps_per_proc; m++)
+            for(e=1; e<=E->lmesh.nel; e++) {
+                balance[m][e] = E->heating_visc_raw[m][e]-E->heating_visc[m][e];
+                qtotal[m][e] = E->heating_visc_raw[m][e]-E->heating_visc_capped[m][e];
+            }
+        PRINT_HEATING_ROW("Qvisc_removed", balance);
+        PRINT_HEATING_ROW("Qvisc_potential_removed", qtotal);
+    }
 
 #undef PRINT_HEATING_ROW
 

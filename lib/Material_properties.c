@@ -33,6 +33,7 @@
 #include <ctype.h>
 #include <math.h>
 
+#include <float.h>
 #include "global_defs.h"
 #include "material_properties.h"
 #include "parallel_related.h"
@@ -63,6 +64,10 @@ void mat_prop_allocate(struct All_variables *E)
         parallel_process_termination();
     }
     E->refstate.has_beta_ala = 0;
+    E->refstate.has_lithostatic_pressure = 0;
+    E->refstate.lithostatic_pressure_pa = (double *)calloc(noz+1,sizeof(double));
+    if(!E->refstate.lithostatic_pressure_pa)
+        parallel_process_termination();
 
     /* reference profile of gravity */
     E->refstate.gravity = (double *) malloc((noz+1)*sizeof(double));
@@ -93,6 +98,8 @@ void mat_prop_allocate(struct All_variables *E)
 
 void mat_prop_free(struct All_variables *E)
 {
+    free(E->refstate.lithostatic_pressure_pa);
+    E->refstate.lithostatic_pressure_pa = NULL;
     free(E->refstate.ala_beta);
     E->refstate.ala_beta = NULL;
     free(E->refstate.beta_ala);
@@ -126,6 +133,11 @@ void reference_state(struct All_variables *E)
         parallel_process_termination();
     }
 
+    if(E->control.qvis_mode &&
+       (!E->control.eba_formulation || !E->refstate.has_lithostatic_pressure)) {
+        fprintf(stderr, "Qvis requires EBA and six-column refstate with P_lith_Pa\n");
+        parallel_process_termination();
+    }
     if(E->control.ala_pressure_buoyancy)
         initialize_ala_beta(E);
 
@@ -462,6 +474,20 @@ double nodal_thermal_conductivity(struct All_variables *E, int cap, int node)
 }
 
 
+static int read_eba_row(char *line, double *values)
+{
+    char *p=line, *end;
+    int n=0;
+    while(1) {
+        while(*p==' ' || *p=='\t' || *p=='\r' || *p=='\n') p++;
+        if(!*p) return n;
+        if(n==6) return -1;
+        values[n]=strtod(p,&end);
+        if(end==p || !isfinite(values[n])) return -1;
+        n++; p=end;
+    }
+}
+
 static void read_refstate(struct All_variables *E)
 {
     FILE *fp;
@@ -469,6 +495,7 @@ static void read_refstate(struct All_variables *E)
     char buffer[255], cmb_buffer[255], trailing;
     double values[9], cmb_values[9];
     double first_temperature[4], last_temperature[4];
+    double previous_pressure = DBL_MAX;
 
     fp = fopen(E->refstate.filename, "r");
     if(fp == NULL) {
@@ -492,10 +519,7 @@ static void read_refstate(struct All_variables *E)
                              &cmb_values[3], &cmb_values[4], &cmb_values[5],
                              &cmb_values[6], &trailing);
     else if(E->control.eba_formulation)
-        cmb_columns = sscanf(cmb_buffer,
-                             "%lf %lf %lf %lf %lf %c",
-                             &cmb_values[0], &cmb_values[1], &cmb_values[2],
-                             &cmb_values[3], &cmb_values[4], &trailing);
+        cmb_columns = read_eba_row(cmb_buffer, cmb_values);
     else
         cmb_columns = sscanf(cmb_buffer,
                              "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
@@ -510,11 +534,11 @@ static void read_refstate(struct All_variables *E)
                 E->refstate.filename, cmb_columns);
         parallel_process_termination();
     }
-    if(E->control.eba_formulation && cmb_columns != 5) {
+    if(E->control.eba_formulation && cmb_columns != 5 && cmb_columns != 6) {
         fprintf(stderr,
                 "Reference state file '%s', global radial row 1: "
-                "EBA requires exactly 5 numeric columns "
-                "(rho g Tref alpha Cp), found %d\n",
+                "EBA requires 5 or 6 numeric columns "
+                "(rho g Tref alpha Cp [P_lith_Pa]), found %d\n",
                 E->refstate.filename, cmb_columns);
         parallel_process_termination();
     }
@@ -545,16 +569,22 @@ static void read_refstate(struct All_variables *E)
                                  &values[3], &values[4], &values[5],
                                  &values[6], &trailing);
             else
-                columns = sscanf(buffer, "%lf %lf %lf %lf %lf %c",
-                                 &values[0], &values[1], &values[2],
-                                 &values[3], &values[4], &trailing);
-            if(columns != (E->control.ala_pressure_buoyancy ? 7 : 5)) {
+                columns = read_eba_row(buffer, values);
+            if(columns != cmb_columns) {
                 fprintf(stderr,
                         "Reference state file '%s', global radial row %d: "
                         "%s requires its exact reference-state schema\n",
                         E->refstate.filename, background_rows+1,
                         E->control.ala_pressure_buoyancy ? "strict ALA" : "EBA");
                 parallel_process_termination();
+            }
+            if(E->control.eba_formulation && columns == 6) {
+                if(values[5] < 0.0 || values[5] > previous_pressure ||
+                   (background_rows > 0 && previous_pressure <= values[5])) {
+                    fprintf(stderr, "Invalid P_lith_Pa: must decrease CMB to surface\n");
+                    parallel_process_termination();
+                }
+                previous_pressure = values[5];
             }
             if(background_rows < 4)
                 first_temperature[background_rows] = values[2];
@@ -568,6 +598,13 @@ static void read_refstate(struct All_variables *E)
                     "Reference state file '%s' has %d radial rows; expected %d\n",
                     E->refstate.filename, background_rows, E->mesh.noz);
             parallel_process_termination();
+        }
+        if(E->control.eba_formulation && cmb_columns == 6) {
+            if(fabs(previous_pressure) > 1.0e-6) {
+                fprintf(stderr, "P_lith_Pa must be zero at the surface\n");
+                parallel_process_termination();
+            }
+            E->refstate.has_lithostatic_pressure = 1;
         }
         if(E->control.eba_formulation) {
             E->refstate.temperature_cmb = first_temperature[0];
@@ -608,9 +645,7 @@ static void read_refstate(struct All_variables *E)
                              &values[0], &values[1], &values[2], &values[3],
                              &values[4], &values[5], &values[6], &trailing);
         else if(E->control.eba_formulation)
-            columns = sscanf(buffer, "%lf %lf %lf %lf %lf %c",
-                             &values[0], &values[1], &values[2], &values[3],
-                             &values[4], &trailing);
+            columns = read_eba_row(buffer, values);
         else
             columns = sscanf(buffer, "%lf %lf %lf %lf %lf %lf %lf %lf %lf",
                              &values[0], &values[1], &values[2], &values[3],
@@ -624,11 +659,11 @@ static void read_refstate(struct All_variables *E)
                     E->refstate.filename, i+E->lmesh.nzs-1, columns);
             parallel_process_termination();
         }
-        if(E->control.eba_formulation && columns != 5) {
+        if(E->control.eba_formulation && columns != cmb_columns) {
             fprintf(stderr,
                     "Reference state file '%s', global radial row %d: "
-                    "EBA requires exactly 5 numeric columns "
-                    "(rho g Tref alpha Cp), found %d\n",
+                    "EBA requires 5 or 6 numeric columns "
+                    "(rho g Tref alpha Cp [P_lith_Pa]), found %d\n",
                     E->refstate.filename, i+E->lmesh.nzs-1, columns);
             parallel_process_termination();
         }
@@ -682,7 +717,8 @@ static void read_refstate(struct All_variables *E)
             }
         }
         else if(E->control.eba_formulation) {
-            /* EBA schema: rho g Tref alpha Cp. It deliberately contains no
+            E->refstate.lithostatic_pressure_pa[i] = columns == 6 ? values[5] : 0.0;
+            /* EBA schema: rho g Tref alpha Cp [P_lith_Pa]. It deliberately contains no
              * dis, beta, or Gamma_eff. */
             E->refstate.rho[i] = values[0];
             E->refstate.gravity[i] = values[1];
@@ -756,7 +792,7 @@ static void read_refstate(struct All_variables *E)
     else if(E->parallel.me == 0 && E->control.eba_formulation) {
         fprintf(stderr,
                 "Read EBA reference state '%s': "
-                "rho g Tref alpha Cp; "
+                "rho g Tref alpha Cp [P_lith_Pa]; "
                 "unclosed T_K endpoints CMB=%e surface=%e\n",
                 E->refstate.filename, E->refstate.temperature_cmb,
                 E->refstate.temperature_surface);
@@ -810,6 +846,7 @@ static void adams_williamson_eos(struct All_variables *E)
     E->refstate.temperature_cmb = 0.0;
     E->refstate.temperature_surface = 0.0;
     E->refstate.has_beta_ala = 0;
+    E->refstate.has_lithostatic_pressure = 0;
     for(i=1; i<=E->lmesh.noz; i++)
         E->refstate.beta_ala[i] = 0.0;
 

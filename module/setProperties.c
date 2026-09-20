@@ -618,6 +618,17 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
 
     getFloatProperty(properties, "rayleigh", E->control.Atemp, fp);
     getFloatProperty(properties, "dissipation_number", E->control.disptn_number, fp);
+    getIntProperty(properties, "qvis_mode", E->control.qvis_mode, fp);
+    getDoubleProperty(properties, "qvis_cohesion_pa", E->control.qvis_cohesion_pa, fp);
+    getDoubleProperty(properties, "qvis_friction_angle_rad", E->control.qvis_friction_angle_rad, fp);
+    if(E->control.qvis_mode < 0 || E->control.qvis_mode > 2 ||
+       !isfinite(E->control.qvis_cohesion_pa) || E->control.qvis_cohesion_pa < 0.0 ||
+       !isfinite(E->control.qvis_friction_angle_rad) ||
+       E->control.qvis_friction_angle_rad < 0.0 ||
+       E->control.qvis_friction_angle_rad >= 1.5707963267948966) {
+        PyErr_SetString(PyExc_ValueError,"Invalid Qvis mode/cohesion/friction angle");
+        return NULL;
+    }
     getFloatProperty(properties, "gruneisen", tmp, fp);
      /* special case: if tmp==0, set gruneisen as inf */
      if(tmp != 0)

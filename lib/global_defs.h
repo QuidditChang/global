@@ -559,6 +559,9 @@ struct CONTROL {
     float TBCtopval;
     float TBCbotval;
 
+    int qvis_mode; /* 0 off, 1 diagnose, 2 apply; EBA only */
+    double qvis_cohesion_pa, qvis_friction_angle_rad;
+
     float Q0;
     float Q0ER;
 
@@ -603,6 +606,8 @@ struct REF_STATE {
     int choice;
     int has_temperature;           /* initial background geotherm is available */
     int has_beta_ala;
+    int has_lithostatic_pressure;
+    double *lithostatic_pressure_pa; /* optional EBA column 6, SI Pa */
     char filename[200];
     double *rho;
     double *ala_beta;              /* authoritative strict-ALA element beta */
@@ -837,6 +842,7 @@ struct All_variables {
     double *heating_adi_base[NCS];
     double *heating_phase[NCS];
     double *heating_visc[NCS];
+    double *heating_visc_raw[NCS], *heating_visc_capped[NCS];
     double *heating_latent[NCS];
     double *heating_internal[NCS];
     double *heating_assim[NCS];

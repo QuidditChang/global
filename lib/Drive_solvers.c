@@ -31,6 +31,7 @@
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "qvis_limiter.h"
 #include "drive_solvers.h"
 #include "phase_change.h"
 
@@ -871,7 +872,8 @@ const char *const eba_power_names[EBA_POWER_COUNT] = {
     "Pplate", "Pother", "Wtraction", "Wbody", "Dvisc_operator", "Qvisc",
     "Wthermal", "Wchemical", "Wphase_410", "Wphase_520", "Wphase_660",
     "Wphase_total", "Wpressure", "Rmechanical", "Roperator",
-    "Rbody_split", "Rheating_operator"
+    "Rbody_split", "Rheating_operator", "Qvisc_capped", "Qvisc_used",
+    "Qvisc_removed", "Qvisc_potential_removed", "Qvisc_limited_volume"
 };
 static struct Eba_power_snapshot eba_power_cache;
 static struct All_variables *eba_power_owner;
@@ -1053,7 +1055,18 @@ static void write_eba_mechanical_power(struct All_variables *E)
             viscosity=0.0;
             for(i=1; i<=vpts; i++) viscosity+=E->EVi[m][(e-1)*vpts+i];
             value=scale*viscosity/vpts*strain[e]*E->eco[m][e].area;
-            eba_shell_add(E,EBA_QVISC,e,value);
+            eba_shell_add(E,EBA_QVISC,e,value); /* Qvisc remains raw mechanically. */
+            {
+                double factor=qvis_cap_factor(E,e,viscosity/vpts,strain[e]);
+                double capped=value*factor;
+                double used=E->control.qvis_mode==2 ? capped : value;
+                eba_shell_add(E,EBA_QVISC_CAPPED,e,capped);
+                eba_shell_add(E,EBA_QVISC_USED,e,used);
+                eba_shell_add(E,EBA_QVISC_REMOVED,e,value-used);
+                eba_shell_add(E,EBA_QVISC_POTENTIAL,e,value-capped);
+                if(factor < 1.0)
+                    eba_shell_add(E,EBA_QVISC_LIMITED_VOLUME,e,E->eco[m][e].area);
+            }
         }
     }
     MPI_Allreduce(MPI_IN_PLACE,eba_power_cache.shell_integrals,
@@ -1076,13 +1089,18 @@ static void write_eba_mechanical_power(struct All_variables *E)
     totals[EBA_RBODY_SPLIT]=totals[EBA_WBODY]-totals[EBA_WTHERMAL]
         -totals[EBA_WCHEMICAL]-totals[EBA_WPHASE];
     totals[EBA_RHEATING_OPERATOR]=totals[EBA_DOPERATOR]-totals[EBA_QVISC];
+    eba_power_cache.qvis_mode=E->control.qvis_mode;
     eba_power_owner=E;
     if(E->parallel.me==0) {
         fprintf(E->fp,"MECHANICAL_POWER  step=%d  scale=Di/Atemp  formulation=EBA  elapsed_time=%.17g  state=pre_rigid_rotation\n",
                 eba_power_cache.step,eba_power_cache.elapsed_time);
+        fprintf(E->fp,"QVIS_MODE %d cohesion_pa=%.17g friction_angle_rad=%.17g\n",
+                E->control.qvis_mode,E->control.qvis_cohesion_pa,
+                E->control.qvis_friction_angle_rad);
         fprintf(E->fp,"%-20s  %24s\n","TERM","TOTAL");
         for(term=0; term<EBA_POWER_COUNT; term++)
             fprintf(E->fp,"%-20s  %+.17e\n",eba_power_names[term],totals[term]);
+        fprintf(E->fp,"%-20s  %+.17e\n","Qvisc_raw",totals[EBA_QVISC]);
         fflush(E->fp);
     }
     free(strain);

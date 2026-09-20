@@ -330,6 +330,9 @@ class Solver(Component):
 
         rayleigh = inv.float("rayleigh", default=1e+05)
         dissipation_number = inv.float("dissipation_number", default=0.0)
+        qvis_mode = inv.int("qvis_mode", default=0)
+        qvis_cohesion_pa = inv.float("qvis_cohesion_pa", default=1.0e7)
+        qvis_friction_angle_rad = inv.float("qvis_friction_angle_rad", default=0.085)
         gruneisen = inv.float("gruneisen", default=0.0)
         # Deprecated compatibility input; explicit Ttop/Tbottom are preferred.
         surfaceT = inv.float("surfaceT", default=-1.0)

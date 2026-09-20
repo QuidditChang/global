@@ -3,6 +3,7 @@
 #include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "qvis_limiter.h"
 #include "drive_solvers.h"
 #include "npz_writer.h"
 

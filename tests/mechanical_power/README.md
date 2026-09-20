@@ -108,3 +108,12 @@ restart with the same physics and profile output enabled. Check that:
 The new code performs extra diagnostic operator applications/quadrature and
 MPI reductions once per completed solve. Its production runtime overhead and
 global MPI closure have not been measured by the local fixture.
+
+## Qvis extension
+
+NPZ schema 4 adds the thermal-only cap diagnostics documented in
+`tests/qvis/README.md`. Mechanical `Qvisc` stays raw (also exported as
+`Qvisc_raw`); existing mechanical residual definitions do not change. Actual
+and candidate heating/removal have separate totals and shell integrals.
+`Qvisc_limited_volume` is volume, not a power. Only mode 2 modifies the thermal
+source. Thermal-budget Qvisc is always the heat actually used.
