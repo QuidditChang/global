@@ -101,3 +101,33 @@ The legacy heat_flux() projects u_r*T - dT/dr to nodes and extrapolates the
 boundary value. Its source explicitly notes missing conductivity, heat capacity
 and unit conversion. It is not the CBF W/m2 result and not the variable-k dTdr
 postprocessor. Renaming does not change that numerical definition.
+
+## Restart clock repair (2026-09-20)
+
+Full binary checkpoint time and original start_age are now preloaded before
+lith_age_init and velocity boundary initialization. solution_cycles remains at
+its initialization value so boundary arrays still allocate; the later full
+checkpoint read restores the actual step. zero_elapsed_time/reset_startage do
+not override the clock during full restart. At tracer checkpoint loading the
+age-crossing cache is set to the current integer geological age, so restoring
+the same checkpoint is not interpreted as a new age crossing.
+
+Keep benchmark start_age=249.9; the authoritative start_age and elapsed time
+come from the checkpoint. 0.647491 Ma is the current geological age, not the
+initial age or nondimensional elapsed time. Check the first boundary messages:
+they should now read the 0/1 Ma files, preceded by RESTART_CLOCK_PRELOAD.
+
+Local binary-header tests and a 12-rank full checkpoint restart passed, including
+an intentionally wrong cfg start_age and zero_elapsed_time=on. The synthetic
+small-model checkpoint was relabelled to 13600; exactly one step and native CBF
+output at 13601 were observed. This is not a rerun of the HPC production model.
+
+The prior production data have complete files but a surface power of -54.12 TW,
+strong heating/assimilation and the previously identified stale plate boundary.
+The time fix does not by itself prove the CBF physical result correct. Rerun the
+HPC case; output T / solver Tdot and velocity/source time-level consistency still
+require physical budget analysis. No sign flip or value clipping was applied.
+
+Native postprocessing is now provided in the scripts repository:
+merge_CBF_native.py and cmbhf_EBA_Q0_30_rheol7_scold1.0.CBF.lsf.
+It writes lossless float64 native-mesh NPZ archives; see CBF_POSTPROCESS.md.

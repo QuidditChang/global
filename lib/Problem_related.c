@@ -71,6 +71,12 @@ void get_initial_elapsed_time(E)
 
     E->monitor.elapsed_time = 0.0;
 
+    if(E->control.restart || E->control.post_p) {
+        void read_checkpoint_initial_time(struct All_variables *);
+        read_checkpoint_initial_time(E);
+        return;
+    }
+
     if (E->convection.tic_method == -1) {
 
 #ifdef USE_GZDIR		/* gzdir output */

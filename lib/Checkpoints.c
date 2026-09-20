@@ -28,6 +28,7 @@
 
 #include <sys/file.h>
 #include <unistd.h>
+#include <math.h>
 #include "global_defs.h"
 #include "composition_related.h"
 
@@ -47,6 +48,49 @@ static void read_tracer_checkpoint(struct All_variables *E, FILE *fp);
 static void read_composition_checkpoint(struct All_variables *E, FILE *fp);
 static void read_energy_checkpoint(struct All_variables *E, FILE *fp);
 static void read_momentum_checkpoint(struct All_variables *E, FILE *fp);
+
+
+/* Restore the clock before mesh initialization reads age-dependent forcing.
+ * Keep solution_cycles at its initialization value: boundary-reader allocation
+ * is guarded by solution_cycles==0. The full checkpoint restores it later. */
+void read_checkpoint_initial_time(struct All_variables *E)
+{
+    char path[255];
+    FILE *fp;
+    int h[8],bad=0,allbad;
+    float t[3]={0,0,0},lo[3],hi[3];
+    void parallel_process_termination();
+    snprintf(path,sizeof(path),"%s.chkpt.%d.%d",E->control.old_P_file,
+             E->parallel.me,E->monitor.solution_cycles_init);
+    fp=fopen(path,"rb");
+    if(!fp)bad=1;
+    else {
+        if(fread(h,sizeof(int),8,fp)!=8 || fread(t,sizeof(float),3,fp)!=3)bad=1;
+        if(fclose(fp)!=0)bad=1;
+        if(!bad && (h[0]!=E->lmesh.nox || h[1]!=E->lmesh.noy || h[2]!=E->lmesh.noz ||
+            h[3]!=E->parallel.nprocx || h[4]!=E->parallel.nprocy ||
+            h[5]!=E->parallel.nprocz || h[6]!=E->sphere.caps_per_proc ||
+            h[7]!=E->monitor.solution_cycles_init || !isfinite(t[0]) || t[0]<0 ||
+            !isfinite(t[1]) || t[1]<0 || !isfinite(t[2])))bad=1;
+    }
+    if(bad)fprintf(stderr,"Invalid or missing restart clock header: %s\n",path);
+    MPI_Allreduce(&bad,&allbad,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(allbad)parallel_process_termination();
+    MPI_Allreduce(t,lo,3,MPI_FLOAT,MPI_MIN,E->parallel.world);
+    MPI_Allreduce(t,hi,3,MPI_FLOAT,MPI_MAX,E->parallel.world);
+    bad=(lo[0]!=hi[0] || lo[1]!=hi[1] || lo[2]!=hi[2]);
+    if(bad) {
+        if(E->parallel.me==0)fprintf(stderr,"Restart timing differs between ranks\n");
+        parallel_process_termination();
+    }
+    E->monitor.elapsed_time=t[0];
+    E->control.start_age=t[2];
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"RESTART_CLOCK_PRELOAD step=%d time_nd=%.17g start_age_Ma=%.17g\n",
+                h[7],(double)t[0],(double)t[2]);
+        fflush(E->fp);
+    }
+}
 
 
 void output_checkpoint(struct All_variables *E)
@@ -89,6 +133,7 @@ void read_checkpoint(struct All_variables *E)
 {
     void initialize_material(struct All_variables *E);
     void initial_viscosity(struct All_variables *E);
+    float find_age_in_MY(struct All_variables *E);
 
     char output_file[255];
     FILE *fp;
@@ -116,6 +161,8 @@ void read_checkpoint(struct All_variables *E)
 
     /* read tracer/composition information in the checkpoint file */
     if(E->control.tracer) {
+        /* Loading the same checkpoint is not a new geological-age crossing. */
+        E->trench_visit_age=(int)find_age_in_MY(E);
         read_tracer_checkpoint(E, fp);
 
         if(E->composition.on)

@@ -109,8 +109,12 @@ void initial_mesh_solver_setup(struct All_variables *E)
    // fprintf(stderr,"After allocate_velo_vars\n");
 
     get_initial_elapsed_time(E);  /* Set elapsed time */
-    set_starting_age(E);  /* set the starting age to elapsed time, if desired */
-    set_elapsed_time(E);         /* reset to elapsed time to zero, if desired */
+    /* Full restart owns both elapsed time and start age. Do not reset the
+     * preloaded clock before lithosphere/plate boundary initialization. */
+    if(!E->control.restart && !E->control.post_p) {
+        set_starting_age(E);
+        set_elapsed_time(E);
+    }
 
 
     /* open the heatflow files here because we need to know about loc_me */

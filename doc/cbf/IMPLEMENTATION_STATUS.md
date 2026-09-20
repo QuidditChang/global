@@ -1,3 +1,8 @@
+> 2026-09-20 restart repair: preload checkpoint clock before boundary setup;
+> preserve checkpoint age/time and suppress a spurious tracer age crossing at load.
+> Local header and 12-rank binary-restart tests passed; production HPC rerun pending.
+> Lossless native-mesh postprocessing is available in the scripts repository.
+
 > Naming update: native files now use expanded rank datadir/q.botm.<rank>.<step>
 > and q.surf.<rank>.<step>; see README.md. Earlier paths below are historical.
 
