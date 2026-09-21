@@ -618,6 +618,7 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
 
     getFloatProperty(properties, "rayleigh", E->control.Atemp, fp);
     getFloatProperty(properties, "dissipation_number", E->control.disptn_number, fp);
+    getIntProperty(properties, "temperature_audit", E->control.temperature_audit, fp);
     getIntProperty(properties, "qvis_mode", E->control.qvis_mode, fp);
     getDoubleProperty(properties, "qvis_cohesion_pa", E->control.qvis_cohesion_pa, fp);
     getDoubleProperty(properties, "qvis_friction_angle_rad", E->control.qvis_friction_angle_rad, fp);
