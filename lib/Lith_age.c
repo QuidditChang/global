@@ -47,6 +47,84 @@ static float effective_plate_age_nd(const struct All_variables *E,
 }
 
 
+/* Surface HSC anomaly shared by TA initialization and evolving targets.
+ * Tref is nondimensional relative to Ttop. Nonpositive plate ages retain
+ * the legacy convention: no shallow cooling anomaly (eta=10). */
+static double lith_age_surface_anomaly(struct All_variables *E,
+                                      double depth, float age_nd)
+{
+  double eta;
+  age_nd = effective_plate_age_nd(E, age_nd);
+  eta = age_nd > 0.0 ? 0.5 * depth / sqrt(age_nd) : 10.0;
+  return E->refstate.temperature_surface * erfc(eta);
+}
+
+static double lith_age_target_temperature(struct All_variables *E,
+                                          int radial_node, double depth,
+                                          float age_nd)
+{
+  return E->refstate.Tref[radial_node]
+      - lith_age_surface_anomaly(E, depth, age_nd);
+}
+
+static double lith_age_old_temperature_weight(struct All_variables *E,
+                                              double depth, double thickness)
+{
+  double fraction = depth / thickness;
+  if(E->control.lith_age_asml) {
+    if(fraction < 0.0) fraction = 0.0;
+    if(fraction > 1.0) fraction = 1.0;
+    /* 1-w, evaluated with expm1 for the small-shape linear limit. */
+    if(E->control.lith_age_asml_exp < 1.e-6) return fraction;
+    return -expm1(-E->control.lith_age_asml_exp * fraction)
+        / -expm1(-E->control.lith_age_asml_exp);
+  }
+  return 0.5 * fraction;
+}
+
+/* Same signed trench geometry for ASML initialization and evolution.
+ * flag_depth2 is signed distance / 1000 km; preserve the historical rule. */
+static double lith_age_asml_thickness(struct All_variables *E, int nodeg)
+{
+  double flag=E->flag_depth2[nodeg], dist=fabs(flag), factor;
+  if(flag*1000.0/6371.0>=-0.1 && flag<=0.0 && dist*1000.0/6371.0<=0.1)
+    factor=0.003;
+  else if(dist<0.06) factor=0.003;
+  else if(dist<=0.1) factor=0.003+0.997*(dist-0.06)/0.04;
+  else factor=1.0;
+  return factor*E->control.lith_age_depth;
+}
+
+/* Called by both C and Pyre initialization, after controls are populated. */
+static void validate_lith_age_asml(struct All_variables *E)
+{
+  if(E->control.lith_age_asml != 0 && E->control.lith_age_asml != 1) {
+    fprintf(stderr, "lith_age_asml must be 0 (legacy) or 1 (Tref assimilation)\n");
+    parallel_process_termination();
+  }
+  if(!E->control.lith_age_asml) return;
+  if(!isfinite(E->control.lith_age_asml_exp) ||
+     E->control.lith_age_asml_exp < 0.0 ||
+     !E->control.eba_formulation || !E->control.lith_age_time ||
+     E->control.temperature_bound_adj ||
+     !isfinite(E->control.lith_age_depth) ||
+     E->control.lith_age_depth <= 0.0 ||
+     E->control.lith_age_depth >= E->sphere.ro-E->sphere.ri ||
+     !isfinite(E->control.max_plate_age_Ma) ||
+     E->control.max_plate_age_Ma <= 0.0) {
+    fprintf(stderr, "lith_age_asml requires EBA, lith_age_time=1, "
+            "temperature_bound_adj=0, finite nonnegative lith_age_asml_exp, positive finite plate-age cap "
+            "and 0 < lith_age_depth < shell thickness\n");
+    parallel_process_termination();
+  }
+  if(E->parallel.me == 0)
+    fprintf(stderr, "Thermal assimilation TA: Tref-coupled HSC, "
+            "surface amplitude=Tref_surface, H=%g R, exponential shape=%g; "
+            "legacy trench factors and per-call schedule retained\n",
+            E->control.lith_age_depth, E->control.lith_age_asml_exp);
+}
+
+
 void lith_age_input(struct All_variables *E)
 {
   int m = E->parallel.me;
@@ -56,6 +134,8 @@ void lith_age_input(struct All_variables *E)
   E->control.temperature_bound_adj = 0;
 
   input_int("lith_age",&(E->control.lith_age),"0",m);
+  input_int("lith_age_asml",&(E->control.lith_age_asml),"0",m);
+  input_float("lith_age_asml_exp",&(E->control.lith_age_asml_exp),"3.0",m);
   input_float("mantle_temp",&(E->control.lith_age_mantle_temp),"1.0",m);
   input_float("bottom_tbl_thickness",&(E->control.bottom_tbl_thickness),"0.0",m);
   input_float("bottom_tbl_diffusivity_ratio",&(E->control.bottom_tbl_diffusivity_ratio),"1.0",m);
@@ -90,6 +170,8 @@ void lith_age_init(struct All_variables *E)
   int gnox, gnoy;
   gnox=E->mesh.nox;
   gnoy=E->mesh.noy;
+
+  validate_lith_age_asml(E);
 
   //if (E->parallel.me == 0 ) fprintf(stderr,"INSIDE lith_age_init\n");
   E->age_t=(float*) malloc((gnox*gnoy+1)*sizeof(float));
@@ -260,6 +342,8 @@ void lith_age_construct_tic(struct All_variables *E)
           else
               asm_depth=1.0;
 	  assim_depth = asm_depth*E->control.lith_age_depth;
+          if(E->control.lith_age_asml)
+              assim_depth = lith_age_asml_thickness(E, nodeg);
 
           age1=effective_plate_age_nd(E,age1);
 	  if( r1 >= E->sphere.ro-assim_depth)
@@ -274,7 +358,9 @@ void lith_age_construct_tic(struct All_variables *E)
 	        /* Surface HSC is an anomaly superposed on the local K background.
 	           The dimensional operation T_K-A_surface is algebraically
 	           equivalent to subtracting its normalized amplitude here. */
-	        temp1 = surface_hsc_delta * erfc(temp);
+	        temp1 = E->control.lith_age_asml
+            ? lith_age_surface_anomaly(E, E->sphere.ro-r1, age1)
+            : surface_hsc_delta * erfc(temp);
 		E->T[m][node] -= temp1;
 	      }
 	      else {
@@ -426,10 +512,14 @@ all three get set to true. CPC 6/20/00 */
                 else
                         asm_depth=1.0;
                 assim_depth=asm_depth*E->control.lith_age_depth;
+          if(E->control.lith_age_asml)
+              assim_depth = lith_age_asml_thickness(E, nodeg);
 
 		/*if(theta<E->control.theta_max-0.10 && theta>E->control.theta_min+0.10
                       && phi<E->control.fi_max-0.10 && phi>E->control.fi_min+0.10) {*/
-                    if(E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
+                    if(E->control.lith_age_asml
+                       ? E->sx[j][3][node]>E->sphere.ro-assim_depth
+                       : E->sx[j][3][node]>=E->sphere.ro-assim_depth) {
 		    /*if(E->sx[j][3][node]>=E->sphere.ro-E->control.lith_age_depth) { */
                     // if closer than (lith_age_depth) from top
                         E->node[j][node]=E->node[j][node] | TBX;
@@ -491,6 +581,9 @@ void lith_age_conform_tbc(struct All_variables *E)
     if (E->parallel.me == 0) fprintf(stderr,"INSIDE lith_age_conform_tbc\n");
     (E->solver.lith_age_read_files)(E,output);
   }
+
+  /* Setup invokes boundary conformance before reference_state is loaded. */
+  if(E->control.lith_age_asml && !E->refstate.has_temperature) return;
 
   /* NOW SET THE TEMPERATURES IN THE BOUNDARY REGIONS */
   if(E->monitor.solution_cycles>1 && E->control.temperature_bound_adj) {
@@ -577,6 +670,8 @@ void lith_age_conform_tbc(struct All_variables *E)
               else
                         asm_depth=1.0;
 	      assim_depth=asm_depth*E->control.lith_age_depth;
+          if(E->control.lith_age_asml)
+              assim_depth = lith_age_asml_thickness(E, nodeg);
 	      age1=effective_plate_age_nd(E,age1);
 	      if(  E->sx[m][3][node]>=E->sphere.ro-assim_depth ) {
 		// if closer than (lith_age_depth) from top 
@@ -592,6 +687,9 @@ void lith_age_conform_tbc(struct All_variables *E)
                     temp = 10.0;
 		    t0 = E->control.lith_age_mantle_temp * erf(temp);
 		}
+                if(E->control.lith_age_asml)
+                    t0 = lith_age_target_temperature(
+                        E, k, E->sphere.ro-r1, age1);
 		//t0 = E->control.lith_age_mantle_temp;
 
 		E->sphere.cap[m].TB[1][node]=t0;
@@ -684,8 +782,10 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
                 else
                         asm_depth=1.0;
                 assim_depth=asm_depth*E->control.lith_age_depth;
+          if(E->control.lith_age_asml)
+              assim_depth = lith_age_asml_thickness(E, nodeg);
                 if(depth <= assim_depth) {
-                    daf = 0.5*depth/assim_depth;
+                    daf = lith_age_old_temperature_weight(E, depth, assim_depth);
                     old_temperature = E->T[j][node];
                     E->T[j][node] = daf*E->T[j][node] + (1.0-daf)*assimilate_new_temp;
                     E->assim_delta_T[j][node] +=

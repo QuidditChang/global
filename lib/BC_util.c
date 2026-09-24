@@ -27,6 +27,7 @@
  */
 
 #include "global_defs.h"
+#include "lith_age.h"
 
 
 void strip_bcs_from_residual(E,Res,level)
@@ -57,8 +58,14 @@ void temperatures_conform_bcs(E)
     assimilate_lith_conform_bcs(E);
     */
   if(E->control.lith_age) {
-    lith_age_temperature_bound_adj(E,E->mesh.levmax);
-    lith_age_conform_tbc(E);
+    if(E->control.lith_age_asml) {
+      lith_age_conform_tbc(E);
+      lith_age_temperature_bound_adj(E,E->mesh.levmax);
+    }
+    else {
+      lith_age_temperature_bound_adj(E,E->mesh.levmax);
+      lith_age_conform_tbc(E);
+    }
     assimilate_lith_conform_bcs(E);
     }
   else

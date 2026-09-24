@@ -511,6 +511,8 @@ PyObject * pyCitcom_Param_set_properties(PyObject *self, PyObject *args)
     getStringProperty(properties, "flag_depth_file", E->control.flag_depth_file, fp);
     getStringProperty(properties, "tf_file", E->control.tf_file, fp);
     getIntProperty(properties, "lith_age_time", E->control.lith_age_time, fp);
+    getIntProperty(properties, "lith_age_asml", E->control.lith_age_asml, fp);
+    getFloatProperty(properties, "lith_age_asml_exp", E->control.lith_age_asml_exp, fp);
     getFloatProperty(properties, "lith_age_depth", E->control.lith_age_depth, fp);
     getFloatProperty(properties, "max_plate_age_Ma",
                      E->control.max_plate_age_Ma, fp);

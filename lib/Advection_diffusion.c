@@ -431,11 +431,12 @@ void PG_timestep_solve(struct All_variables *E)
 
   if(E->control.lith_age) {
       if(E->parallel.me==0) fprintf(stderr,"PG_timestep_solve\n");
+      if(E->control.lith_age_asml) lith_age_conform_tbc(E);
       if(E->control.lith_age_time) {
           lith_age_temperature_bound_adj(E,E->mesh.levmax);
           audit_temperature(E,"lith_age_adjust",E->advection.last_sub_iterations,-1);
       }
-      lith_age_conform_tbc(E);
+      if(!E->control.lith_age_asml) lith_age_conform_tbc(E);
       audit_temperature(E,"lith_age_bcs",E->advection.last_sub_iterations,-1);
       assimilate_lith_conform_bcs(E);
       audit_temperature(E,"post_assimilation",E->advection.last_sub_iterations,-1);
