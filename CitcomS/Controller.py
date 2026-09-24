@@ -36,6 +36,8 @@ import journal
 
 class Controller(Component):
 
+    output_ready_version = 1
+
 
     def __init__(self, name, facility):
         Component.__init__(self, name, facility)
@@ -152,6 +154,49 @@ class Controller(Component):
         if CBF_frequency < 0:
             CBF_frequency = self.inventory.monitoringFrequency
         self.solver.save_q_CBF(CBF_frequency)
+        self.publishOutputReady(CBF_frequency)
+        return
+
+
+    def publishOutputReady(self, CBF_frequency):
+        """Opt-in online processing: publish only after every writer returns.
+
+        Python 2.6 compatible. The TA launcher supplies a fresh run-local
+        directory. No postprocessor is called from an MPI solver rank.
+        """
+        import os
+        directory = os.environ.get("CITCOMS_OUTPUT_READY_DIR")
+        if not directory:
+            return
+        step = self.step
+        streams = []
+        for name, frequency in (
+                ("caps", self.inventory.monitoringFrequency),
+                ("profiles", self.inventory.profileMonitoringFrequency),
+                ("cbf", CBF_frequency)):
+            if frequency > 0 and step % frequency == 0:
+                streams.append(name)
+        if not streams:
+            return
+        # All field/profile/checkpoint/CBF writers have closed their files.
+        self.solver.communicator.barrier()
+        if self.solver.communicator.rank != 0:
+            return
+        import json
+        import sys
+        temporary = os.path.join(directory, ".%d.tmp" % step)
+        try:
+            stream = open(temporary, "w")
+            try:
+                json.dump({"version": 1, "step": step, "streams": streams}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            finally:
+                stream.close()
+            os.rename(temporary, os.path.join(directory, "%d.json" % step))
+        except (IOError, OSError) as error:
+            # Diagnostics must not terminate a production solve.
+            sys.stderr.write("OUTPUT_READY_FAILED step=%d: %s\n" % (step, error))
         return
 
 
