@@ -14,7 +14,7 @@ def function(s,signature):
 class ThermalAssimilationTest(unittest.TestCase):
  def test_production_column_and_defaults(self):
   src=(ROOT/'lib/Lith_age.c').read_text()
-  funcs=['static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_construct_tic(']
+  funcs=['static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static double lith_age_relaxation_fraction(', 'static void assimilate_lith_relaxed(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_construct_tic(']
   prefix=r'''
 #include <assert.h>
 #include <math.h>
@@ -26,15 +26,17 @@ class ThermalAssimilationTest(unittest.TestCase):
 static int reads=0;
 void parallel_process_termination(void) { abort(); }
 float find_age_in_MY(struct All_variables *E) { return 100.; }
-void temperatures_conform_bcs(struct All_variables *E) { (void)E; }
+void temperatures_conform_bcs(struct All_variables *E);
+void temperatures_conform_bcs2(struct All_variables *E);
 void reader(struct All_variables *E,int output) { reads++; }
 '''
   main=r'''
 static struct All_variables state;
 int main(void) {
  struct All_variables *E=&state;
- int k; double h,expected,old,age,w;
+ int k; double h,expected,old,age,w,one,initial;
  E->control.lith_age=1; E->control.lith_age_time=1; E->control.lith_age_asml=1;
+ E->control.lith_age_asml_tau_Ma=1.;
  E->control.eba_formulation=1; E->control.lith_age_depth=.04;
  E->control.max_plate_age_Ma=70.; E->control.lith_age_mantle_temp=.395917143;
  E->sphere.ro=1.; E->sphere.ri=.546225; E->sphere.caps_per_proc=1;
@@ -90,9 +92,13 @@ int main(void) {
  E->monitor.solution_cycles=1;
  lith_age_conform_tbc(E);
  assert(fabs(E->sphere.cap[1].TB[3][3]-expected)<1e-7);
+ E->node[1][3]|=FBZ; /* stale legacy interior flux marker */
  lith_age_temperature_bound_adj(E,1);
+ assert(!(E->node[1][3]&FBZ));
  assert((E->node[1][2]&(TBX|TBY|TBZ))==0); /* zero-weight bottom remains free */
- assert(E->node[1][3]&TBZ);
+ assert(!(E->node[1][3]&TBZ)); /* interior participates in thermal solve */
+ E->advection.timestep=.1/E->data.scalet;
+ w=-expm1(-.1*w);
  E->T[1][3]=.6;old=E->T[1][3];
  assimilate_lith_conform_bcs(E);
  assert(fabs(E->T[1][3]-((1-w)*old+w*expected))<1e-7);
@@ -106,19 +112,52 @@ int main(void) {
  /* Runtime signed trench mask reduces depth using unchanged .003 factor. */
  E->control.lith_age_asml=1;E->flag_depth2[1]=-.2;
  lith_age_temperature_bound_adj(E,1);
- assert(!(E->node[1][3]&TBZ));assert(E->node[1][5]&TBZ);
+ assert(!(E->node[1][3]&TBZ));
  /* Setup callback must not access unloaded reference values, including restart. */
+ /* Boundary callbacks never relax interior temperature, independent of passes. */
+ E->flag_depth2[1]=.2;
+ E->node[1][1]|=TBZ; E->node[1][5]|=TBZ;
+ E->T[1][3]=.6;old=E->T[1][3];
+ for(k=0;k<7;k++) temperatures_conform_bcs(E);
+ assert(E->T[1][3]==old);
+ assert(E->T[1][1]==1. && E->T[1][5]==0.);
+ /* Exact semigroup: one dt and ten dt/10 calls give same frozen-target decay. */
+ E->advection.timestep=1./E->data.scalet;
+ w=lith_age_relaxation_fraction(E,h/2,h);
+ E->advection.timestep=.1/E->data.scalet;
+ assert(fabs(w-(1.-pow(1.-lith_age_relaxation_fraction(E,h/2,h),10)))<1e-8);
+ /* Exercise real float nodal storage and the actual relaxation operator. */
+ E->T[1][3]=.6;initial=E->T[1][3];E->assim_delta_T[1][3]=0.;
+ E->advection.timestep=1./E->data.scalet;
+ assimilate_lith_conform_bcs(E);one=E->T[1][3];
+ assert(fabs(E->assim_delta_T[1][3]-(one-initial))<1e-12);
+ E->T[1][3]=initial;E->assim_delta_T[1][3]=0.;
+ E->advection.timestep=.1/E->data.scalet;
+ for(k=0;k<10;k++) assimilate_lith_conform_bcs(E);
+ assert(fabs(E->T[1][3]-one)<2e-7);
+ assert(fabs(E->assim_delta_T[1][3]-(E->T[1][3]-initial))<1e-12);
+ E->advection.timestep=0.;assert(lith_age_relaxation_fraction(E,h/2,h)==0.);
+ assert(lith_age_relaxation_fraction(E,h,h)==0.);
  E->refstate.has_temperature=0;free(E->refstate.Tref);E->refstate.Tref=NULL;
  lith_age_conform_tbc(E);
- assert(reads>=3);
+ assert(reads>=2);
  puts("PASS: target, cap, initialization parity, taper, live flags, legacy, deltaT, pre-reference callback");
  return 0;
 }
 '''
   with tempfile.TemporaryDirectory() as tmp:
-   p=Path(tmp);c=p/'test.c';exe=p/'test';c.write_text(prefix+'\n'.join(function(src,x) for x in funcs)+main)
+   p=Path(tmp);c=p/'test.c';exe=p/'test';bc=(ROOT/'lib/BC_util.c').read_text();c.write_text(prefix+'\n'.join(function(src,x) for x in funcs)+'\n'+function(bc,'void temperatures_conform_bcs(E)')+'\n'+function(bc,'void temperatures_conform_bcs2(E)')+main)
    subprocess.run([shutil.which('mpicc'),'-std=gnu99','-Wno-deprecated-non-prototype','-I'+str(ROOT/'lib'),str(c),'-lm','-o',str(exe)],check=True,text=True)
-   r=subprocess.run([str(exe)],check=True,capture_output=True,text=True);print(r.stdout)
+   r=subprocess.run([str(exe)],capture_output=True,text=True);self.assertEqual(r.returncode,0,r.stdout+r.stderr);print(r.stdout)
+ def test_accepted_step_schedule(self):
+  ad=(ROOT/'lib/Advection_diffusion.c').read_text()
+  body=function(ad,'void PG_timestep_solve(')
+  self.assertEqual(body.count('assimilate_lith_conform_bcs(E);'),1)
+  self.assertLess(body.index('}  while ( iredo'),body.index('assimilate_lith_conform_bcs(E);'))
+  self.assertIn('if(!E->control.lith_age_asml || !iredo)',body)
+  self.assertLess(body.index('assimilate_lith_conform_bcs(E);'),body.index('measure_temperature_assimilation(E);'))
+  self.assertIn('lith_age_asml_tau_Ma', (ROOT/'module/setProperties.c').read_text())
+
  def test_pyre_and_c_defaults(self):
   self.assertIn('input_int("lith_age_asml",&(E->control.lith_age_asml),"0",m)',(ROOT/'lib/Lith_age.c').read_text())
   self.assertIn('pyre.inventory.int("lith_age_asml", default=0)',(ROOT/'CitcomS/Components/Param.py').read_text())

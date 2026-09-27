@@ -103,7 +103,9 @@ static void validate_lith_age_asml(struct All_variables *E)
     parallel_process_termination();
   }
   if(!E->control.lith_age_asml) return;
-  if(!isfinite(E->control.lith_age_asml_exp) ||
+  if(!isfinite(E->control.lith_age_asml_tau_Ma) ||
+     E->control.lith_age_asml_tau_Ma <= 0.0 ||
+     !isfinite(E->control.lith_age_asml_exp) ||
      E->control.lith_age_asml_exp < 0.0 ||
      !E->control.eba_formulation || !E->control.lith_age_time ||
      E->control.temperature_bound_adj ||
@@ -113,15 +115,16 @@ static void validate_lith_age_asml(struct All_variables *E)
      !isfinite(E->control.max_plate_age_Ma) ||
      E->control.max_plate_age_Ma <= 0.0) {
     fprintf(stderr, "lith_age_asml requires EBA, lith_age_time=1, "
-            "temperature_bound_adj=0, finite nonnegative lith_age_asml_exp, positive finite plate-age cap "
+            "temperature_bound_adj=0, positive finite lith_age_asml_tau_Ma, finite nonnegative lith_age_asml_exp, positive finite plate-age cap "
             "and 0 < lith_age_depth < shell thickness\n");
     parallel_process_termination();
   }
   if(E->parallel.me == 0)
     fprintf(stderr, "Thermal assimilation TA: Tref-coupled HSC, "
             "surface amplitude=Tref_surface, H=%g R, exponential shape=%g; "
-            "legacy trench factors and per-call schedule retained\n",
-            E->control.lith_age_depth, E->control.lith_age_asml_exp);
+            "tau=%g Myr; once per accepted forward thermal step\n",
+            E->control.lith_age_depth, E->control.lith_age_asml_exp,
+            E->control.lith_age_asml_tau_Ma);
 }
 
 
@@ -135,6 +138,7 @@ void lith_age_input(struct All_variables *E)
 
   input_int("lith_age",&(E->control.lith_age),"0",m);
   input_int("lith_age_asml",&(E->control.lith_age_asml),"0",m);
+  input_float("lith_age_asml_tau_Ma",&(E->control.lith_age_asml_tau_Ma),"1.0",m);
   input_float("lith_age_asml_exp",&(E->control.lith_age_asml_exp),"3.0",m);
   input_float("mantle_temp",&(E->control.lith_age_mantle_temp),"1.0",m);
   input_float("bottom_tbl_thickness",&(E->control.bottom_tbl_thickness),"0.0",m);
@@ -500,6 +504,12 @@ all three get set to true. CPC 6/20/00 */
             for(kk=1;kk<=E->lmesh.noz;kk++)  {
                 nodeg=E->lmesh.nxs-1+jj+(E->lmesh.nys+ii-2)*E->mesh.nox;
                 node=kk+(jj-1)*E->lmesh.noz+(ii-1)*E->lmesh.nox*E->lmesh.noz;
+                if(E->control.lith_age_asml) {
+                    int global_k = E->lmesh.nzs + kk - 1;
+                    if(global_k > 1 && global_k < E->mesh.noz)
+                        E->node[j][node] &= ~(TBX | TBY | TBZ | FBX | FBY | FBZ);
+                    continue;
+                }
 		theta = E->sx[j][1][node];
         	phi = E->sx[j][2][node];
 		dist=fabs(E->flag_depth2[nodeg]);
@@ -705,6 +715,41 @@ void lith_age_conform_tbc(struct All_variables *E)
 }
 
 
+/* Exact frozen-target relaxation over the accepted physical timestep.
+ * Spatial weights control rate, not a fixed fraction per solver callback. */
+static double lith_age_relaxation_fraction(struct All_variables *E,
+                                           double depth, double thickness)
+{
+    double w = 1.0-lith_age_old_temperature_weight(E,depth,thickness);
+    if(w <= 0.0 || E->advection.timestep <= 0.0) return 0.0;
+    return -expm1(-E->advection.timestep * E->data.scalet * w
+                  / E->control.lith_age_asml_tau_Ma);
+}
+
+static void assimilate_lith_relaxed(struct All_variables *E)
+{
+    int cap,i,j,k,node,nodeg,global_k;
+    double depth,h,alpha,old,target;
+    for(cap=1;cap<=E->sphere.caps_per_proc;cap++)
+        for(j=1;j<=E->lmesh.noy;j++)
+            for(i=1;i<=E->lmesh.nox;i++) {
+                nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
+                h=lith_age_asml_thickness(E,nodeg);
+                for(k=1;k<=E->lmesh.noz;k++) {
+                    global_k=E->lmesh.nzs+k-1;
+                    if(global_k==1 || global_k==E->mesh.noz) continue;
+                    node=k+(i-1)*E->lmesh.noz+(j-1)*E->lmesh.nox*E->lmesh.noz;
+                    depth=E->sphere.ro-E->sx[cap][3][node];
+                    if(depth>=h) continue;
+                    alpha=lith_age_relaxation_fraction(E,depth,h);
+                    target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
+                    old=E->T[cap][node];
+                    E->T[cap][node]=old+alpha*(target-old);
+                    E->assim_delta_T[cap][node]+=E->T[cap][node]-old;
+                }
+            }
+}
+
 void assimilate_lith_conform_bcs(struct All_variables *E)
 {
   float depth, dist, dist2, daf, assimilate_new_temp,temp,temp1,temp2,temp3,temp4,fi_1,fi_2,fi,*PB1[4],*PB2[4],asm_depth,assim_depth,flag_depth2;
@@ -725,6 +770,11 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
   nox=E->lmesh.nox;
   noy=E->lmesh.noy;
   noz=E->lmesh.noz;
+
+  if(E->control.lith_age_asml) {
+      assimilate_lith_relaxed(E);
+      return;
+  }
 
   age=find_age_in_MY(E);
   intage=age;

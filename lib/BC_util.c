@@ -57,17 +57,31 @@ void temperatures_conform_bcs(E)
     lith_age_conform_tbc(E);
     assimilate_lith_conform_bcs(E);
     */
-  if(E->control.lith_age) {
-    if(E->control.lith_age_asml) {
-      lith_age_conform_tbc(E);
-      lith_age_temperature_bound_adj(E,E->mesh.levmax);
-    }
-    else {
-      lith_age_temperature_bound_adj(E,E->mesh.levmax);
-      lith_age_conform_tbc(E);
-    }
+  if(E->control.lith_age && E->control.lith_age_asml) {
+    int cap,i,j,k,node,global_k;
+    lith_age_temperature_bound_adj(E,E->mesh.levmax);
+    /* Keep real radial Dirichlet boundaries separate from interior nudging.
+       Do not overwrite the prescribed top value with the age-zero target. */
+    for(cap=1;cap<=E->sphere.caps_per_proc;cap++)
+      for(j=1;j<=E->lmesh.noy;j++)
+        for(i=1;i<=E->lmesh.nox;i++)
+          for(k=1;k<=E->lmesh.noz;k++) {
+            global_k=E->lmesh.nzs+k-1;
+            node=k+(i-1)*E->lmesh.noz+(j-1)*E->lmesh.nox*E->lmesh.noz;
+            if(global_k==1 || global_k==E->mesh.noz) {
+              double value=global_k==1 ? E->control.TBCbotval : E->control.TBCtopval;
+              E->sphere.cap[cap].TB[1][node]=value;
+              E->sphere.cap[cap].TB[2][node]=value;
+              E->sphere.cap[cap].TB[3][node]=value;
+            }
+          }
+    temperatures_conform_bcs2(E);
+  }
+  else if(E->control.lith_age) {
+    lith_age_temperature_bound_adj(E,E->mesh.levmax);
+    lith_age_conform_tbc(E);
     assimilate_lith_conform_bcs(E);
-    }
+  }
   else
     temperatures_conform_bcs2(E);
   return;

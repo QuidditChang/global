@@ -545,6 +545,7 @@ struct CONTROL {
 
     int lith_age;
     int lith_age_time;
+    float lith_age_asml_tau_Ma; /* positive relaxation time in Myr */
     float lith_age_asml_exp; /* normalized exponential shape; 0 linear */
     int lith_age_asml; /* 0 legacy; 1 Tref-coupled HSC and zero-bottom taper */
     int lith_age_old_cycles;

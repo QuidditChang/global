@@ -74,6 +74,7 @@ class Param(CitcomComponent):
 	tf_file = pyre.inventory.str("tf_file",default="tf_depth.dat")
         lith_age_time = pyre.inventory.bool("lith_age_time", default=False)
         lith_age_asml = pyre.inventory.int("lith_age_asml", default=0)
+        lith_age_asml_tau_Ma = pyre.inventory.float("lith_age_asml_tau_Ma", default=1.0)
         lith_age_asml_exp = pyre.inventory.float("lith_age_asml_exp", default=3.0)
         lith_age_depth = pyre.inventory.float("lith_age_depth", default=0.0314)
         max_plate_age_Ma = pyre.inventory.float("max_plate_age_Ma", default=70.0)

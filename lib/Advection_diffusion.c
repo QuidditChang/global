@@ -307,6 +307,11 @@ void PG_timestep_solve(struct All_variables *E)
     DTdot[m]= (double *)malloc((E->lmesh.nno+1)*sizeof(double));
 
 
+  /* Restart/setup may carry lithosphere TB flags from older runs.
+     Clear interior constraints before the first residual evaluation. */
+  if(E->control.lith_age && E->control.lith_age_asml)
+      temperatures_conform_bcs(E);
+
   if(E->advection.monitor_max_T) {
      for(m=1;m<=E->sphere.caps_per_proc;m++)  {
          T1[m]= (double *)malloc((E->lmesh.nno+1)*sizeof(double));
@@ -438,7 +443,9 @@ void PG_timestep_solve(struct All_variables *E)
       }
       if(!E->control.lith_age_asml) lith_age_conform_tbc(E);
       audit_temperature(E,"lith_age_bcs",E->advection.last_sub_iterations,-1);
-      assimilate_lith_conform_bcs(E);
+      if(!E->control.lith_age_asml || !iredo)
+          assimilate_lith_conform_bcs(E);
+      if(E->control.lith_age_asml) temperatures_conform_bcs(E);
       audit_temperature(E,"post_assimilation",E->advection.last_sub_iterations,-1);
   }
 
@@ -475,6 +482,12 @@ void PG_timestep_solve_back(struct All_variables *E)
   FILE *fp,*fp1,*fp2;
   float T_max, T_min, v1, v2, timestep_elapsed,diff,t_temp,total_time;
   char input_s[1000],output_1[255],T_plus[255],T_minus[255];
+
+  if(E->control.lith_age && E->control.lith_age_asml) {
+      fprintf(stderr,"TA physical relaxation requires the forward PG_timestep_solve path\n");
+      parallel_process_termination();
+      return;
+  }
 
   E->advection.timesteps++;
 
