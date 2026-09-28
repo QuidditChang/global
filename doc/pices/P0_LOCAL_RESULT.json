@@ -1,0 +1,45 @@
+{
+  "status": "PASS",
+  "scope": "P0 standalone PG baseline only; no PICES/energy-closure certification",
+  "provenance_checked": false,
+  "mpi_exit_code": 8,
+  "ranks": 12,
+  "steps": [
+    0,
+    1,
+    2
+  ],
+  "temperature_K": {
+    "0": {
+      "min": 300.0,
+      "max": 3700.0
+    },
+    "1": {
+      "min": 300.0,
+      "max": 3700.0
+    },
+    "2": {
+      "min": 300.0,
+      "max": 3700.0
+    }
+  },
+  "provenance": {},
+  "source_base": "3f7f4de2ab22b0cf45d18ffc829259c1fda4211b",
+  "runtime_source_diff_from_base": "empty",
+  "build": "tests/cbf/build_validation.py: full production C library + unmodified standalone driver, local MPI/clang, no Pyre installation",
+  "unit_tests": {
+    "phase_energy": 3,
+    "thermal_assimilation": 3,
+    "cbf_kernel": 6,
+    "p0_output_gate": 7
+  },
+  "negative_integration_cases": [
+    "missing rank rejected",
+    "truncated step-2 gzip rejected",
+    "invalid heat-budget row rejected"
+  ],
+  "inputs_sha256": {
+    "cmbhf_EBA_PICES_P0.cfg": "d87cf9d9f7aa7d7c3c0f3f78b12c5232949fc93e5c81bead0a28842e2521b02a",
+    "refstate_EBA_PICES_P0.txt": "e5440e781da7370b25aa2db7e4711b19831e50c85d30f4eb914cae5858976947"
+  }
+}
