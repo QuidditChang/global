@@ -29,6 +29,18 @@
 
 ## 结果解释与下一关口
 
+### HPC 构建反馈：pyconfig 类型错误
+
+用户回传 Python 2.6 `expand_makefile_vars` 抛出 `TypeError: expected string or buffer`。
+`m4/cit_python.m4` 生成的脚本对 `parse_makefile` 的结果重复展开；其中数字已经是 int。
+删除重复展开，保留解析器返回的类型和已展开值，不修改 vendor 或 C 求解器。
+LSF 对此 m4 文件使用固定 SHA256 验证并保存独立 diff，其余源码仍与 EBA 基线比较。
+此前“构建入口无差异”的记录描述修复前状态。
+
+本地验证：Autoconf 从修改后的宏生成 pyconfig 成功；将生成的 Python 2 语法临时转换为
+Python 3 后，整数、零、负数、变量引用、转义美元和空值均通过，并复现旧重复展开的 TypeError。
+本机没有 Python 2.6，原生 Python 2.6 完整构建仍需 HPC 重试；这不代表 HPC P0 已通过。
+
 本案例为部署与日志/热流离散一致性的 smoke test。小网格 CBF 热流可能有负值和较强时变；当前检查的是其残差、native 积分、单位与输出一致性，不能解释为生产热流已收敛或热预算闭合。没有宣称 Stokes 生产精度、Pyre、PICES 平流、MPI 粒子迁移、完整 EBA 相变/TA 或长期守恒通过。
 
 用户运行 runs 的 `cmbhf_EBA_PICES_P0.lsf`，下载完整 tar.gz 与 LSF out/err 后，使用不带 `--local` 的 verifier 并人工审阅 build/provenance。HPC P0 审计通过后才启动 P1；不自动 commit/push，不自动提交 HPC，也不提前实现 P1。

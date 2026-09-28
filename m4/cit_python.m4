@@ -269,7 +269,7 @@ cat >"$cfgfile" <<END_OF_PYTHON
 from getopt import getopt, GetoptError
 from sys import argv, exit
 from getopt import getopt
-from distutils.sysconfig import parse_config_h, parse_makefile, expand_makefile_vars
+from distutils.sysconfig import parse_config_h, parse_makefile
 
 def printUsage():
     print "Usage: %s -h HEADER -m MAKEFILE -o OUTPUT" % argv[0]
@@ -299,10 +299,9 @@ f = open(header)
 config_vars = parse_config_h(f)
 f.close()
 
+# parse_makefile already expands references and converts numeric values to int.
+# A second expansion both rejects integers and reinterprets escaped dollars.
 makefile_vars = parse_makefile(makefile)
-keys = makefile_vars.keys()
-for key in keys:
-    makefile_vars[key] = expand_makefile_vars(makefile_vars[key], makefile_vars)
 
 f = open(output, 'w')
 print >>f, "#!/usr/bin/env python"
