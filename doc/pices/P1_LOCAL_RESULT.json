@@ -1,0 +1,104 @@
+{
+  "status": "LOCAL_PASS_HPC_PENDING",
+  "date": "2026-09-29",
+  "standalone_smoke": {
+    "status": "PASS",
+    "scope": "P1 constant-physics smoke; not P2 restart/seam validation",
+    "provenance_checked": false,
+    "particles": [
+      98304,
+      98304,
+      98304
+    ],
+    "temperature_K": [
+      300.0,
+      3700.0
+    ],
+    "max_cfl": 0.202454885498391,
+    "max_grid_particle_mismatch": 3.4141075205829097e-06,
+    "max_subgrid_increment": 1.625608627795962e-06,
+    "provenance": {}
+  },
+  "manufactured_and_guards": {
+    "constant": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "rotation": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "diffusion": {
+      "exit": 8,
+      "status": "PASS",
+      "particle_reference_max_error": 4.440892098500626e-16,
+      "raw_subgrid_survival": 0.0010579774105761257,
+      "heat_substeps": 6
+    },
+    "flavor_slot": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "reject_empty": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_source": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_cfl": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_substeps": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_restart": {
+      "exit": 72,
+      "status": "PASS"
+    }
+  },
+  "pg_regression": {
+    "audit": {
+      "status": "PASS",
+      "scope": "P0 standalone PG baseline only; no PICES/energy-closure certification",
+      "provenance_checked": false,
+      "mpi_exit_code": 8,
+      "ranks": 12,
+      "steps": [
+        0,
+        1,
+        2
+      ],
+      "temperature_K": {
+        "0": {
+          "min": 300.0,
+          "max": 3700.0
+        },
+        "1": {
+          "min": 300.0,
+          "max": 3700.0
+        },
+        "2": {
+          "min": 300.0,
+          "max": 3700.0
+        }
+      },
+      "provenance": {}
+    },
+    "decoded_velocity_temperature_outputs_identical": 36
+  },
+  "existing_unit_tests": {
+    "cbf_kernel": 6,
+    "p0_auditor": 7,
+    "temperature_audit": 3
+  },
+  "not_validated": [
+    "HPC installation and run",
+    "Pyre runtime",
+    "P2 restart and systematic seam tests",
+    "spatial convergence"
+  ]
+}

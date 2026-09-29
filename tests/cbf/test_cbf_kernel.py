@@ -29,8 +29,8 @@ class CBFKernel(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         energy = (ROOT/'lib/Advection_diffusion.c').read_text()
         # Skip forward declarations; extract actual production definitions.
-        energy = energy[energy.index('static void element_thermal_transport(', energy.index('static void pg_solver(', energy.index('static void pg_solver(')+1)):]
-        parts = [function(energy, 'static void element_thermal_transport('),
+        energy = energy[energy.index('void thermal_transport_at_gp(', energy.index('static void pg_solver(', energy.index('static void pg_solver(')+1)):]
+        parts = [function(energy, 'void thermal_transport_at_gp('),
                  function(energy, 'static void element_residual('),
                  function(energy, 'double CBF_element_thermal_residual(')]
         phase = function((ROOT/'lib/Phase_change.c').read_text(), 'void phase_change_state(')

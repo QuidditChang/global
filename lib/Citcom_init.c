@@ -27,6 +27,7 @@
  */
 
 #include "global_defs.h"
+#include <string.h>
 #include "citcom_init.h"
 
 struct All_variables* citcom_init(MPI_Comm *world)
@@ -55,6 +56,9 @@ struct All_variables* citcom_init(MPI_Comm *world)
   E->flag_depth = E->flag_depth1 = E->flag_depth2 = NULL;
   E->new_flag_depth = E->tf_depth = NULL;
 
+  /* Parameter readers can log before output_init opens the rank log. */
+  E->fp = stderr;
+  memset(&E->pices, 0, sizeof(E->pices));
   E->monitor.solution_cycles=0;
   E->control.keep_going=1;
 

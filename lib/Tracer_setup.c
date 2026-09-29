@@ -41,6 +41,7 @@
 
 #include <math.h>
 #include "global_defs.h"
+#include "pices.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -237,6 +238,7 @@ void tracer_initial_settings(struct All_variables *E)
 
 void tracer_advection(struct All_variables *E)
 {
+  if(E->pices.enabled && !E->pices.moving) return;
   if(E->control.verbose)
     fprintf(E->trace.fpt,"STEP %d\n",E->monitor.solution_cycles);
 

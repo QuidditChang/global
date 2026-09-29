@@ -162,7 +162,7 @@ void gzdir_output(struct All_variables *E, int out_cycles)
 					work */
   gzdir_output_visc(E, out_cycles);
 
-  gzdir_output_surf_botm(E, out_cycles);
+  if(!E->pices.enabled) gzdir_output_surf_botm(E, out_cycles);
 
   /* optiotnal output below */
   /* compute and output geoid (in spherical harmonics coeff) */

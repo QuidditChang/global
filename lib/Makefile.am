@@ -55,7 +55,7 @@ libCitcomS_a_SOURCES = $(sources)
 libCitcomS_la_LDFLAGS = -release $(VERSION)
 libCitcomS_la_SOURCES = $(sources)
 
-sources = \
+sources = Pices.c pices.h \
 	Advection_diffusion.c \
 	advection_diffusion.h \
 	temperature_audit.h \

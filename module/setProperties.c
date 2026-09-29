@@ -31,6 +31,7 @@
 #include <string.h>
 #include <math.h>
 #include "global_defs.h"
+#include "pices.h"
 #include "parallel_related.h"
 #include "setProperties.h"
 
@@ -90,6 +91,7 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
+    char energy_solver[32];
     float legacy_inputdiffusivity;
     float reference_conductivity;
 
@@ -101,6 +103,15 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     fp = get_output_stream(out, E);
 
     PUTS(("[CitcomS.solver.tsolver]\n"));
+
+    getStringProperty(properties, "energy_solver", energy_solver, fp);
+    if(strcmp(energy_solver,"pg") && strcmp(energy_solver,"pices"))
+        pices_fail(E,"energy_solver must be pg or pices");
+    E->pices.enabled=!strcmp(energy_solver,"pices");
+    E->pices.initialized=E->pices.moving=0;
+    E->pices.slot=-1;
+    getIntProperty(properties, "pices_test_no_diffusion", E->pices.no_diffusion, fp);
+    getIntProperty(properties, "pices_max_substeps", E->pices.max_substeps, fp);
 
     getIntProperty(properties, "ADV", E->advection.ADVECTION, fp);
     getIntProperty(properties, "filter_temp", E->advection.filter_temperature, fp);

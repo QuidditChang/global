@@ -30,6 +30,7 @@
 #include <assert.h>
 
 #include "global_defs.h"
+#include "pices.h"
 #include "lith_age.h"
 #include "parsing.h"
 
@@ -206,6 +207,7 @@ void convection_initial_temperature(struct All_variables *E)
   /* like a call to temperatures_conform_bcs(E); */
 
   initialize_temperature_anomaly(E);
+  if(E->pices.enabled) pices_initialize(E);
 
   if (E->control.verbose)
     debug_tic(E);

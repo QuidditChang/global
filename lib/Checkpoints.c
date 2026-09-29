@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <math.h>
 #include "global_defs.h"
+#include "pices.h"
 #include "temperature_audit.h"
 #include "composition_related.h"
 
@@ -56,6 +57,7 @@ static void read_momentum_checkpoint(struct All_variables *E, FILE *fp);
  * is guarded by solution_cycles==0. The full checkpoint restores it later. */
 void read_checkpoint_initial_time(struct All_variables *E)
 {
+    if(E->pices.enabled) pices_fail(E,"P1 restart is unsupported");
     char path[255];
     FILE *fp;
     int h[8],bad=0,allbad;
@@ -99,6 +101,8 @@ void output_checkpoint(struct All_variables *E)
     char output_file[255];
     FILE *fp1;
 
+    if(E->pices.enabled) return; /* P1 cannot publish restartable states. */
+
     sprintf(output_file, "%s.chkpt.%d.%d", E->control.data_file,
             E->parallel.me, E->monitor.solution_cycles);
 
@@ -132,6 +136,7 @@ void output_checkpoint(struct All_variables *E)
 
 void read_checkpoint(struct All_variables *E)
 {
+    if(E->pices.enabled) pices_fail(E,"P1 restart is unsupported");
     void initialize_material(struct All_variables *E);
     void initial_viscosity(struct All_variables *E);
     float find_age_in_MY(struct All_variables *E);

@@ -29,6 +29,7 @@
 #include <math.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "pices.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -168,6 +169,9 @@ void full_tracer_setup(struct All_variables *E)
     if (E->trace.nflavors > 0)
         E->trace.number_of_extra_quantities += 1;
 
+
+    if(E->pices.enabled)
+        E->pices.slot = E->trace.number_of_extra_quantities++;
 
     E->trace.number_of_tracer_quantities =
         E->trace.number_of_basic_quantities +
@@ -3462,4 +3466,45 @@ void pdebug(struct All_variables *E, int i)
     fflush(E->trace.fpt);
 
     return;
+}
+
+/* PICES uses the same gnomonic wedge and radial basis as tracer velocity.
+ * Return eight local node weights (two are zero), with a strict host check.
+ * One relocation is allowed before a fatal geometry error. */
+void tracer_temperature_weights(struct All_variables *E, int cap, int p,
+                                int *nodes, double *weights)
+{
+    static const int map[2][6]={{1,2,3,5,6,7},{1,3,4,5,7,8}};
+    int attempt,w,a,e=E->trace.ielement[cap][p],ok;
+    double u,v,s[4],sr[3],sum;
+    for(attempt=0;attempt<2;attempt++) {
+        if(e>0 && e<=E->lmesh.nel) {
+            spherical_to_uv(E,cap,E->trace.basicq[cap][0][p],
+                            E->trace.basicq[cap][1][p],&u,&v);
+            for(w=0;w<2;w++) {
+                get_2dshape(E,cap,e,u,v,w+1,s);
+                if(s[1]<-1e-12 || s[2]<-1e-12 || s[3]<-1e-12) continue;
+                get_radial_shape(E,cap,e,E->trace.basicq[cap][2][p],sr);
+                ok=1; sum=0;
+                for(a=1;a<=8;a++) { nodes[a]=E->ien[cap][e].node[a]; weights[a]=0; }
+                for(a=0;a<6;a++) {
+                    double x=s[a%3+1]*sr[a/3+1];
+                    if(!isfinite(x) || x < -1e-12 || x>1+1e-12) ok=0;
+                    if(x<0 && x>=-1e-12) x=0;
+                    weights[map[w][a]]=x; sum+=x;
+                }
+                if(ok && isfinite(sum) && fabs(sum-1)<1e-10) {
+                    for(a=1;a<=8;a++) weights[a]/=sum;
+                    E->trace.ielement[cap][p]=e;
+                    return;
+                }
+            }
+        }
+        if(attempt==0)
+            e=E->trace.iget_element(E,cap,p,-99,E->trace.basicq[cap][3][p],
+                E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p],
+                E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
+    }
+    fprintf(stderr,"PICES_WEIGHT rank=%d particle=%d host=%d\n",E->parallel.me,p,e);
+    pices_fail(E,"invalid particle interpolation weights after relocation");
 }

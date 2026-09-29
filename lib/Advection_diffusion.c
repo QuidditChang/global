@@ -35,6 +35,7 @@
 #include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "pices.h"
 #include "qvis_limiter.h"
 #include "temperature_audit.h"
 
@@ -47,7 +48,7 @@
 extern void parallel_process_termination();
 
 static void set_diffusion_timestep(struct All_variables *E);
-static void element_thermal_transport(struct All_variables *E, int cap,
+void thermal_transport_at_gp(struct All_variables *E, int cap,
                                       int element, const double *tgp,
                                       double reference_conductivity,
                                       double *rho_gp,
@@ -97,6 +98,7 @@ void advection_diffusion_parameters(struct All_variables *E)
     int legacy_found, reference_found;
     float legacy_inputdiffusivity;
 
+    pices_parameters(E);
     input_boolean("ADV",&(E->advection.ADVECTION),"on",m);
     input_boolean("filter_temp",&(E->advection.filter_temperature),"off",m);
     input_boolean("monitor_max_T",&(E->advection.monitor_max_T),"on",m);
@@ -300,6 +302,8 @@ void PG_timestep_solve(struct All_variables *E)
   double *DTdot[NCS], *T1[NCS], *Tdot1[NCS];
   FILE *fp;
 
+  if(E->pices.enabled) { pices_advance(E); return; }
+
   audit_temperature(E,"thermal_entry",0,-1);
   E->advection.timesteps++;
 
@@ -463,6 +467,7 @@ void PG_timestep_solve(struct All_variables *E)
 
 void PG_timestep_solve_back(struct All_variables *E)
 {
+  if(E->pices.enabled) pices_fail(E,"backward is unsupported");
 
   double Tmaxd();
   double Tmind();
@@ -688,7 +693,7 @@ static void set_diffusion_timestep(struct All_variables *E)
               tgp[i] += E->T[m][node] * E->N.vpt[GNVINDEX(j,i)];
           }
       }
-      element_thermal_transport(E, m, el, tgp,
+      thermal_transport_at_gp(E, m, el, tgp,
                                 E->control.reference_conductivity,
                                 rho_gp, cp_gp, kgp, kappa_eff);
       for(i=1;i<=vpoints[E->mesh.nsd];i++)
@@ -898,7 +903,7 @@ static void pg_shape_fn(struct All_variables *E, int el,
 
 
 
-static void element_thermal_transport(struct All_variables *E, int cap,
+void thermal_transport_at_gp(struct All_variables *E, int cap,
                                       int element, const double *tgp,
                                       double reference_conductivity,
                                       double *rho_gp,
@@ -1046,7 +1051,7 @@ static void element_residual(struct All_variables *E, int el,
 
     nz = ((el-1) % E->lmesh.elz) + 1;
     rho = 0.5 * (E->refstate.rho[nz] + E->refstate.rho[nz+1]);
-    element_thermal_transport(E, m, el, tgp, diff, rho_gp, cp_gp,
+    thermal_transport_at_gp(E, m, el, tgp, diff, rho_gp, cp_gp,
                               kgp, kappa_eff);
 
     for(i=1;i<=vpts;i++) {
@@ -1533,6 +1538,8 @@ void print_thermal_budget(struct All_variables *E)
         "==============================================================================\n";
     static const char rule[] =
         "------------------------------------------------------------------------------\n";
+
+    if(E->pices.enabled) return; /* P1 has a separate heat-stage ledger. */
 
     /* Same output T, solver Tdot, current velocity/composition as CBF. */
     if(E->control.disptn_number != 0) process_heating(E,0);

@@ -775,6 +775,12 @@ struct COMPOSITION {
 #endif
 #include "tracer_defs.h"
 
+struct PICES_STATE {
+    int enabled, initialized, moving, slot, no_diffusion, max_substeps;
+    double *K, *mass, *emass, *length, *rate;
+    double kappa, dt_heat, min_edge;
+};
+
 struct All_variables {
 
 #include "solver.h"
@@ -803,6 +809,7 @@ struct All_variables {
     struct Output output;
 
     struct TRACE trace;
+    struct PICES_STATE pices;
 
     /* for chemical convection & composition rheology */
     struct COMPOSITION composition;

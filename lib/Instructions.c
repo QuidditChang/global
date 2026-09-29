@@ -39,6 +39,7 @@
 #include <ctype.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "pices.h"
 
 #include "citcom_init.h"
 #include "initial_temperature.h"
@@ -159,6 +160,7 @@ void initial_mesh_solver_setup(struct All_variables *E)
 
     set_sphere_harmonics (E);
 
+    if(E->pices.enabled) pices_validate(E);
     if(E->control.tracer) {
 	tracer_initial_settings(E);
 	//fprintf(stderr,"After tracer_initial_settings\n");
