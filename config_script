@@ -5,6 +5,8 @@ set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"
 BUILD_ROOT=$(pwd -P)
 INSTALL_ROOT="$BUILD_ROOT/install"
+rm -f pices-p0-build.commit
+BUILD_COMMIT=$(git rev-parse HEAD)
 printf 'BUILD_ROOT=%s\nINSTALL_ROOT=%s\n' "$BUILD_ROOT" "$INSTALL_ROOT"
 git rev-parse HEAD
 cksum config_script
@@ -81,6 +83,9 @@ done
 make install-am \
     prefix="$INSTALL_ROOT" exec_prefix="$INSTALL_ROOT" bindir="$INSTALL_ROOT/bin"
 test -x install/bin/CitcomSFull
+test "$BUILD_COMMIT" = "$(git rev-parse HEAD)"
+printf '%s\n' "$BUILD_COMMIT" > pices-p0-build.commit
+printf 'P0_BUILD_COMPLETE commit=%s\n' "$BUILD_COMMIT"
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"
