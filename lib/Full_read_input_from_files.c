@@ -37,6 +37,31 @@ void mindst2(double **sz, int num, double x, double y, double *min, int *index);
 double cross_product(double x1, double y1, double x2, double y2, double x, double y);
 double dot_product(double x1, double y1, double x2, double y2, double x, double y);
 
+/* Allocate once per solver instance, not once per step-zero read. Velocity
+ * and material reads must preserve the geometry already loaded by action 2.
+ * Buffers are populated by their owning readers, not interpreted as zero data.
+ */
+static void full_input_arrays_init(struct All_variables *E, float age)
+{
+    size_t bytes = (E->mesh.nox * E->mesh.noy + 1) * sizeof(float);
+    if (!E->velo_1) E->velo_1 = (float *)malloc(bytes);
+    if (!E->velo_2) E->velo_2 = (float *)malloc(bytes);
+    if (!E->flag_depth) {
+        E->flag_depth = (float *)malloc(bytes);
+        E->trench_visit_age = age + 1;
+    }
+    if (!E->flag_depth1) E->flag_depth1 = (float *)malloc(bytes);
+    if (!E->flag_depth2) E->flag_depth2 = (float *)malloc(bytes);
+    if (!E->new_flag_depth) E->new_flag_depth = (float *)malloc(bytes);
+    if (!E->tf_depth) E->tf_depth = (float *)malloc(bytes);
+    if (!E->velo_1 || !E->velo_2 || !E->flag_depth || !E->flag_depth1 ||
+        !E->flag_depth2 || !E->new_flag_depth || !E->tf_depth) {
+        fprintf(stderr, "Unable to allocate time-dependent input buffers\n");
+        MPI_Abort(E->parallel.world, 1);
+        abort();
+    }
+}
+
 /*=======================================================================
   Calculate ages (MY) for opening input files -> material, ages, velocities
   Open these files, read in results, and average if necessary
@@ -84,16 +109,7 @@ void full_read_input_files_for_timesteps(E,action,output)
    
     age=find_age_in_MY(E);
 
-    if (E->monitor.solution_cycles == 0){
-	E->velo_1=(float*) malloc((nox*noy+1)*sizeof(float));
-        E->velo_2=(float*) malloc((nox*noy+1)*sizeof(float));
-        E->flag_depth=(float*) malloc((nox*noy+1)*sizeof(float));
-	E->flag_depth1=(float*) malloc((nox*noy+1)*sizeof(float));
-        E->flag_depth2=(float*) malloc((nox*noy+1)*sizeof(float));
-        E->new_flag_depth=(float*) malloc((nox*noy+1)*sizeof(float));
-        E->tf_depth=(float*) malloc((nox*noy+1)*sizeof(float));
-	E->trench_visit_age=age+1;
-    }
+    full_input_arrays_init(E, age);
 
     emax=E->mesh.elx*E->mesh.elz*E->mesh.ely;
 

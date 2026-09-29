@@ -49,6 +49,12 @@ struct All_variables* citcom_init(MPI_Comm *world)
   /* fprintf(stderr,"%d in %d processpors, E at %p pid=%d\n",
           rank, nproc, E, E->control.PID); */
 
+  /* Time-dependent full-sphere inputs share these buffers across actions.
+   * All_variables is malloc'ed, so lazy allocation needs explicit NULLs. */
+  E->velo_1 = E->velo_2 = NULL;
+  E->flag_depth = E->flag_depth1 = E->flag_depth2 = NULL;
+  E->new_flag_depth = E->tf_depth = NULL;
+
   E->monitor.solution_cycles=0;
   E->control.keep_going=1;
 

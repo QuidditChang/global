@@ -14,7 +14,9 @@ def function(s,signature):
 class ThermalAssimilationTest(unittest.TestCase):
  def test_production_column_and_defaults(self):
   src=(ROOT/'lib/Lith_age.c').read_text()
-  funcs=['static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static double lith_age_relaxation_fraction(', 'static void assimilate_lith_relaxed(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_construct_tic(']
+  input_src=(ROOT/'lib/Full_read_input_from_files.c').read_text()
+  src += '\n' + function(input_src, 'static void full_input_arrays_init(')
+  funcs=['static void full_input_arrays_init(', 'static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static double lith_age_relaxation_fraction(', 'static void assimilate_lith_relaxed(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_construct_tic(']
   prefix=r'''
 #include <assert.h>
 #include <math.h>
@@ -47,7 +49,28 @@ int main(void) {
  E->mesh.nox=E->mesh.noy=1; E->lmesh.nox=E->lmesh.noy=1;
  E->lmesh.noz=E->lmesh.nno=5; E->lmesh.nxs=E->lmesh.nys=E->lmesh.nzs=1;
  E->solver.lith_age_read_files=reader;
- E->age_t=calloc(2,sizeof(float));E->flag_depth2=calloc(2,sizeof(float));
+ E->age_t=calloc(2,sizeof(float));
+ full_input_arrays_init(E,249.9f);
+ {
+  float *geometry=E->flag_depth2, *velocity=E->velo_1;
+  E->flag_depth[1]=.18f;E->flag_depth1[1]=.22f;
+  E->flag_depth2[1]=.2f;E->new_flag_depth[1]=.3f;E->tf_depth[1]=.4f;
+  E->age_t[1]=70./E->data.scalet;
+  E->velo_1[1]=12.;E->velo_2[1]=34.;
+  full_input_arrays_init(E,249.9f); /* velocity read at step zero */
+  full_input_arrays_init(E,249.9f); /* repeated multigrid boundary read */
+  assert(E->flag_depth2==geometry && E->velo_1==velocity);
+  assert(E->flag_depth[1]==.18f && E->flag_depth1[1]==.22f);
+  assert(E->flag_depth2[1]==.2f && E->new_flag_depth[1]==.3f);
+  assert(E->tf_depth[1]==.4f && E->velo_1[1]==12. && E->velo_2[1]==34.);
+  assert(fabs(E->age_t[1]-70./E->data.scalet)<1.e-10);
+  assert(fabs(lith_age_asml_thickness(E,1)-.04)<1.e-8);
+  E->monitor.solution_cycles=50;
+  full_input_arrays_init(E,247.0f);
+  assert(E->flag_depth2==geometry && E->flag_depth2[1]==.2f);
+  assert(E->trench_visit_age==250);
+  E->monitor.solution_cycles=0;
+ }
  E->refstate.Tref=calloc(6,sizeof(double));
  E->T[1]=calloc(6,sizeof(float));E->assim_delta_T[1]=calloc(6,sizeof(double));
  E->node[1]=calloc(6,sizeof(unsigned int));
