@@ -44,3 +44,7 @@ Python 3 后，整数、零、负数、变量引用、转义美元和空值均�
 本案例为部署与日志/热流离散一致性的 smoke test。小网格 CBF 热流可能有负值和较强时变；当前检查的是其残差、native 积分、单位与输出一致性，不能解释为生产热流已收敛或热预算闭合。没有宣称 Stokes 生产精度、Pyre、PICES 平流、MPI 粒子迁移、完整 EBA 相变/TA 或长期守恒通过。
 
 用户运行 runs 的 `cmbhf_EBA_PICES_P0.lsf`，下载完整 tar.gz 与 LSF out/err 后，使用不带 `--local` 的 verifier 并人工审阅 build/provenance。HPC P0 审计通过后才启动 P1；不自动 commit/push，不自动提交 HPC，也不提前实现 P1。
+
+### HPC 安装反馈：目标文件与源文件相同
+
+原 config_script 在源码树内构建却把 prefix 设为同一目录，导致 bin/CitcomSFull 安装到自身。现改为独立 install/ 前缀，LSF 的可执行检查、hash 和启动同步使用 install/bin/CitcomSFull。config_script 修复也纳入固定 SHA256 校验。Shell 语法和模拟构建流程通过；模拟流程执行真实 install，确认源和目标是不同文件。HPC 完整构建尚待重试。

@@ -25,7 +25,8 @@ if ! command -v autoreconf >/dev/null 2>&1; then
 fi
 autoreconf -fiv
 
-./configure --prefix=$(pwd) --with-hdf5=$HDF5ROOT \
+# Keep installed files separate from in-tree build products (notably bin/).
+./configure --prefix="$(pwd)/install" --with-hdf5="$HDF5ROOT" \
       CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
         LDFLAGS="-L$HDF5ROOT/lib"
 
@@ -53,6 +54,7 @@ fi
 
 make -j4
 make install SUBDIRS="lib CitcomS etc bin module"
+test -x install/bin/CitcomSFull
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"
 #CFLAGS="-g -O2 -fPIE" CXXFLAGS="-g -O2 -fPIE"

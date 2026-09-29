@@ -72,3 +72,6 @@ bin/merlin
 
 # Visual outputs (generated)
 visual/*.net
+
+# Dedicated installation prefix
+/install/
