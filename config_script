@@ -71,7 +71,14 @@ p0-check-install-path:
 	@test '$(bindir)' = '$(P0_EXPECTED_BINDIR)' && test -z '$(DESTDIR)' || { echo 'ERROR: installation path mismatch; inspect configure options and MAKEFLAGS/DESTDIR.' >&2; exit 1; }
 P0_MAKE
 make -j4
-make install SUBDIRS="lib CitcomS etc bin module" \
+# Do not pass SUBDIRS on make's command line: recursive makes inherit it
+# and would look for module/lib instead of their own configured subdirectories.
+for install_subdir in lib CitcomS etc bin module; do
+    make -C "$install_subdir" install \
+        prefix="$INSTALL_ROOT" exec_prefix="$INSTALL_ROOT" bindir="$INSTALL_ROOT/bin"
+done
+# Preserve the top-level Python dependency/egg installation hook.
+make install-am \
     prefix="$INSTALL_ROOT" exec_prefix="$INSTALL_ROOT" bindir="$INSTALL_ROOT/bin"
 test -x install/bin/CitcomSFull
 

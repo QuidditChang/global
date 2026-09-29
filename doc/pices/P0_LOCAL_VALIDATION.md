@@ -56,3 +56,8 @@ Python 3 后，整数、零、负数、变量引用、转义美元和空值均�
 新增编译前 make 路径检查：旧 bindir 和非空 DESTDIR 均被拒绝，正确路径通过。bash -n、git diff --check 通过。完整 HPC 构建仍未在本机复现。
 脚本改为从自身目录执行，日志记录根目录、提交和脚本校验值，configure 与 make install 均显式指定安装路径。LSF 同步更新 config_script 的固定 hash。
 另发现当前分支新增提交 1e9a257 修改两处 C 源码，与原 P0 基线不同；未擅自放宽运行基线校验，提交作业前需单独审计该差异。
+
+### 递归安装 SUBDIRS 修复
+
+HPC 已成功安装 install/bin 中的四个二进制，随后 module 试图进入不存在的 lib。根因是 make install SUBDIRS=... 的命令行变量会传入递归 make，覆盖 module 自己的 SUBDIRS。现逐个顶层目录调用 make -C 安装，不再传 SUBDIRS，最后 make install-am 保留顶层 Python 安装钩子。
+本地提取 module/Makefile.in 的真实递归规则，复现旧命令进入 module/lib 失败；执行修改后脚本的安装段，Exchanger 关闭/开启两种目录结构均通过，各目录安装及顶层钩子仅执行一次。叶子安装目标使用记录器，未验证 HPC Python 依赖安装；完整 HPC 构建仍待重试。bash -n 和 git diff --check 通过。
