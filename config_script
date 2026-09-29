@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# Resolve the checkout from this script, not the caller's working directory.
+cd "$(dirname "${BASH_SOURCE[0]}")"
+BUILD_ROOT=$(pwd -P)
+INSTALL_ROOT="$BUILD_ROOT/install"
+printf 'BUILD_ROOT=%s\nINSTALL_ROOT=%s\n' "$BUILD_ROOT" "$INSTALL_ROOT"
+git rev-parse HEAD
+cksum config_script
+
 # To install Python2.6
 # Currently Loaded Modules:
 #   1) git/2.21.0      3) cmake/3.13.4   5) pmix/3.1.2      7) xalt/2.7.1   9) intel/18.0.5     11) impi/18.0.5
@@ -26,7 +34,8 @@ fi
 autoreconf -fiv
 
 # Keep installed files separate from in-tree build products (notably bin/).
-./configure --prefix="$(pwd)/install" --with-hdf5="$HDF5ROOT" \
+./configure --prefix="$INSTALL_ROOT" --exec-prefix="$INSTALL_ROOT" \
+      --bindir="$INSTALL_ROOT/bin" --with-hdf5="$HDF5ROOT" \
       CPPFLAGS="-I$HDF5ROOT/include -DH5_USE_16_API" \
         LDFLAGS="-L$HDF5ROOT/lib"
 
@@ -52,8 +61,18 @@ if [ -f examples/Makefile ]; then
     perl -0pi -e 's|MKDIR_P = \@MKDIR_P\@|MKDIR_P = /bin/mkdir -p|g' examples/Makefile
 fi
 
+# Query the generated Makefile using make's actual variable precedence.
+# Fail before compilation if stale configuration or environment overrides it.
+make --no-print-directory -s -C bin -f Makefile -f - \
+    P0_EXPECTED_BINDIR="$INSTALL_ROOT/bin" p0-check-install-path <<'P0_MAKE'
+.PHONY: p0-check-install-path
+p0-check-install-path:
+	@printf 'Resolved prefix=%s exec_prefix=%s bindir=%s DESTDIR=%s\n' '$(prefix)' '$(exec_prefix)' '$(bindir)' '$(DESTDIR)'
+	@test '$(bindir)' = '$(P0_EXPECTED_BINDIR)' && test -z '$(DESTDIR)' || { echo 'ERROR: installation path mismatch; inspect configure options and MAKEFLAGS/DESTDIR.' >&2; exit 1; }
+P0_MAKE
 make -j4
-make install SUBDIRS="lib CitcomS etc bin module"
+make install SUBDIRS="lib CitcomS etc bin module" \
+    prefix="$INSTALL_ROOT" exec_prefix="$INSTALL_ROOT" bindir="$INSTALL_ROOT/bin"
 test -x install/bin/CitcomSFull
 
 #./configure MPICC=cc CC=cc MPICXX=CC CXX=CC LDFLAGS="-dynamic" CFLAGS="-g" CXXFLAGS="-g"

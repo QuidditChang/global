@@ -48,3 +48,11 @@ Python 3 后，整数、零、负数、变量引用、转义美元和空值均�
 ### HPC 安装反馈：目标文件与源文件相同
 
 原 config_script 在源码树内构建却把 prefix 设为同一目录，导致 bin/CitcomSFull 安装到自身。现改为独立 install/ 前缀，LSF 的可执行检查、hash 和启动同步使用 install/bin/CitcomSFull。config_script 修复也纳入固定 SHA256 校验。Shell 语法和模拟构建流程通过；模拟流程执行真实 install，确认源和目标是不同文件。HPC 完整构建尚待重试。
+
+### 2026-09-29 重复安装错误的本地核查
+
+上次 prefix 修复已存在于提交 c312397；未发现本地源码主动将 bindir 改回源码 bin/。用户错误仍显示旧目标，HPC 实际脚本版本、Makefile 和 make 环境尚未获得，不能断言唯一原因。
+本次从 bin/Makefile.in 提取真实 install-binPROGRAMS 规则，用已编译 CitcomSFull 和系统 install 验证：旧 bindir 复现同文件失败，命令行指定 install/bin 后安装成功且文件逐字节一致。测试仅以透传适配器去掉 libtool 的 --mode=install 参数，未验证 HPC libtool/Pyre 全链路。
+新增编译前 make 路径检查：旧 bindir 和非空 DESTDIR 均被拒绝，正确路径通过。bash -n、git diff --check 通过。完整 HPC 构建仍未在本机复现。
+脚本改为从自身目录执行，日志记录根目录、提交和脚本校验值，configure 与 make install 均显式指定安装路径。LSF 同步更新 config_script 的固定 hash。
+另发现当前分支新增提交 1e9a257 修改两处 C 源码，与原 P0 基线不同；未擅自放宽运行基线校验，提交作业前需单独审计该差异。
