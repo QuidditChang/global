@@ -31,7 +31,14 @@ static void p1_test_initial(struct All_variables *E)
             E->T[1][n]+=.1*sin(M_PI*(r-lo)/(hi-lo))/r;
         if(mode && !strcmp(mode,"rotation"))
             E->T[1][n]+=.1*sin(M_PI*(r-lo)/(hi-lo))*sin(E->sx[1][1][n])*cos(E->sx[1][2][n]);
-        for(a=1;a<=3;a++) E->sphere.cap[1].TB[a][n]=.5;
+        if(mode && !strcmp(mode,"nonlinear_steady")) {
+            double offset=E->data.Ttop/E->data.ref_temperature;
+            double exponent=1-E->control.kT_exponent;
+            double f=(1/lo-1/r)/(1/lo-1/hi);
+            E->T[1][n]=pow((1-f)*pow(1+offset,exponent)+f*pow(offset,exponent),1/exponent)-offset;
+        }
+        for(a=1;a<=3;a++) E->sphere.cap[1].TB[a][n]=
+            mode && !strcmp(mode,"nonlinear_steady") ? E->T[1][n] : .5;
     }
     for(p=1;p<=E->trace.ntracers[1];p++) {
         double t=0;

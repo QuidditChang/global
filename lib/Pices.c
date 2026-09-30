@@ -1,6 +1,6 @@
-/* Route B P1: constant-coefficient PIC advection + lumped FE diffusion.
- * No PG formula is replaced. Particle temperatures are persistent extraq.
- * Restart, sources, variable coefficients and legacy CBF are deferred. */
+/* Route B PIC advection + lumped FE heat solve. P3 EBA is opt-in.
+ * Particle temperatures persist through migration and same-partition restart.
+ * PG arithmetic is unchanged; legacy CBF and assimilation remain disabled. */
 #include <math.h>
 #include <float.h>
 #include <string.h>
@@ -9,6 +9,8 @@
 #include "parsing.h"
 #include "pices.h"
 #include "temperature_audit.h"
+#include "phase_change.h"
+void CBF_heat_sources(struct All_variables *, int, double *, double *);
 
 void temperatures_conform_bcs(struct All_variables *);
 void tracer_advection(struct All_variables *);
@@ -50,6 +52,7 @@ void pices_parameters(struct All_variables *E)
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
+    input_boolean("pices_eba",&E->pices.eba,"off",E->parallel.me);
     input_boolean("pices_checkpoint",&E->pices.checkpoint,"off",E->parallel.me);
     if(E->pices.enabled) {
         input_boolean("restart",&restart,"off",E->parallel.me);
@@ -62,6 +65,8 @@ void pices_validate(struct All_variables *E)
 {
     int i;
     if(!E->pices.enabled) return;
+    if(!isfinite(E->control.Q0) || !isfinite(E->control.disptn_number))
+        pices_fail(E,"nonfinite EBA heating parameters");
     if(E->pices.checkpoint) {
         if(!E->viscosity.update_allowed || E->viscosity.RHEOL!=1 || E->viscosity.SDEPV ||
            E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
@@ -82,9 +87,11 @@ void pices_validate(struct All_variables *E)
        E->control.mat_control || E->control.vbcs_file || E->trace.ic_method!=0 ||
        E->trace.reclassify_flavors)
         pices_fail(E,"unsupported P1 restart/forcing/composition/tracer initialization");
-    if(E->control.Q0!=0 || E->control.tracer_enriched || E->control.disptn_number!=0)
+    if(E->control.tracer_enriched || (E->pices.eba && (!E->control.eba_formulation || E->control.kC_ratio!=1 || E->control.qvis_mode!=0)))
+        pices_fail(E,"P3 requires EBA, kC_ratio=1, qvis_mode=0 and no enriched heating");
+    if(!E->pices.eba && (E->control.Q0!=0 || E->control.disptn_number!=0))
         pices_fail(E,"P1 requires Q0=0, Di=0 and no enriched heating");
-    for(i=0;i<PHASE_TRANSITIONS;i++)
+    for(i=0;!E->pices.eba && i<PHASE_TRANSITIONS;i++)
         if(E->control.phase[i].entropy_jump!=0 || E->control.phase[i].density_jump!=0)
             pices_fail(E,"P1 phase transitions are unsupported");
     if(E->advection.filter_temperature || !E->advection.ADVECTION ||
@@ -92,20 +99,46 @@ void pices_validate(struct All_variables *E)
         pices_fail(E,"P1 requires fixed positive dt, ADV=on, no filter, radial Dirichlet");
     if(E->output.CBF_frequency!=0 || E->output.output_q_surf_CBF || E->output.output_q_botm_CBF || E->output.write_q_files)
         pices_fail(E,"P1 legacy CBF/heat-flux output is unsupported");
-    if(E->control.kT_exponent!=0 || E->control.kC_ratio!=1 ||
+    if(!E->pices.eba && (E->control.kT_exponent!=0 || E->control.kC_ratio!=1 ||
        E->control.kd_upper_linear!=0 || E->control.kd_upper_quadratic!=0 ||
        E->control.kd_lower_linear!=0 || E->control.kd_lower_quadratic!=0 ||
-       E->control.kd_upper_prefactor!=E->control.kd_lower_prefactor)
+       E->control.kd_upper_prefactor!=E->control.kd_lower_prefactor))
         pices_fail(E,"P1 requires spatially constant conductivity");
     for(i=0;i<E->convection.heat_sources.number;i++)
         if(E->convection.heat_sources.Q[i]!=0) pices_fail(E,"P1 radiogenic sources unsupported");
 }
 
-/* Matrix element data are cached only under P1's constant-physics guards.
+/* Split the existing PG latent term, retaining physical radial velocity. */
+static void phase_coefficients(struct All_variables *E,int e,int g,
+    const struct Shape_function_dx *dx,double inverse_r,double t,double rho,
+    double cp,double *capacity,double *pressure,double *fractions)
+{
+    int a,j,n,nz; double rg=0,drg=0,ur=0;
+    *capacity=rho*cp; if(pressure)*pressure=0;
+    for(a=1;a<=8;a++) {
+        double N=E->N.vpt[GNVINDEX(a,g)];
+        n=E->ien[1][e].node[a];nz=(n-1)%E->lmesh.noz+1;
+        rg+=E->refstate.rho[nz]*E->refstate.gravity[nz]*N;
+        drg+=E->refstate.rho[nz]*E->refstate.gravity[nz]*dx->vpt[GNVXINDEX(2,a,g)];
+        if(pressure)ur+=E->sphere.cap[1].V[3][n]*N;
+    }
+    for(j=0;j<PHASE_TRANSITIONS;j++) {
+        double q,x,dT,dr;
+        const struct Phase_transition *phase=&E->control.phase[j];
+        phase_change_state(phase,E->sphere.ro-1/inverse_r,t,1,rg,drg,&q,&x,&dT,&dr);
+        fractions[j]=x;
+        *capacity+=rho*(t+E->control.surface_temp)*phase->entropy_jump*dT;
+        if(pressure && phase->entropy_jump!=0)*pressure-=rho*(t+E->control.surface_temp)*phase->entropy_jump*dr*ur;
+    }
+    if(!isfinite(*capacity) || !(*capacity>0) || (pressure && !isfinite(*pressure)))
+        pices_fail(E,"nonpositive/nonfinite effective phase capacity or pressure source");
+}
+
+/* P1 caches matrices; P3 rebuilds them from each frozen heat-stage field.
  * The accumulated element absolute row sums bound the assembled |A| rows:
  * shared physical elements occur once; opposite-signed entries may cancel
  * after assembly, so this bound is conservative rather than an equality. */
-static void assemble(struct All_variables *E)
+static void assemble(struct All_variables *E,const double *field)
 {
     struct Shape_function GN;
     struct Shape_function_dx dx;
@@ -118,26 +151,42 @@ static void assemble(struct All_variables *E)
                                    {{1,5},{2,6},{3,7},{4,8}}};
     int e,a,b,g,d,q,n;
     struct PICES_STATE *p=&E->pices;
-    p->K=array(E,(E->lmesh.nel+1)*64);
-    p->emass=array(E,(E->lmesh.nel+1)*8);
-    p->mass=array(E,E->lmesh.nno+1); p->rate=array(E,E->lmesh.nno+1);
-    p->length=array(E,E->lmesh.nel+1);
+    if(!p->K) {
+        p->K=array(E,(E->lmesh.nel+1)*64);
+        p->emass=array(E,(E->lmesh.nel+1)*8);
+        p->mass=array(E,E->lmesh.nno+1); p->rate=array(E,E->lmesh.nno+1);
+        p->length=array(E,E->lmesh.nel+1);p->ekappa=array(E,E->lmesh.nel+1);
+        p->gp_capacity=array(E,(E->lmesh.nel+1)*8);
+        p->gp_k=array(E,(E->lmesh.nel+1)*8);
+        p->gp_fraction=array(E,(E->lmesh.nel+1)*8*PHASE_TRANSITIONS);
+    }
+    memset(p->K,0,(E->lmesh.nel+1)*64*sizeof(double));
+    memset(p->emass,0,(E->lmesh.nel+1)*8*sizeof(double));
+    memset(p->mass,0,(E->lmesh.nno+1)*sizeof(double));
+    memset(p->rate,0,(E->lmesh.nno+1)*sizeof(double));
     for(e=1;e<=E->lmesh.nel;e++) {
         double *ke=p->K+e*64;
+        p->ekappa[e]=0;
         get_global_shape_fn(E,e,&GN,&dx,&omega,0,1,rtf,E->mesh.levmax,1);
         for(g=1;g<=8;g++) {
             tg[g]=0;
-            for(a=1;a<=8;a++) tg[g]+=E->N.vpt[GNVINDEX(a,g)]*E->T[1][E->ien[1][e].node[a]];
+            for(a=1;a<=8;a++) tg[g]+=E->N.vpt[GNVINDEX(a,g)]*field[E->ien[1][e].node[a]];
         }
         thermal_transport_at_gp(E,1,e,tg,E->control.reference_conductivity,rho,cp,k,kap);
         for(g=1;g<=8;g++) {
             double w=omega.vpt[g]*g_point[g].weight[2];
             double props[3]={rho[g],cp[g],k[g]};
+            double capacity=rho[g]*cp[g],pressure; int idx=e*8+g-1;
+            if(p->eba) phase_coefficients(E,e,g,&dx,rtf[3][g],tg[g],rho[g],cp[g],&capacity,NULL,p->gp_fraction+idx*PHASE_TRANSITIONS);
+            if(!(k[g]>0) || !isfinite(capacity) || !(capacity>0))
+                pices_fail(E,"nonpositive conductivity/effective capacity");
+            p->gp_capacity[idx]=capacity;p->gp_k[idx]=k[g];
+            if(!p->no_diffusion && k[g]/capacity>p->ekappa[e]) p->ekappa[e]=k[g]/capacity;
             if(!(w>0) || !isfinite(w)) pices_fail(E,"nonpositive element quadrature");
             for(d=0;d<3;d++) { if(props[d]<lo[d]) lo[d]=props[d]; if(props[d]>hi[d]) hi[d]=props[d]; }
             if(p->no_diffusion) k[g]=0;
             for(a=1;a<=8;a++) {
-                double mass=w*rho[g]*cp[g]*E->N.vpt[GNVINDEX(a,g)];
+                double mass=p->eba ? w*capacity*E->N.vpt[GNVINDEX(a,g)] : w*rho[g]*cp[g]*E->N.vpt[GNVINDEX(a,g)];
                 n=E->ien[1][e].node[a]; p->mass[n]+=mass; p->emass[e*8+a-1]+=mass;
                 grad[a][0]=dx.vpt[GNVXINDEX(0,a,g)]*rtf[3][g];
                 grad[a][1]=dx.vpt[GNVXINDEX(1,a,g)]*rtf[3][g]/sin(rtf[1][g]);
@@ -162,7 +211,7 @@ static void assemble(struct All_variables *E)
     }
     for(d=0;d<3;d++) {
         lo[d]=reduce(E,lo[d],MPI_MIN); hi[d]=reduce(E,hi[d],MPI_MAX);
-        if(!isfinite(hi[d]) || hi[d]<=0 || fabs(hi[d]-lo[d])>1e-10*hi[d])
+        if(!isfinite(hi[d]) || hi[d]<=0 || (!p->eba && fabs(hi[d]-lo[d])>1e-10*hi[d]))
             pices_fail(E,"P1 requires constant positive rho, Cp and conductivity");
     }
     p->kappa=p->no_diffusion ? 0 : lo[2]/(lo[0]*lo[1]);
@@ -175,6 +224,89 @@ static void assemble(struct All_variables *E)
     if(!isfinite(bound)) pices_fail(E,"nonfinite diffusion stability bound");
     p->dt_heat=bound>0 ? .8/bound : DBL_MAX;
     p->min_edge=reduce(E,edge,MPI_MIN);
+}
+
+/* Element heating follows the established EBA quadrature convention. The
+ * shared source routines use actual velocity; only their temperature view is
+ * switched to the frozen heat-stage field. No legacy CBF residual is called. */
+static void heat_load(struct All_variables *E,const double *field,double *load,double totals[4])
+{
+    int e,a,g,z,n; struct Shape_function GN;struct Shape_function_dx dx;
+    struct Shape_function_dA omega; double rtf[4][9],tg[9],rho[9],cp[9],k[9],kap[9];
+    double *adi=array(E,E->lmesh.nel+1),*visc=array(E,E->lmesh.nel+1),*save=E->T[1];
+    E->T[1]=(double *)field;CBF_heat_sources(E,1,adi,visc);E->T[1]=save;
+    memset(load,0,(E->lmesh.nno+1)*sizeof(double));memset(totals,0,4*sizeof(double));
+    for(e=1;e<=E->lmesh.nel;e++) {
+        get_global_shape_fn(E,e,&GN,&dx,&omega,0,1,rtf,E->mesh.levmax,1);
+        z=(e-1)%E->lmesh.elz+1;
+        for(g=1;g<=8;g++) { tg[g]=0;for(a=1;a<=8;a++) tg[g]+=E->N.vpt[GNVINDEX(a,g)]*field[E->ien[1][e].node[a]]; }
+        thermal_transport_at_gp(E,1,e,tg,E->control.reference_conductivity,rho,cp,k,kap);
+        for(g=1;g<=8;g++) {
+            double capacity,pressure,fractions[PHASE_TRANSITIONS],w=omega.vpt[g]*g_point[g].weight[2];
+            double internal=.5*(E->refstate.rho[z]+E->refstate.rho[z+1])*E->control.Q0;
+            phase_coefficients(E,e,g,&dx,rtf[3][g],tg[g],rho[g],cp[g],&capacity,&pressure,fractions);
+            totals[0]+=w*internal;totals[1]-=w*adi[e];totals[2]+=w*visc[e];totals[3]+=w*pressure;
+            for(a=1;a<=8;a++) {n=E->ien[1][e].node[a];load[n]+=w*E->N.vpt[GNVINDEX(a,g)]*(internal-adi[e]+visc[e]+pressure);}
+        }
+    }
+    free(adi);free(visc);
+}
+
+/* Trial updates never modify Tp. Each retry starts from the same frozen
+ * coefficients; coefficients are rebuilt for the next accepted substep. */
+static double eba_heat_stage(struct All_variables *E,double *g,const double *old,
+    double *rhs,double remaining,double ledger[6])
+{
+    int e,a,b,n,j,attempt,nn=E->lmesh.nno,ng=(E->lmesh.nel+1)*8;
+    double ds,maxrate=0,change,totals[4],storage=0,boundary=0;
+    double *capacity=array(E,ng),*conductivity=array(E,ng),*fraction=array(E,ng*PHASE_TRANSITIONS);
+    assemble(E,old);
+    memcpy(capacity,E->pices.gp_capacity,ng*sizeof(double));memcpy(conductivity,E->pices.gp_k,ng*sizeof(double));
+    memcpy(fraction,E->pices.gp_fraction,ng*PHASE_TRANSITIONS*sizeof(double));
+    heat_load(E,old,rhs,totals);
+    for(e=1;e<=E->lmesh.nel;e++) for(a=1;a<=8;a++) for(b=1;b<=8;b++)
+        rhs[E->ien[1][e].node[a]]-=E->pices.K[e*64+(a-1)*8+b-1]*old[E->ien[1][e].node[b]];
+    exchange(E,rhs);
+    for(n=1;n<=nn;n++) if(!fixed(E,n)) {
+        double rate=fabs(rhs[n]/E->pices.mass[n]);
+        if(!isfinite(rate)) pices_fail(E,"nonfinite heat/source rate");
+        if(rate>maxrate)maxrate=rate;
+    }
+    maxrate=reduce(E,maxrate,MPI_MAX);ds=fmin(remaining,E->pices.dt_heat);
+    if(maxrate>0)ds=fmin(ds,.01/maxrate);
+    for(attempt=0;attempt<50;attempt++) {
+        change=0;
+        for(n=1;n<=nn;n++) {
+            g[n]=fixed(E,n)?old[n]:old[n]+ds*rhs[n]/E->pices.mass[n];
+            if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0)change=DBL_MAX;
+        }
+        change=reduce(E,change,MPI_MAX);
+        if(change==0) {
+            assemble(E,g);
+            for(j=8;j<ng;j++) {
+                double c=fabs(E->pices.gp_capacity[j]/capacity[j]-1)/.1;
+                double k=fabs(E->pices.gp_k[j]/conductivity[j]-1)/.1;
+                change=fmax(change,fmax(c,k));
+            }
+            for(j=8*PHASE_TRANSITIONS;j<ng*PHASE_TRANSITIONS;j++)
+                change=fmax(change,fabs(E->pices.gp_fraction[j]-fraction[j])/.05);
+            change=reduce(E,change,MPI_MAX);
+        }
+        /* Restore frozen M and kappa for update accounting and Tp relaxation. */
+        assemble(E,old);
+        if(change<=1)break;
+        ds*=.5;
+    }
+    if(attempt==50 || !(ds>0) || remaining-ds==remaining) pices_fail(E,"heat/source adaptation stalled");
+    for(e=1;e<=E->lmesh.nel;e++) for(a=1;a<=8;a++) {
+        n=E->ien[1][e].node[a];storage+=E->pices.emass[e*8+a-1]*(g[n]-old[n]);
+        if(fixed(E,n))boundary-=ds*E->pices.emass[e*8+a-1]/E->pices.mass[n]*rhs[n];
+    }
+    ledger[0]+=storage;
+    for(j=0;j<4;j++)ledger[j+1]+=ds*totals[j];
+    /* Boundary reaction closes the frozen-capacity FE ledger. It is not CBF. */
+    ledger[5]+=boundary;
+    free(capacity);free(conductivity);free(fraction);return ds;
 }
 
 static double interp(const int *nodes,const double *w,const double *field)
@@ -231,8 +363,8 @@ void pices_initialize(struct All_variables *E)
         E->trace.extraq[1][E->pices.slot][p]=v;
     }
     for(n=1;n<=E->lmesh.nno;n++) E->Tdot[1][n]=0;
-    assemble(E); E->pices.initialized=1;
-    fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d restart=unsupported\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion);
+    assemble(E,E->T[1]); E->pices.initialized=1;
+    fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d checkpoint=%d eba=%d\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion,E->pices.checkpoint,E->pices.eba);
     fflush(E->fp);
 }
 
@@ -242,6 +374,7 @@ void pices_advance(struct All_variables *E)
     int nn=E->lmesh.nno,np;
     double dt=E->advection.timestep,speed=0,cfl,ds,w[9],remaining;
     double *g,*old,*dg,*sub,*mapped,*rhs,*previous;
+    double ledger[6]={0,0,0,0,0,0};
     double before,advected,heated,mismatch=0,submax=0,tmin=DBL_MAX,tmax=-DBL_MAX;
     FILE *f;
     if(!E->pices.initialized) pices_fail(E,"PICES not initialized");
@@ -254,19 +387,23 @@ void pices_advance(struct All_variables *E)
     }
     speed=reduce(E,speed,MPI_MAX);cfl=dt*speed/E->pices.min_edge;
     if(cfl>.25) pices_fail(E,"fixed dt violates particle CFL<=0.25; reduce fixed_timestep");
-    if(dt/E->pices.dt_heat>E->pices.max_substeps) pices_fail(E,"heat substep limit exceeded before particle movement");
-    ns=(int)ceil(dt/E->pices.dt_heat);if(ns<1) ns=1;
+    if(!E->pices.eba && dt/E->pices.dt_heat>E->pices.max_substeps) pices_fail(E,"heat substep limit exceeded before particle movement");
+    ns=E->pices.eba?1:(int)ceil(dt/E->pices.dt_heat);if(ns<1) ns=1;
     g=array(E,nn+1);old=array(E,nn+1);dg=array(E,nn+1);mapped=array(E,nn+1);rhs=array(E,nn+1);previous=array(E,nn+1);
     for(n=1;n<=nn;n++) previous[n]=E->T[1][n];
+    if(E->pices.eba)assemble(E,previous);
     before=energy(E,previous);
     E->pices.moving=1;tracer_advection(E);E->pices.moving=0;
     np=E->trace.ntracers[1];sub=array(E,np+1);
     temperatures_conform_bcs(E);
     project(E,E->trace.extraq[1][E->pices.slot],g,1);
     advected=energy(E,g);remaining=dt;
-    for(s=0;s<ns;s++) {
-        ds=(s==ns-1)?remaining:dt/ns;remaining-=ds;
+    for(s=0;E->pices.eba ? remaining>0 : s<ns;s++) {
+        if(s>=E->pices.max_substeps)pices_fail(E,"heat substep limit exceeded");
         memcpy(old,g,(nn+1)*sizeof(double));memset(rhs,0,(nn+1)*sizeof(double));
+        if(E->pices.eba) {ds=eba_heat_stage(E,g,old,rhs,remaining,ledger);remaining-=ds;}
+        else {
+        ds=(s==ns-1)?remaining:dt/ns;remaining-=ds;
         for(e=1;e<=E->lmesh.nel;e++) for(a=1;a<=8;a++) for(b=1;b<=8;b++)
             rhs[E->ien[1][e].node[a]]-=E->pices.K[e*64+(a-1)*8+b-1]*old[E->ien[1][e].node[b]];
         exchange(E,rhs);
@@ -275,11 +412,14 @@ void pices_advance(struct All_variables *E)
             dg[n]=g[n]-old[n];
             if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0) pices_fail(E,"invalid grid temperature");
         }
+        }
+        for(n=1;n<=nn;n++)dg[n]=g[n]-old[n];
         for(p=1;p<=np;p++) {
-            double factor,tau;
+            double factor,tau,kappa;
             tracer_temperature_weights(E,1,p,nodes,w);e=E->trace.ielement[1][p];
-            tau=E->pices.kappa>0 ? E->pices.length[e]*E->pices.length[e]/E->pices.kappa : DBL_MAX;
-            factor=E->pices.kappa>0 ? -expm1(-ds/tau):0;
+            kappa=E->pices.eba?E->pices.ekappa[e]:E->pices.kappa;
+            tau=kappa>0 ? E->pices.length[e]*E->pices.length[e]/kappa : DBL_MAX;
+            factor=kappa>0 ? -expm1(-ds/tau):0;
             sub[p]=(interp(nodes,w,g)-E->trace.extraq[1][E->pices.slot][p])*factor;
             if(fabs(sub[p])>submax)submax=fabs(sub[p]);
         }
@@ -292,7 +432,11 @@ void pices_advance(struct All_variables *E)
             if(!isfinite(*tp) || E->data.Ttop+*tp*E->data.ref_temperature<0) pices_fail(E,"invalid particle temperature");
         }
     }
-    heated=energy(E,g);
+    if(E->pices.eba) {
+        ns=s;for(a=0;a<6;a++)ledger[a]=reduce(E,ledger[a],MPI_SUM);
+        fprintf(E->fp,"PICES_EBA step=%d storage=%.17g internal=%.17g adiabatic=%.17g viscous=%.17g phase_pressure=%.17g boundary_reaction=%.17g\n",E->monitor.solution_cycles,ledger[0],ledger[1],ledger[2],ledger[3],ledger[4],ledger[5]);
+    }
+    heated=E->pices.eba?advected+ledger[0]:energy(E,g);
     project(E,E->trace.extraq[1][E->pices.slot],mapped,0);
     for(n=1;n<=nn;n++) {
         double error=fabs(mapped[n]-g[n]);
@@ -323,7 +467,7 @@ void pices_restore(struct All_variables *E)
     }
     for(n=1;n<=E->lmesh.nno;n++)
         if(!isfinite(E->T[1][n]) || E->data.Ttop+E->T[1][n]*E->data.ref_temperature<0) pices_fail(E,"invalid restored T");
-    assemble(E); E->pices.initialized=1;
+    assemble(E,E->T[1]); E->pices.initialized=1;
     E->advection.total_timesteps=E->monitor.solution_cycles+1;
     E->monitor.T_interior=0;
     for(n=1;n<=E->lmesh.nno;n++) if(E->T[1][n]>E->monitor.T_interior) E->monitor.T_interior=E->T[1][n];

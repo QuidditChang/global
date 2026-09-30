@@ -58,8 +58,23 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  pices_sha_add(&s,E->refstate.thermal_expansivity+1,E->lmesh.noz*sizeof(double));
  pices_sha_add(&s,E->refstate.gravity+1,E->lmesh.noz*sizeof(double));
  for(d=1;d<=3;d++)pices_sha_add(&s,E->sphere.cap[1].TB[d]+1,E->lmesh.nno*sizeof(E->sphere.cap[1].TB[d][0]));
- pices_sha_add(&s,E->pices.K+64,E->lmesh.nel*64*sizeof(double));
- pices_sha_add(&s,E->pices.emass+8,E->lmesh.nel*8*sizeof(double));
+ if(E->pices.eba) {
+  double thermal[]={3,E->data.ks,E->data.radius_km,E->control.Q0,E->control.disptn_number,E->control.surface_temp,
+    E->control.eba_formulation,E->control.kT_exponent,E->control.kC_ratio,
+    E->control.kd_mantle_thickness_km,E->control.kd_transition_depth_km,
+    E->control.kd_upper_linear,E->control.kd_upper_quadratic,
+    E->control.kd_lower_linear,E->control.kd_lower_quadratic};
+  pices_sha_add(&s,thermal,sizeof(thermal));
+  pices_sha_add(&s,E->refstate.heat_capacity+1,E->lmesh.noz*sizeof(double));
+  for(d=0;d<PHASE_TRANSITIONS;d++) {
+   const struct Phase_transition *p=&E->control.phase[d];
+   double phase[]={p->depth,p->density_jump,p->entropy_jump,p->Ra,p->clapeyron,p->transT,p->inv_width};
+   pices_sha_add(&s,phase,sizeof(phase));
+  }
+ } else {
+  pices_sha_add(&s,E->pices.K+64,E->lmesh.nel*64*sizeof(double));
+  pices_sha_add(&s,E->pices.emass+8,E->lmesh.nel*8*sizeof(double));
+ }
  pices_sha_end(&s,out);
 }
 static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {

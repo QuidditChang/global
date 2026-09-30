@@ -39,11 +39,14 @@ def checkpoint(path):
     require(state.stat().st_size==nn*3*4,'velocity companion size');live.append(state.read_bytes())
     return meta,live
 
-def verify(root,local=False):
+def verify(root,local=False,stage="P2"):
+    require(stage in ("P2","P3"),"invalid audit stage")
     root=Path(root);summary={};states={}
     for name,first,last in [('continuous',1,4),('split',1,2),('restart',3,4)]:
         d=root/name;cfg=config(d/'case.cfg');dt=struct.unpack('f',struct.pack('f',float(cfg['fixed_timestep'])))[0]
-        for k,v in dict(energy_solver='pices',pices_checkpoint='on',tracer='1',tracer_flavors='0',nodex='5',nodey='5',nodez='5',nproc_surf='12',nprocx='1',nprocy='1',nprocz='1',Q0='0',dissipation_number='0',CBF_frequency='0',tracers_per_element='128').items():require(cfg.get(k)==v,'unexpected '+name+' cfg '+k)
+        for k,v in dict(energy_solver='pices',pices_checkpoint='on',tracer='1',tracer_flavors='0',nodex='5',nodey='5',nodez='5',nproc_surf='12',nprocx='1',nprocy='1',nprocz='1',Q0=('1' if stage=='P3' else '0'),dissipation_number=('0.1' if stage=='P3' else '0'),CBF_frequency='0',tracers_per_element='128').items():require(cfg.get(k)==v,'unexpected '+name+' cfg '+k)
+        if stage=='P3':
+            for k,v in dict(pices_eba='on',kT_exponent='0.3',kd_lower_prefactor='4.8',phase_depth='0.15,0.25,0.35',phase_delta_rho='10,10,10',phase_delta_s='-0.02,-0.02,0.02',phase_clapeyron='0.02,0.02,-0.02',phase_width='0.03,0.03,0.03').items():require(cfg.get(k)==v,'unexpected P3 cfg '+k)
         require(cfg['restart']==('on' if name=='restart' else 'off'),'restart switch')
         require(int((d/'mpi_exit_code.txt').read_text()) in (0,8),'MPI failed')
         require('PICES_ERROR' not in (d/'solver.stderr').read_text(),'PICES runtime error')
@@ -57,6 +60,14 @@ def verify(root,local=False):
                 require(all(math.isfinite(float(row[k])) for k in ['time','dt','cfl','Tmin','Tmax','mismatch','subgrid_max','remap_energy','heat_energy']),'nonfinite diagnostic')
                 require(math.isclose(float(row['time']),int(row['step'])*dt,rel_tol=2e-7),'time mismatch')
                 cfl.append(float(row['cfl']));require(0<=cfl[-1]<=.25,'CFL')
+            if stage=='P3':
+                heat=[fields(x) for x in log.splitlines() if x.startswith('PICES_EBA ')]
+                require([int(x['step']) for x in heat]==list(range(first,last+1)),'missing EBA heat ledger')
+                for row in heat:
+                    vals=[float(row[k]) for k in ['storage','internal','adiabatic','viscous','phase_pressure','boundary_reaction']]
+                    require(all(map(math.isfinite,vals)),'nonfinite EBA heat ledger')
+                    require(vals[1]>0 and vals[3]>0 and vals[2]!=0 and vals[4]!=0,'inactive EBA source')
+                    require(abs(vals[0]-sum(vals[1:]))<1e-12*max(1,sum(map(abs,vals))),'EBA ledger imbalance')
             coverage=[fields(x) for x in log.splitlines() if x.startswith('PICES_COVERAGE ')]
             require(len(coverage)==last-first+1 and all(x['empty_elements']=='0' and x['zero_boundary_nodes']=='0' for x in coverage),'coverage')
             for step in range(initial,last+1):
@@ -86,11 +97,11 @@ def verify(root,local=False):
         for step in range(initial,last+1,2):
             hashes=[];metas=[]
             for rank in range(12):
-                path=d/'DATA'/str(rank)/f'PICES_P2.chkpt.{rank}.{step}';meta,live=checkpoint(path);states[(name,step,rank)]=live;metas.append(meta)
+                path=d/'DATA'/str(rank)/f'PICES_{stage}.chkpt.{rank}.{step}';meta,live=checkpoint(path);states[(name,step,rank)]=live;metas.append(meta)
                 require(meta['rank']==rank and meta['mpi_size']==12 and meta['step']==step,'checkpoint rank/step');hashes.append(sha(Path(str(path)+'.pices.json')).encode()+b'\0')
             collective=hashlib.sha256(b''.join(hashes)).hexdigest()
             for rank in range(12):
-                path=d/'DATA'/str(rank)/f'PICES_P2.chkpt.{rank}.{step}.pices.manifest';m=json.loads(path.read_text());require(m==dict(magic='CITCOMS_EBA_PICES_COMPLETE',schema=1,mpi_size=12,metadata_set_sha256=collective),'incomplete/mixed checkpoint set')
+                path=d/'DATA'/str(rank)/f'PICES_{stage}.chkpt.{rank}.{step}.pices.manifest';m=json.loads(path.read_text());require(m==dict(magic='CITCOMS_EBA_PICES_COMPLETE',schema=1,mpi_size=12,metadata_set_sha256=collective),'incomplete/mixed checkpoint set')
                 if not local:require(metas[rank]['solver_commit']==(root/'solver_commit.txt').read_text().strip(),'checkpoint build commit')
         summary[name]=dict(particles=counts,max_cfl=max(cfl),stokes=blocks)
     compared=0
@@ -107,16 +118,18 @@ def verify(root,local=False):
         commit=(root/'solver_commit.txt').read_text().strip();require(re.fullmatch('[a-f0-9]{40}',commit) is not None,'solver commit')
         require(commit==(root/'pices-p0-build.commit').read_text().strip(),'stale build')
         require('P0_BUILD_COMPLETE commit='+commit in (root/'pices-p0-build.log').read_text(),'build incomplete')
-        hashes=(root/'input.sha256').read_text().splitlines();expected={'cmbhf_EBA_PICES_P2.cfg','cmbhf_EBA_PICES_P2_split.cfg','cmbhf_EBA_PICES_P2_restart.cfg','refstate_EBA_PICES_P2.txt'}
+        hashes=(root/'input.sha256').read_text().splitlines();expected={f'cmbhf_EBA_PICES_{stage}.cfg',f'cmbhf_EBA_PICES_{stage}_split.cfg',f'cmbhf_EBA_PICES_{stage}_restart.cfg',f'refstate_EBA_PICES_{stage}.txt'}
         require({line.split()[1] for line in hashes}==expected and len(hashes)==4,'input inventory')
         for line in hashes:
             digest,file=line.split();require(digest==sha(root/file),'input hash')
-        for name,cfg in [('continuous','cmbhf_EBA_PICES_P2.cfg'),('split','cmbhf_EBA_PICES_P2_split.cfg'),('restart','cmbhf_EBA_PICES_P2_restart.cfg')]:require((root/name/'case.cfg').read_bytes()==(root/cfg).read_bytes(),'actual cfg differs from archived input')
+        for name,cfg in [('continuous',f'cmbhf_EBA_PICES_{stage}.cfg'),('split',f'cmbhf_EBA_PICES_{stage}_split.cfg'),('restart',f'cmbhf_EBA_PICES_{stage}_restart.cfg')]:require((root/name/'case.cfg').read_bytes()==(root/cfg).read_bytes(),'actual cfg differs from archived input')
+        for name in ['continuous','split','restart']:
+            require((root/name/f'refstate_EBA_PICES_{stage}.txt').read_bytes()==(root/f'refstate_EBA_PICES_{stage}.txt').read_bytes(),'actual reference state differs from archived input')
         for f in ['runs_commit.txt','binary.sha256','platform.txt','mpi_version.txt','submitted.lsf']:require((root/f).stat().st_size>0,'missing provenance '+f)
-    return dict(status='PASS',scope='P2 constant-physics same-partition restart',provenance_checked=not local,cases=summary,decoded_outputs_compared=compared,binary_live_state_equal=True)
+    return dict(status='PASS',scope=stage+' same-partition restart',provenance_checked=not local,cases=summary,decoded_outputs_compared=compared,binary_live_state_equal=True)
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--local',action='store_true');p.add_argument('--summary',type=Path);a=p.parse_args()
-    try:r=verify(a.root,a.local)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--stage',choices=['P2','P3'],default='P2');p.add_argument('--local',action='store_true');p.add_argument('--summary',type=Path);a=p.parse_args()
+    try:r=verify(a.root,a.local,a.stage)
     except (ValueError,OSError,KeyError,IndexError,struct.error,EOFError) as e:r=dict(status='FAIL',error=str(e))
     text=json.dumps(r,indent=2)+'\n';print(text)
     if a.summary:a.summary.write_text(text)
