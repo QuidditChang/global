@@ -29,6 +29,8 @@ AC_INIT([CitcomS], [3.0.3], [cig-mc@geodynamics.org], [CitcomS])
 AC_CONFIG_AUX_DIR([./aux-config])
 AC_CONFIG_SRCDIR([bin/Citcom.c])
 AC_CONFIG_HEADERS([config.h])
+pices_build_commit=`git -C "$srcdir" rev-parse HEAD 2>/dev/null || echo unknown`
+AC_DEFINE_UNQUOTED([PICES_SOLVER_COMMIT], ["$pices_build_commit"], [Git commit used to build PICES checkpoints])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign])
 

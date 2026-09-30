@@ -29,6 +29,7 @@
 #include <sys/file.h>
 #include <unistd.h>
 #include <math.h>
+#include <string.h>
 #include "global_defs.h"
 #include "pices.h"
 #include "temperature_audit.h"
@@ -57,7 +58,6 @@ static void read_momentum_checkpoint(struct All_variables *E, FILE *fp);
  * is guarded by solution_cycles==0. The full checkpoint restores it later. */
 void read_checkpoint_initial_time(struct All_variables *E)
 {
-    if(E->pices.enabled) pices_fail(E,"P1 restart is unsupported");
     char path[255];
     FILE *fp;
     int h[8],bad=0,allbad;
@@ -65,6 +65,7 @@ void read_checkpoint_initial_time(struct All_variables *E)
     void parallel_process_termination();
     snprintf(path,sizeof(path),"%s.chkpt.%d.%d",E->control.old_P_file,
              E->parallel.me,E->monitor.solution_cycles_init);
+    if(E->pices.enabled) pices_checkpoint_preflight(E,path);
     fp=fopen(path,"rb");
     if(!fp)bad=1;
     else {
@@ -98,18 +99,24 @@ void read_checkpoint_initial_time(struct All_variables *E)
 
 void output_checkpoint(struct All_variables *E)
 {
-    char output_file[255];
+    char output_file[255], final_file[255];
     FILE *fp1;
 
-    if(E->pices.enabled) return; /* P1 cannot publish restartable states. */
+    if(E->pices.enabled && !E->pices.checkpoint) return;
 
     sprintf(output_file, "%s.chkpt.%d.%d", E->control.data_file,
             E->parallel.me, E->monitor.solution_cycles);
+
+    if(E->pices.enabled) {
+        strcpy(final_file,output_file);
+        if(snprintf(output_file,sizeof(output_file),"%s.tmp",final_file)>=(int)sizeof(output_file)) pices_fail(E,"checkpoint path too long");
+    }
 
     /* Disable the backup since the filename is unique. */
     /* backup_file(output_file); */
 
     fp1 = fopen(output_file, "wb");
+    if(E->pices.enabled && !fp1) pices_fail(E,"checkpoint open failed");
 
     /* checkpoint for general information */
     /* this must be the first to be checkpointed */
@@ -129,14 +136,17 @@ void output_checkpoint(struct All_variables *E)
             composition_checkpoint(E, fp1);
     }
 
-    fclose(fp1);
+    if(E->pices.enabled) {
+        if(ferror(fp1) || fflush(fp1) || fsync(fileno(fp1))) pices_fail(E,"checkpoint write failed");
+        if(fclose(fp1)) pices_fail(E,"checkpoint close failed");
+        pices_checkpoint_publish(E,output_file,final_file);
+    } else fclose(fp1);
     return;
 }
 
 
 void read_checkpoint(struct All_variables *E)
 {
-    if(E->pices.enabled) pices_fail(E,"P1 restart is unsupported");
     void initialize_material(struct All_variables *E);
     void initial_viscosity(struct All_variables *E);
     float find_age_in_MY(struct All_variables *E);
@@ -147,6 +157,7 @@ void read_checkpoint(struct All_variables *E)
     /* open the checkpoint file */
     snprintf(output_file, 254, "%s.chkpt.%d.%d", E->control.old_P_file,
              E->parallel.me, E->monitor.solution_cycles_init);
+    if(E->pices.enabled) pices_checkpoint_preflight(E,output_file);
     fp = fopen(output_file, "rb");
     if(fp == NULL) {
         fprintf(stderr, "Cannot open file: %s\n", output_file);
@@ -177,6 +188,12 @@ void read_checkpoint(struct All_variables *E)
     }
 
     fclose(fp);
+
+    if(E->pices.enabled) {
+        pices_checkpoint_restore_velocity(E,output_file);
+        pices_restore(E);
+        pices_checkpoint_check_state(E,output_file);
+    }
 
     /* finally, init viscosity */
     initial_viscosity(E);
@@ -384,7 +401,7 @@ static void read_tracer_checkpoint(struct All_variables *E, FILE *fp)
     }
 
     /* init E->trace.ntracer_flavor */
-    count_tracers_of_flavors(E);
+    if(!E->pices.enabled || E->trace.nflavors>0) count_tracers_of_flavors(E);
 
     return;
 }

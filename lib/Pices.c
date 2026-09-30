@@ -50,10 +50,11 @@ void pices_parameters(struct All_variables *E)
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
+    input_boolean("pices_checkpoint",&E->pices.checkpoint,"off",E->parallel.me);
     if(E->pices.enabled) {
         input_boolean("restart",&restart,"off",E->parallel.me);
         input_boolean("post_processing",&post,"off",E->parallel.me);
-        if(restart || post) pices_fail(E,"P1 restart/postprocessing is unsupported");
+        if((restart && !E->pices.checkpoint) || post) pices_fail(E,"restart requires pices_checkpoint=on; postprocessing unsupported");
     }
 }
 
@@ -61,13 +62,22 @@ void pices_validate(struct All_variables *E)
 {
     int i;
     if(!E->pices.enabled) return;
+    if(E->pices.checkpoint) {
+        if(!E->viscosity.update_allowed || E->viscosity.RHEOL!=1 || E->viscosity.SDEPV ||
+           E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
+           E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones)
+            pices_fail(E,"P2 checkpoint requires constant Newtonian viscosity and rebuilds");
+        for(i=0;i<E->viscosity.num_mat;i++)
+            if(E->viscosity.N0[i]!=E->viscosity.N0[0] || E->viscosity.E[i]!=0 || E->viscosity.Z[i]!=0)
+                pices_fail(E,"P2 checkpoint requires uniform temperature-independent viscosity");
+    }
     if(E->pices.max_substeps<1 || E->pices.max_substeps>1000000 ||
        E->trace.itperel<1 || strcmp(E->output.format,"ascii-gz") ||
        E->control.ala_pressure_buoyancy)
         pices_fail(E,"P1 requires positive tracer density, valid substep limit, ascii-gz and BA/EBA");
     if(E->sphere.caps!=12 || E->sphere.caps_per_proc!=1 || !E->control.tracer)
         pices_fail(E,"P1 requires full sphere, one cap per rank, tracer=on");
-    if(E->control.restart || E->control.post_p || E->control.stokes ||
+    if((E->control.restart && !E->pices.checkpoint) || E->control.post_p || E->control.stokes ||
        E->control.pseudo_free_surf || E->control.lith_age || E->composition.on ||
        E->control.mat_control || E->control.vbcs_file || E->trace.ic_method!=0 ||
        E->trace.reclassify_flavors)
@@ -297,4 +307,26 @@ void pices_advance(struct All_variables *E)
     fprintf(E->fp,"PICES_STEP step=%d rank=%d time=%.17g dt=%.17g substeps=%d particles=%d cfl=%.17g Tmin=%.17g Tmax=%.17g mismatch=%.17g subgrid_max=%.17g remap_energy=%.17g heat_energy=%.17g derivative=heat_stage_only\n",E->monitor.solution_cycles,E->parallel.me,(double)E->monitor.elapsed_time,dt,ns,np,cfl,reduce(E,tmin,MPI_MIN),reduce(E,tmax,MPI_MAX),reduce(E,mismatch,MPI_MAX),reduce(E,submax,MPI_MAX),advected-before,heated-advected);
     fflush(E->fp);
     free(g);free(old);free(dg);free(mapped);free(rhs);free(previous);free(sub);
+}
+
+/* Full checkpoint already restored Tp: rebuild only nonpersistent geometry. */
+void pices_restore(struct All_variables *E)
+{
+    int p,n,nodes[9]; double w[9];
+    pices_validate(E);
+    if(E->pices.initialized || E->pices.slot<0) pices_fail(E,"invalid restore lifecycle");
+    for(p=1;p<=E->trace.ntracers[1];p++) {
+        double tp=E->trace.extraq[1][E->pices.slot][p];
+        E->trace.ielement[1][p]=-99;
+        tracer_temperature_weights(E,1,p,nodes,w);
+        if(!isfinite(tp) || E->data.Ttop+tp*E->data.ref_temperature<0) pices_fail(E,"invalid restored Tp");
+    }
+    for(n=1;n<=E->lmesh.nno;n++)
+        if(!isfinite(E->T[1][n]) || E->data.Ttop+E->T[1][n]*E->data.ref_temperature<0) pices_fail(E,"invalid restored T");
+    assemble(E); E->pices.initialized=1;
+    E->advection.total_timesteps=E->monitor.solution_cycles+1;
+    E->monitor.T_interior=0;
+    for(n=1;n<=E->lmesh.nno;n++) if(E->T[1][n]>E->monitor.T_interior) E->monitor.T_interior=E->T[1][n];
+    E->monitor.T_interior=reduce(E,E->monitor.T_interior,MPI_MAX);
+    fprintf(E->fp,"PICES_RESTORE step=%d particles=%d Tp_slot=%d time=%.17g\n",E->monitor.solution_cycles,E->trace.ntracers[1],E->pices.slot,(double)E->monitor.elapsed_time);
 }

@@ -639,6 +639,12 @@ void construct_elt_ks(E)
     for(lev=E->mesh.gridmin;lev<=E->mesh.gridmax;lev++)  {
 
       for(m=1;m<=E->sphere.caps_per_proc;m++)     {
+        /* PICES restart must rebuild K's diagonal from zero. The legacy
+         * element path otherwise accumulates the previous inverse diagonal,
+         * making the preconditioner depend on the number of past solves.
+         * Keep PG's historical path unchanged during staged PICES validation. */
+        if(E->pices.enabled)
+            for(j=0;j<E->lmesh.NEQ[lev];j++) E->BI[lev][m][j]=0.0;
 
 	for(el=1;el<=E->lmesh.NEL[lev];el++)    {
 

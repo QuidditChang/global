@@ -6,10 +6,16 @@ static void p1_test_velocity(struct All_variables *E)
 {
     int n;
     const char *mode=getenv("PICES_TEST_MODE");
-    double omega=mode && !strcmp(mode,"rotation") ? 1.0 : 0.0;
+    double omega=mode && !strncmp(mode,"rotation",8) ? 1.0 : 0.0;
     for(n=1;n<=E->lmesh.nno;n++) {
         E->sphere.cap[1].V[1][n]=E->sphere.cap[1].V[3][n]=0;
         E->sphere.cap[1].V[2][n]=omega*E->sx[1][3][n]*sin(E->sx[1][1][n]);
+        if(mode && (!strcmp(mode,"rotation_x") || !strcmp(mode,"rotation_y"))) {
+            double th=E->sx[1][1][n],ph=E->sx[1][2][n],r=E->sx[1][3][n];
+            int xaxis=!strcmp(mode,"rotation_x");
+            E->sphere.cap[1].V[1][n]=r*(xaxis ? -sin(ph):cos(ph));
+            E->sphere.cap[1].V[2][n]=-r*cos(th)*(xaxis ? cos(ph):sin(ph));
+        }
     }
 }
 static void p1_test_initial(struct All_variables *E)
@@ -31,7 +37,7 @@ static void p1_test_initial(struct All_variables *E)
         double t=0;
         tracer_temperature_weights(E,1,p,nodes,w);
         for(a=1;a<=8;a++)t+=w[a]*E->T[1][nodes[a]];
-        E->trace.extraq[1][E->pices.slot][p]=t;
+        E->trace.extraq[1][E->pices.slot][p]=getenv("PICES_TEST_IDS") ? .25+(E->parallel.me*E->trace.ntracers[1]+p)*1e-6 : t;
     }
     if(mode && !strcmp(mode,"empty")) { E->trace.ntracers[1]=0; E->trace.ilast_tracer_count=0; }
     /* Local FE matrices for independent symmetry/PSD and analytic tests. */
@@ -47,6 +53,7 @@ static void p1_test_initial(struct All_variables *E)
 static void p1_test_snapshot(struct All_variables *E)
 {
     FILE *f; char path[128]; int n,p,a,nodes[9];double w[9];
+    if(getenv("PICES_TEST_IDS") && E->monitor.solution_cycles!=0 && E->monitor.solution_cycles!=E->advection.max_timesteps && !E->control.restart) return;
     snprintf(path,sizeof(path),"nodes.%d.%d.txt",E->parallel.me,E->monitor.solution_cycles);
     f=fopen(path,"w");
     for(n=1;n<=E->lmesh.nno;n++)
@@ -67,4 +74,10 @@ static void p1_test_snapshot(struct All_variables *E)
         fprintf(f,"%.17g\n",E->pices.length[n]);
     }
     fclose(f);
+}
+
+static void p1_test_restart_bcs(struct All_variables *E)
+{
+    int a,n;
+    for(a=1;a<=3;a++)for(n=1;n<=E->lmesh.nno;n++)E->sphere.cap[1].TB[a][n]=.5;
 }

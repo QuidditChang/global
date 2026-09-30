@@ -25,7 +25,7 @@ def main():
     compiler=os.environ.get('MPICC','mpicc')
     command=[compiler,'-std=gnu99','-w','-Wno-error=implicit-function-declaration',
              '-Wno-error=implicit-int','-Wno-error=int-conversion','-O0','-g',
-             '-DUSE_GZDIR','-I'+str(ROOT/'lib'),
+             '-DUSE_GZDIR','-DPICES_SOLVER_COMMIT=\"'+subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()+'\"','-I'+str(ROOT/'lib'),
              '-I'+str(ROOT/'tests/cbf'),*flags]
     sources += [ROOT/'bin/Citcom.c',ROOT/'bin/CitcomSFull.c']
     driver=(ROOT/'bin/Citcom.c').read_text().replace('int main(argc,argv)',

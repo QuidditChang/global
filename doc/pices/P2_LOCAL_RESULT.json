@@ -1,0 +1,224 @@
+{
+  "status": "LOCAL_PASS_HPC_PENDING",
+  "date": "2026-09-30",
+  "coupled_smoke": {
+    "status": "PASS",
+    "scope": "P2 constant-physics same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03594539504531816,
+        "stokes": [
+          {
+            "iterations": 133,
+            "div_v": 5.405e-08,
+            "dv_v": 7.895e-07,
+            "dp_p": 1.041e-06,
+            "step": 1
+          },
+          {
+            "iterations": 247,
+            "div_v": 1.874e-07,
+            "dv_v": 9.652e-07,
+            "dp_p": 1.06e-06,
+            "step": 2
+          },
+          {
+            "iterations": 86,
+            "div_v": 6.079e-08,
+            "dv_v": 8.679e-07,
+            "dp_p": 9.864e-07,
+            "step": 3
+          },
+          {
+            "iterations": 121,
+            "div_v": 6.696e-08,
+            "dv_v": 9.348e-07,
+            "dp_p": 1.1e-06,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.01680847811607398,
+        "stokes": [
+          {
+            "iterations": 133,
+            "div_v": 5.405e-08,
+            "dv_v": 7.895e-07,
+            "dp_p": 1.041e-06,
+            "step": 1
+          },
+          {
+            "iterations": 247,
+            "div_v": 1.874e-07,
+            "dv_v": 9.652e-07,
+            "dp_p": 1.06e-06,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03594539504531816,
+        "stokes": [
+          {
+            "iterations": 86,
+            "div_v": 6.079e-08,
+            "dv_v": 8.679e-07,
+            "dp_p": 9.864e-07,
+            "step": 3
+          },
+          {
+            "iterations": 121,
+            "div_v": 6.696e-08,
+            "dv_v": 9.348e-07,
+            "dp_p": 1.1e-06,
+            "step": 4
+          }
+        ]
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "migration_restart_guards": {
+    "rotation": {
+      "status": "PASS",
+      "migrated": 13688,
+      "origin_ranks": 12,
+      "max_position_error": 0.010701546290678191
+    },
+    "rotation_x": {
+      "status": "PASS",
+      "migrated": 12028,
+      "origin_ranks": 12,
+      "max_position_error": 0.012260208253745443
+    },
+    "rotation_y": {
+      "status": "PASS",
+      "migrated": 11998,
+      "origin_ranks": 12,
+      "max_position_error": 0.012344798656935411
+    },
+    "rotation_restart": {
+      "status": "PASS",
+      "bitwise_particle_snapshot_equal": true
+    },
+    "reject_physics": {
+      "status": "PASS"
+    },
+    "reject_flavor": {
+      "status": "PASS"
+    },
+    "reject_missing_metadata": {
+      "status": "PASS"
+    },
+    "reject_missing_manifest": {
+      "status": "PASS"
+    },
+    "reject_corrupt_payload": {
+      "status": "PASS"
+    },
+    "reject_corrupt_velocity": {
+      "status": "PASS"
+    },
+    "reject_wrong_slot": {
+      "status": "PASS"
+    }
+  },
+  "p1_regression": {
+    "constant": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "rotation": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "diffusion": {
+      "exit": 8,
+      "status": "PASS",
+      "particle_reference_max_error": 4.440892098500626e-16,
+      "raw_subgrid_survival": 0.0010579774105761257,
+      "heat_substeps": 6
+    },
+    "flavor_slot": {
+      "exit": 8,
+      "status": "PASS"
+    },
+    "reject_empty": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_source": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_cfl": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_substeps": {
+      "exit": 72,
+      "status": "PASS"
+    },
+    "reject_restart": {
+      "exit": 72,
+      "status": "PASS"
+    }
+  },
+  "pg_regression": {
+    "status": "PASS",
+    "scope": "P0 standalone PG baseline only; no PICES/energy-closure certification",
+    "provenance_checked": false,
+    "mpi_exit_code": 8,
+    "ranks": 12,
+    "steps": [
+      0,
+      1,
+      2
+    ],
+    "temperature_K": {
+      "0": {
+        "min": 300.0,
+        "max": 3700.0
+      },
+      "1": {
+        "min": 300.0,
+        "max": 3700.0
+      },
+      "2": {
+        "min": 300.0,
+        "max": 3700.0
+      }
+    },
+    "provenance": {}
+  },
+  "pg_decoded_outputs_equal": 36,
+  "flavor_one_restart": {
+    "status": "PASS",
+    "decoded_outputs_equal": 108,
+    "live_binary_state_equal": true
+  },
+  "sha256_vectors": "PASS",
+  "autoconf_generation": "PASS",
+  "lsf_syntax": "PASS",
+  "hpc_runtime": "PENDING"
+}
