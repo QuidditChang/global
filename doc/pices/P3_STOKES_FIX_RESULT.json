@@ -1,0 +1,316 @@
+{
+  "status": "PASS_LOCAL_HPC_PENDING",
+  "policy": {
+    "inner_relative": 1e-06,
+    "absolute_floor": 1e-14,
+    "outer_accuracy": 1e-06,
+    "piterations": 500
+  },
+  "p3": {
+    "status": "PASS",
+    "scope": "P3 same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.01789359531330735,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "requested_alternate_mpi_reduction": {
+    "status": "PASS",
+    "scope": "P3 same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.01789359531330735,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "failure_guards": {
+    "outer": {
+      "status": "PASS",
+      "exit": 72,
+      "failed_step": 1,
+      "checkpoint_published_for_failed_step": false
+    },
+    "inner": {
+      "status": "PASS",
+      "exit": 72,
+      "failed_step": 0,
+      "checkpoint_published_for_failed_step": false
+    }
+  },
+  "p2_regression": {
+    "status": "PASS",
+    "scope": "P2 same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03594539504531816,
+        "stokes": [
+          {
+            "iterations": 133,
+            "div_v": 5.405e-08,
+            "dv_v": 7.895e-07,
+            "dp_p": 1.041e-06,
+            "step": 1
+          },
+          {
+            "iterations": 247,
+            "div_v": 1.874e-07,
+            "dv_v": 9.652e-07,
+            "dp_p": 1.06e-06,
+            "step": 2
+          },
+          {
+            "iterations": 86,
+            "div_v": 6.079e-08,
+            "dv_v": 8.679e-07,
+            "dp_p": 9.864e-07,
+            "step": 3
+          },
+          {
+            "iterations": 121,
+            "div_v": 6.696e-08,
+            "dv_v": 9.348e-07,
+            "dp_p": 1.1e-06,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.01680847811607398,
+        "stokes": [
+          {
+            "iterations": 133,
+            "div_v": 5.405e-08,
+            "dv_v": 7.895e-07,
+            "dp_p": 1.041e-06,
+            "step": 1
+          },
+          {
+            "iterations": 247,
+            "div_v": 1.874e-07,
+            "dv_v": 9.652e-07,
+            "dp_p": 1.06e-06,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03594539504531816,
+        "stokes": [
+          {
+            "iterations": 86,
+            "div_v": 6.079e-08,
+            "dv_v": 8.679e-07,
+            "dp_p": 9.864e-07,
+            "step": 3
+          },
+          {
+            "iterations": 121,
+            "div_v": 6.696e-08,
+            "dv_v": 9.348e-07,
+            "dp_p": 1.1e-06,
+            "step": 4
+          }
+        ]
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "p2_before_after_decoded_fields_equal": 180,
+  "lsf_rejects_old_solver_without_guard": true
+}
