@@ -776,10 +776,11 @@ struct COMPOSITION {
 #include "tracer_defs.h"
 
 struct PICES_STATE {
-    int enabled, initialized, moving, slot, no_diffusion, max_substeps, checkpoint, eba;
+    int enabled, initialized, moving, slot, no_diffusion, max_substeps, checkpoint, eba, p4, cbf_valid;
     double *K, *mass, *emass, *length, *rate;
     double kappa, dt_heat, min_edge;
     double *ekappa, *gp_capacity, *gp_k, *gp_fraction;
+    double *heat_residual, *element_source;
 };
 
 struct All_variables {

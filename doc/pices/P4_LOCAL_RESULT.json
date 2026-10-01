@@ -1,0 +1,378 @@
+{
+  "status": "LOCAL_PASS_HPC_PENDING",
+  "date": "2026-10-01",
+  "base_solver_commit": "c7648d52f976899fce2c833890ed2e8086164541",
+  "source_sha256": {
+    "CitcomS/Components/Advection_diffusion/Advection_diffusion.py": "2766bd7198029c998ed02a5796daaad5e4671510dc30af4fc24e4998d8de7fc7",
+    "lib/CBF_native_output.h": "ed87749df550031a0f40368f2df2d04a45ae0068dabaf4d46b1a9f512713058d",
+    "lib/Lith_age.c": "a32e2cdfc10f17953e85c4afc3116565ec9725b1d00dc2012d9ea05bd8ad2fd4",
+    "lib/Output_gzdir.c": "566b39b4a4d8a65ad0961bf0699e719ccd0dc3af5ffe49930548ae3e9610c4a4",
+    "lib/Pices.c": "81bd41799d975c024ea4568fb54137e0d655e5d0e4d2f6a9c18f9b2f146c66e5",
+    "lib/Pices_checkpoint.c": "0bb4f4ab3a15f0c5e1ea8ba84936c1de0d5159f08947d5d5d258df69918fa65b",
+    "lib/Process_buoyancy.c": "535577877c08768fca2d83895fcec7df414fa99d6a15890026038edbfe2d5280",
+    "lib/global_defs.h": "bd850784a277eea8ce9591b81f93f549099a6da02155cf376b6c27a4efb048c2",
+    "module/setProperties.c": "e5743dd061301f13b5c06135351b814b28baa9dc4a50ff8c19a31b9ab4e1a988"
+  },
+  "standalone_build": "/tmp/pices-p4-final-build",
+  "smoke": {
+    "status": "PASS",
+    "scope": "P4 same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03578815891365133,
+        "stokes": [
+          {
+            "iterations": 56,
+            "div_v": 1.983e-08,
+            "dv_v": 8.422e-07,
+            "dp_p": 8.727e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.876e-08,
+            "dv_v": 6.719e-07,
+            "dp_p": 6.872e-07,
+            "step": 2
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.759e-08,
+            "dv_v": 6.303e-07,
+            "dp_p": 6.256e-07,
+            "step": 3
+          },
+          {
+            "iterations": 47,
+            "div_v": 2.226e-08,
+            "dv_v": 9.76e-07,
+            "dp_p": 1.021e-06,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.020550543344330423,
+        "stokes": [
+          {
+            "iterations": 56,
+            "div_v": 1.983e-08,
+            "dv_v": 8.422e-07,
+            "dp_p": 8.727e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.876e-08,
+            "dv_v": 6.719e-07,
+            "dp_p": 6.872e-07,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03578815891365133,
+        "stokes": [
+          {
+            "iterations": 48,
+            "div_v": 1.759e-08,
+            "dv_v": 6.303e-07,
+            "dp_p": 6.256e-07,
+            "step": 3
+          },
+          {
+            "iterations": 47,
+            "div_v": 2.226e-08,
+            "dv_v": 9.76e-07,
+            "dp_p": 1.021e-06,
+            "step": 4
+          }
+        ]
+      },
+      "P4": {
+        "status": "PASS",
+        "cbf_outputs_compared": 120,
+        "max_relative_heat_boundary_residual": 2.298831535059216e-16,
+        "max_TA_delta": 0.00021579927504172813,
+        "max_TA_mapping_error": 8.697168703185958e-05
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "manufactured": {
+    "multisubstep_TA_and_CBF": {
+      "status": "PASS",
+      "TA_grid_error": 5.5294310796760726e-17,
+      "particle_Q_error": 6.245004513516506e-17,
+      "mapping_diagnostic_error": 0.0,
+      "CBF_before_after_TA_equal": true,
+      "relative_CBF_boundary_residual": 1.061944999559984e-16
+    },
+    "mapping_refinement": {
+      "status": "PASS",
+      "nodes": [
+        5,
+        9,
+        17,
+        25
+      ],
+      "max_errors": [
+        0.015812125247233813,
+        0.01958167441934161,
+        0.013669245620747185,
+        0.009910127491753757
+      ],
+      "coarse_to_fine_ratio": 1.595552152118237
+    }
+  },
+  "restart_guards": {
+    "tau": "PASS",
+    "shape": "PASS",
+    "Tref": "PASS",
+    "age": "PASS",
+    "CBF_corrupt": "PASS"
+  },
+  "p3_regression": {
+    "status": "PASS",
+    "scope": "P3 same-partition restart",
+    "provenance_checked": false,
+    "cases": {
+      "continuous": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      },
+      "split": {
+        "particles": {
+          "0": 98304,
+          "1": 98304,
+          "2": 98304
+        },
+        "max_cfl": 0.01789359531330735,
+        "stokes": [
+          {
+            "iterations": 55,
+            "div_v": 4.143e-08,
+            "dv_v": 1.99e-06,
+            "dp_p": 9.693e-07,
+            "step": 1
+          },
+          {
+            "iterations": 48,
+            "div_v": 2.141e-08,
+            "dv_v": 8.339e-07,
+            "dp_p": 6.122e-07,
+            "step": 2
+          }
+        ]
+      },
+      "restart": {
+        "particles": {
+          "2": 98304,
+          "3": 98304,
+          "4": 98304
+        },
+        "max_cfl": 0.03883063748622615,
+        "stokes": [
+          {
+            "iterations": 48,
+            "div_v": 2.039e-08,
+            "dv_v": 7.712e-07,
+            "dp_p": 5.994e-07,
+            "step": 3
+          },
+          {
+            "iterations": 48,
+            "div_v": 1.924e-08,
+            "dv_v": 7.176e-07,
+            "dp_p": 5.744e-07,
+            "step": 4
+          }
+        ]
+      }
+    },
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "p3_pre_P4_comparison": {
+    "status": "PASS",
+    "decoded_outputs_equal_to_pre_P4": 180,
+    "checkpoint_live_state_equal": true
+  },
+  "kernel_tests": {
+    "pices": 11,
+    "PG_CBF": 6,
+    "status": "PASS"
+  },
+  "lsf_syntax": "PASS",
+  "limits": [
+    "Local MPI standalone build; HPC and Pyre runtime not validated here.",
+    "Mapping refinement is nonmonotone on the coarsest grids; no convergence order claimed.",
+    "No particle physical-energy conservation claim; CBF excludes TA/remap."
+  ],
+  "runs_input_sha256": {
+    "cmbhf_EBA_PICES_P4.cfg": "98913dc2899f411401ca7f8f23998b2082a7d3e478c051aa0b9e2ea6cd97d2eb",
+    "cmbhf_EBA_PICES_P4_split.cfg": "4064709b6a1a4093477259d588ffb110ea215899bc26a04b1fbf12b23c21799c",
+    "cmbhf_EBA_PICES_P4_restart.cfg": "ae8e990e96ece2f70e0b930848bfa885d4992d0f0be6b23aada8beb032036126",
+    "cmbhf_EBA_PICES_P4.lsf": "c72f03c23cc1af0bc46168dd9146e10f18d72aaf24fd03622b6602330a2f39a9",
+    "refstate_EBA_PICES_P4.txt": "259ae4ed2ac16a98cc483d8051bcfcda948a1fc94721d8f784e44678b09171ba",
+    "pices_p4_forcing/._age.0.0": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.1": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.10": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.11": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.2": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.3": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.4": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.5": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.6": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.7": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.8": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.0.9": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.0": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.1": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.10": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.11": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.2": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.3": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.4": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.5": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.6": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.7": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.8": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.1.9": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.0": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.1": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.10": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.11": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.2": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.3": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.4": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.5": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.6": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.7": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.8": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.2.9": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.0": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.1": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.10": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.11": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.2": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.3": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.4": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.5": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.6": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.7": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.8": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._age.3.9": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._trench.0.xyz": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._trench.1.xyz": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._trench.2.xyz": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/._trench.3.xyz": "76584fd8b9ff30f0945e5438275197467a539a9935921cffa3650338fc191df7",
+    "pices_p4_forcing/age.0.0": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.1": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.10": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.11": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.2": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.3": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.4": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.5": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.6": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.7": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.8": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.0.9": "4d2ef7a56069cd88fc48d2bdb411d94adf95db1d6c643d7376acbf464ad55f93",
+    "pices_p4_forcing/age.1.0": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.1": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.10": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.11": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.2": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.3": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.4": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.5": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.6": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.7": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.8": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.1.9": "9b8274853b847ef40cdc3ac6d4d4dfb37425e2a08cda258a52da01be011fd795",
+    "pices_p4_forcing/age.2.0": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.1": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.10": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.11": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.2": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.3": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.4": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.5": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.6": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.7": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.8": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.2.9": "679a0d839bf1960d251775766aaa20a535871e7f727531ed4f8a5af71542d9cd",
+    "pices_p4_forcing/age.3.0": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.1": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.10": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.11": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.2": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.3": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.4": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.5": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.6": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.7": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.8": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/age.3.9": "b6b0507b1285e6cfd997c2c1305e497a4e089dc88d049e870c879a13696e114e",
+    "pices_p4_forcing/trench.0.xyz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pices_p4_forcing/trench.1.xyz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pices_p4_forcing/trench.2.xyz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pices_p4_forcing/trench.3.xyz": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

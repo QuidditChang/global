@@ -147,6 +147,10 @@ void lith_age_input(struct All_variables *E)
   if (E->control.lith_age) {
     input_int("lith_age_time",&(E->control.lith_age_time),"0",m);
     input_string("lith_age_file",E->control.lith_age_file,"",m);
+    /* Also expose the Pyre geometry prefixes to standalone CitcomSFull. */
+    input_string("flag_depth_file",E->control.flag_depth_file,"flag_depth.dat",m);
+    input_string("flag_depth_new_file",E->control.flag_depth_new_file,"flag_depth_new.dat",m);
+    input_string("tf_file",E->control.tf_file,"tf_depth.dat",m);
     input_float("lith_age_depth",&(E->control.lith_age_depth),"0.0471",m);
     input_float("max_plate_age_Ma",&(E->control.max_plate_age_Ma),"70.0",m);
     if(E->control.max_plate_age_Ma <= 0.0) {

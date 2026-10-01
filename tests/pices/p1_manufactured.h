@@ -27,6 +27,7 @@ static void p1_test_initial(struct All_variables *E)
     for(n=1;n<=E->lmesh.nno;n++) {
         double r=E->sx[1][3][n];
         E->T[1][n]=.5;
+        if(mode && !strcmp(mode,"p4_linear"))E->T[1][n]=(hi-r)/(hi-lo);
         if(mode && !strcmp(mode,"diffusion"))
             E->T[1][n]+=.1*sin(M_PI*(r-lo)/(hi-lo))/r;
         if(mode && !strcmp(mode,"rotation"))
@@ -39,6 +40,15 @@ static void p1_test_initial(struct All_variables *E)
         }
         for(a=1;a<=3;a++) E->sphere.cap[1].TB[a][n]=
             mode && !strcmp(mode,"nonlinear_steady") ? E->T[1][n] : .5;
+    }
+    /* P4 TA conformance owns physical radial BCs. Give TA-on/off tests
+     * identical physical boundaries, including initial particle sampling. */
+    if(E->pices.p4)for(n=1;n<=E->lmesh.nno;n++) {
+        int k=(n-1)%E->lmesh.noz+E->lmesh.nzs;
+        if(k==1 || k==E->mesh.noz) {
+            E->T[1][n]=k==1?E->control.TBCbotval:E->control.TBCtopval;
+            for(a=1;a<=3;a++)E->sphere.cap[1].TB[a][n]=E->T[1][n];
+        }
     }
     for(p=1;p<=E->trace.ntracers[1];p++) {
         double t=0;
@@ -75,6 +85,21 @@ static void p1_test_snapshot(struct All_variables *E)
         fprintf(f," %.17g %.17g %.17g\n",E->trace.basicq[1][3][p],E->trace.basicq[1][4][p],E->trace.basicq[1][5][p]);
     }
     fclose(f);
+    if(E->pices.p4 && E->control.lith_age && E->monitor.solution_cycles>0) {
+        int i,j,k,nodeg;
+        snprintf(path,sizeof(path),"ta.%d.%d.txt",E->parallel.me,E->monitor.solution_cycles);f=fopen(path,"w");
+        fprintf(f,"# scalet=%.17g dt=%.17g depth=%.17g tau=%.17g exp=%.17g surface=%.17g cap=%.17g\n",
+            E->data.scalet,(double)E->advection.timestep,(double)E->control.lith_age_depth,
+            (double)E->control.lith_age_asml_tau_Ma,(double)E->control.lith_age_asml_exp,
+            E->refstate.temperature_surface,(double)E->control.max_plate_age_Ma);
+        for(j=1;j<=E->lmesh.noy;j++)for(i=1;i<=E->lmesh.nox;i++)for(k=1;k<=E->lmesh.noz;k++) {
+            n=k+(i-1)*E->lmesh.noz+(j-1)*E->lmesh.nox*E->lmesh.noz;
+            nodeg=E->lmesh.nxs+i-1+(E->lmesh.nys+j-2)*E->mesh.nox;
+            fprintf(f,"%d %.17g %.17g %.17g %.17g %.17g\n",n,E->assim_delta_T[1][n],
+                E->sphere.ro-E->sx[1][3][n],E->refstate.Tref[k],(double)E->age_t[nodeg],(double)E->flag_depth2[nodeg]);
+        }
+        fclose(f);
+    }
     snprintf(path,sizeof(path),"elements.%d.txt",E->parallel.me);f=fopen(path,"w");
     for(n=1;n<=E->lmesh.nel;n++) {
         for(a=1;a<=8;a++)fprintf(f,"%d ",E->ien[1][n].node[a]);

@@ -1225,6 +1225,8 @@ void gzdir_output_q_CBF(struct All_variables *E, int cycles)
         return;
 
     heat_flux_CBF(E);
+    /* No thermal interval exists at a fresh P4 initial state. */
+    if(E->pices.enabled && E->pices.p4 && !E->pices.cbf_valid)return;
 
     /* The boundary assembler writes native RHS, masses, flux and faces. */
     elapsed=MPI_Wtime()-started;

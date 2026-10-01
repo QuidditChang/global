@@ -1,10 +1,11 @@
 """Run the exact three P2 HPC configurations with local MPI, then audit."""
 import argparse,os,shutil,subprocess
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('build',type=Path);p.add_argument('runs',type=Path);p.add_argument('--stage',choices=['P2','P3'],default='P2');p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True)
+p=argparse.ArgumentParser();p.add_argument('build',type=Path);p.add_argument('runs',type=Path);p.add_argument('--stage',choices=['P2','P3','P4'],default='P2');p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True)
 lsf=(a.runs/('cmbhf_EBA_PICES_'+a.stage+'.lsf')).read_text();gate=lsf[lsf.index('awk -v first='):lsf.index('    cd "$RUN_ROOT"\ndone')]
 for name,suffix,first,last in [('continuous','',1,4),('split','_split',1,2),('restart','_restart',3,4)]:
  d=a.output/name;d.mkdir();(d/'DATA').mkdir();shutil.copy(a.runs/('cmbhf_EBA_PICES_'+a.stage+suffix+'.cfg'),d/'case.cfg');shutil.copy(a.runs/('refstate_EBA_PICES_'+a.stage+'.txt'),d)
+ if a.stage=='P4':shutil.copytree(a.runs/'pices_p4_forcing',d/'pices_p4_forcing')
  with (d/'solver.stdout').open('w') as out,(d/'solver.stderr').open('w') as err:
   r=subprocess.run([os.environ.get('MPIEXEC','/usr/local/bin/mpiexec'),'--oversubscribe','-n','12',str(a.build.resolve()/'CitcomSFull'),'case.cfg'],cwd=d,stdout=out,stderr=err,timeout=180)
  (d/'mpi_exit_code.txt').write_text(str(r.returncode)+'\n');assert r.returncode in (0,8),(name,r.returncode,(d/'solver.stderr').read_text()[-2000:])

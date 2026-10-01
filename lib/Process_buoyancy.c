@@ -38,6 +38,7 @@
 #include "material_properties.h"
 #include "advection_diffusion.h"
 #include "CBF_face_geometry.h"
+#include "pices.h"
 #include "CBF_native_output.h"
 #include <float.h>
 #include <math.h>		/* for sqrt */
@@ -235,7 +236,9 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     if(global_bad) parallel_process_termination();
     if(active) for(m=1;m<=E->sphere.caps_per_proc;++m)
         for(e=top ? elz : 1;e<=E->lmesh.nel;e+=elz) {
-            CBF_element_thermal_residual(E,m,e,er);
+            if(E->pices.enabled && E->pices.p4)
+                for(a=1;a<=8;a++)er[a]=E->pices.heat_residual[e*8+a-1];
+            else CBF_element_thermal_residual(E,m,e,er);
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 if(!(E->node[m][node] & TBZ)) bad=1;
@@ -313,6 +316,17 @@ static void evaluate_heat_flux_CBF(struct All_variables *E, int write_native,
     struct CC saved_cc=E->element_Cc;
     struct CCX saved_ccx=E->element_Ccx;
     void parallel_process_termination();
+    if(E->pices.enabled && E->pices.p4) {
+        if(!E->pices.cbf_valid) {
+            if(write_native && E->parallel.me==0)fprintf(E->fp,"PICES_CBF step=%d state=unavailable_initial\n",E->monitor.solution_cycles);
+            return;
+        }
+        if(write_native ? E->output.output_q_surf_CBF : E->mesh.toptbc==1)
+            heat_flux_CBF_boundary(E,1,E->slice.q_surf_CBF,write_native,stats?stats[0]:NULL);
+        if(write_native ? E->output.output_q_botm_CBF : E->mesh.bottbc==1)
+            heat_flux_CBF_boundary(E,0,E->slice.q_botm_CBF,write_native,stats?stats[1]:NULL);
+        return;
+    }
     if(write_native && !E->output.CBF_use_advection) {
         if(E->parallel.me==0) fprintf(stderr,"CBF requires CBF_use_advection=on\n");
         parallel_process_termination();

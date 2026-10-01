@@ -57,7 +57,22 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  pices_sha_add(&s,E->refstate.rho+1,E->lmesh.noz*sizeof(double));
  pices_sha_add(&s,E->refstate.thermal_expansivity+1,E->lmesh.noz*sizeof(double));
  pices_sha_add(&s,E->refstate.gravity+1,E->lmesh.noz*sizeof(double));
- for(d=1;d<=3;d++)pices_sha_add(&s,E->sphere.cap[1].TB[d]+1,E->lmesh.nno*sizeof(E->sphere.cap[1].TB[d][0]));
+ if(E->pices.p4) {
+  int n,i,j;double ta[]={4,E->control.lith_age,E->control.lith_age_asml,E->control.lith_age_time,
+   E->control.lith_age_depth,E->control.lith_age_asml_tau_Ma,E->control.lith_age_asml_exp,
+   E->control.max_plate_age_Ma,E->refstate.temperature_surface};
+  pices_sha_add(&s,ta,sizeof(ta));
+  pices_sha_add(&s,E->refstate.Tref+1,E->lmesh.noz*sizeof(double));
+  /* Interior TB contains transient targets, not Dirichlet data. */
+  for(d=1;d<=3;d++)for(n=1;n<=E->lmesh.nno;n++)
+   if(n%E->lmesh.noz==0 || n%E->lmesh.noz==1)
+    pices_sha_add(&s,&E->sphere.cap[1].TB[d][n],sizeof(E->sphere.cap[1].TB[d][n]));
+  if(E->control.lith_age)for(j=1;j<=E->lmesh.noy;j++)for(i=1;i<=E->lmesh.nox;i++) {
+   n=E->lmesh.nxs+i-1+(E->lmesh.nys+j-2)*E->mesh.nox;
+   pices_sha_add(&s,&E->age_t[n],sizeof(float));
+   pices_sha_add(&s,&E->flag_depth2[n],sizeof(float));
+  }
+ } else for(d=1;d<=3;d++)pices_sha_add(&s,E->sphere.cap[1].TB[d]+1,E->lmesh.nno*sizeof(E->sphere.cap[1].TB[d][0]));
  if(E->pices.eba) {
   double thermal[]={3,E->data.ks,E->data.radius_km,E->control.Q0,E->control.disptn_number,E->control.surface_temp,
     E->control.eba_formulation,E->control.kT_exponent,E->control.kC_ratio,
@@ -81,7 +96,7 @@ static void metadata(struct All_variables *E,const char *payload,const char *sta
  char sha[65],physics[65],vsha[65];int n;
  hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics);
  n=snprintf(out,META_SIZE,
- "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":1,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
+ "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":%d,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
  "\"step\":%d,\n\"time\":%.17g,\n\"dt\":%.17g,\n\"total_timesteps\":%d,\n"
  "\"rank\":%d,\n\"mpi_size\":%d,\n\"decomposition\":[%d,%d,%d],\n\"local_mesh\":[%d,%d,%d],\n\"cap_ids\":[%d],\n"
  "\"particles\":%d,\n\"basic_quantities\":%d,\n\"extraq\":[%s{\"name\":\"Tp\",\"slot\":%d}],\n\"flavors\":%d,\n"
@@ -89,7 +104,7 @@ static void metadata(struct All_variables *E,const char *payload,const char *sta
  "\"interpolation\":\"gnomonic_wedge_radial_v1\",\n\"length\":\"min_directional_rms_cartesian_v1\",\n"
  "\"accepted_velocity_sha256\":\"%s\",\n"
  "\"physics_mesh_sha256\":\"%s\",\n\"checkpoint_sha256\":\"%s\"\n}\n",
- PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
+ E->pices.p4?2:1,PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
  E->parallel.me,E->parallel.nproc,E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz,E->lmesh.nox,E->lmesh.noy,E->lmesh.noz,E->sphere.capid[1],
  E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,E->trace.nflavors,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
@@ -114,6 +129,11 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
  pathcat(E,vt,final,".pices.state.tmp");pathcat(E,vf,final,".pices.state");
  f=fopen(vt,"wb");if(!f)pices_fail(E,"cannot save accepted velocity");
  for(d=1;d<=3;d++)if(fwrite(E->sphere.cap[1].V[d]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)pices_fail(E,"velocity write failed");
+ if(E->pices.p4) {
+  if(fwrite(&E->pices.cbf_valid,sizeof(int),1,f)!=1 ||
+     fwrite(E->pices.heat_residual+8,sizeof(double),8*E->lmesh.nel,f)!=(size_t)(8*E->lmesh.nel))
+   pices_fail(E,"P4 heat residual write failed");
+ }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -122,7 +142,7 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
  MPI_Barrier(E->parallel.world);
  if(rename(ct,cf))pices_fail(E,"manifest publish failed");
  MPI_Barrier(E->parallel.world);
- fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=1\n",E->monitor.solution_cycles);
+ fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=%d\n",E->monitor.solution_cycles,E->pices.p4?2:1);
 }
 /* Called before any legacy array allocation/read. All ranks must have a complete
  * set. Payload hash + exact expected size prevents malformed legacy counts. */
@@ -136,7 +156,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=3L*E->lmesh.nno*sizeof(float))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -163,6 +183,15 @@ void pices_checkpoint_restore_velocity(struct All_variables *E,const char *path)
  for(d=1;d<=3;d++) {
   if(fread(E->sphere.cap[1].V[d]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)pices_fail(E,"velocity read failed");
   for(n=1;n<=E->lmesh.nno;n++)if(!isfinite(E->sphere.cap[1].V[d][n]))pices_fail(E,"nonfinite restored velocity");
+ }
+ if(E->pices.p4) {
+  E->pices.heat_residual=calloc((E->lmesh.nel+1)*8,sizeof(double));
+  if(!E->pices.heat_residual)pices_fail(E,"P4 heat residual allocation failed");
+  if(fread(&E->pices.cbf_valid,sizeof(int),1,f)!=1 ||
+     fread(E->pices.heat_residual+8,sizeof(double),8*E->lmesh.nel,f)!=(size_t)(8*E->lmesh.nel))
+   pices_fail(E,"P4 heat residual read failed");
+  if(E->pices.cbf_valid!=(E->monitor.solution_cycles>0))pices_fail(E,"invalid P4 residual lifecycle");
+  for(n=8;n<8*(E->lmesh.nel+1);n++)if(!isfinite(E->pices.heat_residual[n]))pices_fail(E,"nonfinite restored heat residual");
  }
  if(fclose(f))pices_fail(E,"velocity close failed");
 }

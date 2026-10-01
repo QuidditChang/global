@@ -39,7 +39,9 @@ static void CBF_native_boundary(struct All_variables *E,int top,
                 (double)E->monitor.elapsed_time,length,E->data.k0,E->data.ref_temperature);
             fprintf(fp,"# positive=%s global_heat_W=%.17g global_area_m2=%.17g\n",
                 top ? "mantle_to_surface":"core_to_mantle",totals[0]*length*length,totals[1]*length*length);
-            fprintf(fp,"# state=output_T_and_solver_Tdot filter=%d lith_age=%d initial_or_restart_state=%d\n",
+            if(E->pices.enabled && E->pices.p4)
+                fprintf(fp,"# state=PICES_heat_stage_average_before_TA derivative=material_heat_only advection=particles TA=excluded\n");
+            else fprintf(fp,"# state=output_T_and_solver_Tdot filter=%d lith_age=%d initial_or_restart_state=%d\n",
                 E->advection.filter_temperature,E->control.lith_age,step==E->monitor.solution_cycles_init);
             fprintf(fp,"# RHS is nondimensional outward Galerkin energy residual; mass is assembled GLL area_nd.\n");
             fprintf(fp,"# N: cap_global node_local x_nd y_nd z_nd theta_rad phi_rad r_nd q_W_m2 rhs_nd mass_nd\n");
