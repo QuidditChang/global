@@ -3,7 +3,8 @@ import argparse,json,os,re,shutil,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('build',type=Path);p.add_argument('run',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True)
 source=a.run/'split';base=(a.run/'restart/case.cfg').read_text();results={}
-for name,key,value in [('tau','lith_age_asml_tau_Ma','11'),('shape','lith_age_asml_exp','2'),('Tref',None,None),('age',None,None),('CBF_corrupt',None,None)]:
+for name,key,value in [('projection','pices_projection','lumped'),('tau','lith_age_asml_tau_Ma','11'),('shape','lith_age_asml_exp','2'),('Tref',None,None),('age',None,None),('CBF_corrupt',None,None)]:
+ if name=='projection' and 'pices_projection=bounded_consistent' not in base:continue
  d=a.output/name;d.mkdir();(d/'DATA').mkdir();cfg=base;old=source
  if name=='CBF_corrupt':
   old=d/'old';shutil.copytree(source/'DATA',old/'DATA')

@@ -1,0 +1,23 @@
+{
+  "multisubstep_TA_and_CBF": {
+    "status": "PASS",
+    "TA_grid_error": 5.4860629927766524e-17,
+    "particle_Q_error": 5.898059818321144e-17,
+    "mapping_diagnostic_error": null,
+    "CBF_before_after_TA_equal": true,
+    "relative_CBF_boundary_residual": 1.0619235020278185e-16,
+    "projection": "bounded_consistent"
+  },
+  "mapping_refinement": {
+    "status": "PASS",
+    "nodes": [
+      5,
+      9
+    ],
+    "max_errors": [
+      1.3005197778439914e-13,
+      2.6395344349494834e-13
+    ],
+    "coarse_to_fine_ratio": 0.4927080172261065
+  }
+}

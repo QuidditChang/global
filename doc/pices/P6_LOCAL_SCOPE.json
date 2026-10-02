@@ -1,0 +1,8 @@
+{
+  "scope": "Selected local matrix; remaining cases reserved for HPC",
+  "full_matrix_interrupted_at": "assim_pg_grid_fine",
+  "interruption": "Local cost of unchanged PG fine-grid comparator; no numerical failure observed",
+  "assim_base_source": "/tmp/pices-consistent-assim-first",
+  "restart_source": "/tmp/pices-consistent-restart",
+  "coupled_source": "/tmp/pices-consistent-coupled"
+}

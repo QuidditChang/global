@@ -1,6 +1,7 @@
 #ifndef CITCOMS_PICES_H
 #define CITCOMS_PICES_H
 struct All_variables;
+void pices_consistent_project(struct All_variables *, const double *, double *, int);
 void pices_parameters(struct All_variables *);
 void pices_validate(struct All_variables *);
 void pices_initialize(struct All_variables *);

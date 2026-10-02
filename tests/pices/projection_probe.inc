@@ -19,6 +19,11 @@ void pices_projection_probe(struct All_variables *E)
             E->trace.extraq[1][E->pices.slot][p]=t;
         }
     }
+    if(profile && !strcmp(profile,"particle_jump"))for(p=1;p<=E->trace.ntracers[1];p++) {
+        double radius=0;tracer_temperature_weights(E,1,p,nodes,w);
+        for(a=1;a<=8;a++){double x=E->x[1][1][nodes[a]],y=E->x[1][2][nodes[a]],z=E->x[1][3][nodes[a]];radius+=w[a]*sqrt(x*x+y*y+z*z);}
+        E->trace.extraq[1][E->pices.slot][p]=radius<.775?1:0;
+    }
     assemble(E,E->T[1]);
     project(E,E->trace.extraq[1][E->pices.slot],raw,0);
     project(E,E->trace.extraq[1][E->pices.slot],bc,1);
@@ -46,6 +51,17 @@ void pices_projection_probe(struct All_variables *E)
     if(E->parallel.me==0) {
         f=fopen("probe.energy.txt","w");if(!f)pices_fail(E,"cannot write probe energy");
         fprintf(f,"%.17g %.17g %.17g %.17g\n",energies[0],energies[1],energies[2],error);fclose(f);
+    }
+    /* Signed increments deliberately span negative values; no absolute-temperature
+     * bounds may be applied to this operator. */
+    {
+        double *target=array(E,nn+1),*values=array(E,E->trace.ntracers[1]+1);
+        for(n=1;n<=nn;n++)target[n]=sin(2*E->x[1][1][n])+.3*cos(E->x[1][2][n]);
+        for(p=1;p<=E->trace.ntracers[1];p++){tracer_temperature_weights(E,1,p,nodes,w);values[p]=0;for(a=1;a<=8;a++)values[p]+=w[a]*target[nodes[a]];}
+        project(E,values,raw,0);
+        snprintf(path,sizeof(path),"probe.%d.signed.bin",E->parallel.me);f=fopen(path,"wb");if(!f)pices_fail(E,"cannot write signed probe");
+        for(n=1;n<=nn;n++){row[0]=target[n];row[1]=raw[n];if(fwrite(row,sizeof(double),2,f)!=2)pices_fail(E,"short signed probe write");}fclose(f);
+        free(target);free(values);
     }
     free(raw);free(bc);free(local_mass);
 }

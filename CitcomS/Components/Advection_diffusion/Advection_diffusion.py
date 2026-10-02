@@ -87,6 +87,7 @@ class Advection_diffusion(CitcomComponent):
 
         energy_solver = prop.str("energy_solver", default="pg")
         pices_test_no_diffusion = prop.bool("pices_test_no_diffusion", default=False)
+        pices_projection = prop.str("pices_projection", default="lumped")
         pices_p4 = prop.bool("pices_p4", default=False)
         pices_eba = prop.bool("pices_eba", default=False)
         pices_checkpoint = prop.bool("pices_checkpoint", default=False)

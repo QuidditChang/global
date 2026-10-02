@@ -45,11 +45,15 @@ static int fixed(struct All_variables *E,int n)
 
 void pices_parameters(struct All_variables *E)
 {
-    char method[32]; int restart=0,post=0;
+    char method[32],projection[32]; int restart=0,post=0;
     input_string("energy_solver",method,"pg",E->parallel.me);
     if(strcmp(method,"pg") && strcmp(method,"pices"))
         pices_fail(E,"energy_solver must be pg or pices");
     E->pices.enabled=!strcmp(method,"pices");
+    input_string("pices_projection",projection,"lumped",E->parallel.me);
+    if(strcmp(projection,"lumped") && strcmp(projection,"bounded_consistent"))pices_fail(E,"unknown pices_projection");
+    E->pices.consistent_projection=!strcmp(projection,"bounded_consistent");
+    if(E->pices.consistent_projection && !E->pices.enabled)pices_fail(E,"pices_projection requires PICES");
     E->pices.initialized=E->pices.moving=0;
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
@@ -334,6 +338,7 @@ static double interp(const int *nodes,const double *w,const double *field)
 static void project(struct All_variables *E,const double *values,double *out,int boundary)
 {
     int p,a,n,nodes[9],e; double w[9];
+    if(E->pices.consistent_projection){pices_consistent_project(E,values,out,boundary);return;}
     double *den=array(E,E->lmesh.nno+1);
     int *covered=(int *)calloc(E->lmesh.nel+1,sizeof(int));
     int empty=0,zero=0;

@@ -1,0 +1,104 @@
+{
+  "status": "PASS",
+  "scope": "P4 same-partition restart",
+  "provenance_checked": false,
+  "cases": {
+    "continuous": {
+      "particles": {
+        "0": 98304,
+        "1": 98304,
+        "2": 98304,
+        "3": 98304,
+        "4": 98304
+      },
+      "max_cfl": 0.03578815891365133,
+      "stokes": [
+        {
+          "iterations": 56,
+          "div_v": 1.983e-08,
+          "dv_v": 8.422e-07,
+          "dp_p": 8.727e-07,
+          "step": 1
+        },
+        {
+          "iterations": 48,
+          "div_v": 1.876e-08,
+          "dv_v": 6.719e-07,
+          "dp_p": 6.872e-07,
+          "step": 2
+        },
+        {
+          "iterations": 48,
+          "div_v": 1.759e-08,
+          "dv_v": 6.303e-07,
+          "dp_p": 6.256e-07,
+          "step": 3
+        },
+        {
+          "iterations": 47,
+          "div_v": 2.226e-08,
+          "dv_v": 9.76e-07,
+          "dp_p": 1.021e-06,
+          "step": 4
+        }
+      ]
+    },
+    "split": {
+      "particles": {
+        "0": 98304,
+        "1": 98304,
+        "2": 98304
+      },
+      "max_cfl": 0.020550543344330423,
+      "stokes": [
+        {
+          "iterations": 56,
+          "div_v": 1.983e-08,
+          "dv_v": 8.422e-07,
+          "dp_p": 8.727e-07,
+          "step": 1
+        },
+        {
+          "iterations": 48,
+          "div_v": 1.876e-08,
+          "dv_v": 6.719e-07,
+          "dp_p": 6.872e-07,
+          "step": 2
+        }
+      ]
+    },
+    "restart": {
+      "particles": {
+        "2": 98304,
+        "3": 98304,
+        "4": 98304
+      },
+      "max_cfl": 0.03578815891365133,
+      "stokes": [
+        {
+          "iterations": 48,
+          "div_v": 1.759e-08,
+          "dv_v": 6.303e-07,
+          "dp_p": 6.256e-07,
+          "step": 3
+        },
+        {
+          "iterations": 47,
+          "div_v": 2.226e-08,
+          "dv_v": 9.76e-07,
+          "dp_p": 1.021e-06,
+          "step": 4
+        }
+      ]
+    },
+    "P4": {
+      "status": "PASS",
+      "cbf_outputs_compared": 120,
+      "max_relative_heat_boundary_residual": 2.298831535059216e-16,
+      "max_TA_delta": 0.00021579927504172813,
+      "max_TA_mapping_error": 8.697168703185958e-05
+    }
+  },
+  "decoded_outputs_compared": 216,
+  "binary_live_state_equal": true
+}

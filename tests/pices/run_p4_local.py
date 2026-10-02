@@ -5,7 +5,7 @@ import numpy as np
 from verify_p2 import fields
 from verify_p4 import boundary
 p=argparse.ArgumentParser();p.add_argument('build',type=Path);p.add_argument('cfg',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True)
-base=a.cfg.read_text();results={}
+base=a.cfg.read_text();results={};consistent='pices_projection=bounded_consistent' in base
 def run(name,nz=5,ta=True,source=250000,resolved=False):
  d=a.output/name;d.mkdir();(d/'DATA').mkdir();s=base
  opts=dict(maxstep=1,maxtotstep=2,tracers_per_element=32,pices_checkpoint='off',Q0=source,dissipation_number=0,lith_age=int(ta),lith_age_asml=int(ta),lith_age_asml_tau_Ma=.1,
@@ -58,19 +58,24 @@ for xyz,delta,num,den in local_mapping:
   row[1]+=u;row[2]+=v
 mapping=max(abs(u/v-t) for t,u,v in assembled.values())
 reported=float(fields(next(l for l in (ta/'DATA/0/log').read_text().splitlines() if l.startswith('PICES_TA ')))['mapping_error'])
-assert abs(mapping-reported)<1e-13,(mapping,reported)
+if consistent:
+ assert reported<1e-11,reported
+ mapping=reported # Independent consistent operator is checked by run_consistent_projection.py.
+else:assert abs(mapping-reported)<1e-13,(mapping,reported)
 rows=(ta/'DATA/0/log').read_text().splitlines();ledger=fields(next(x for x in rows if x.startswith('PICES_EBA ')))
 reaction=float(ledger['boundary_reaction'])/h['dt']*4*3400*6371000
 flux=boundary(ta,1,'botm')-boundary(ta,1,'surf');balance=abs(flux-reaction)/max(1,abs(flux)+abs(reaction));assert balance<1e-12,balance
-results['multisubstep_TA_and_CBF']=dict(status='PASS',TA_grid_error=err,particle_Q_error=qerr,mapping_diagnostic_error=abs(mapping-reported),CBF_before_after_TA_equal=True,relative_CBF_boundary_residual=balance)
+results['multisubstep_TA_and_CBF']=dict(projection='bounded_consistent' if consistent else 'lumped',mapping_error=reported,status='PASS',TA_grid_error=err,particle_Q_error=qerr,mapping_diagnostic_error=None if consistent else abs(mapping-reported),CBF_before_after_TA_equal=True,relative_CBF_boundary_residual=balance)
 # Mapping is intentionally not fed back to T. Verify P(Q(delta))-delta shrinks
 # under radial/horizontal refinement with the same physical TA law.
 # A synthetic 10000 Ma age resolves the HSC layer on these coarse meshes;
 # a continuous linear initial T gives a continuous increment at the top BC.
-for nz in [5,9,17,25]:
+grids=[5,9] if consistent else [5,9,17,25]
+for nz in grids:
  d=run('mapping_'+str(nz),nz,source=0,resolved=True)
  log=(d/'DATA/0/log').read_text().splitlines();row=fields(next(x for x in log if x.startswith('PICES_TA ')))
  mapping_errors.append(float(row['mapping_error']))
-assert mapping_errors[2]<min(mapping_errors[:2]) and mapping_errors[3]<.85*mapping_errors[2],mapping_errors
-results['mapping_refinement']=dict(status='PASS',nodes=[5,9,17,25],max_errors=mapping_errors,coarse_to_fine_ratio=mapping_errors[0]/mapping_errors[3])
+if consistent:assert max(mapping_errors)<1e-11,mapping_errors
+else:assert mapping_errors[2]<min(mapping_errors[:2]) and mapping_errors[3]<.85*mapping_errors[2],mapping_errors
+results['mapping_refinement']=dict(status='PASS',nodes=grids,max_errors=mapping_errors,coarse_to_fine_ratio=mapping_errors[0]/max(1e-30,mapping_errors[-1]))
 (a.output/'summary.json').write_text(json.dumps(results,indent=2)+'\n');print(json.dumps(results,indent=2))

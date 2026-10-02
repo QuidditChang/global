@@ -55,7 +55,7 @@ libCitcomS_a_SOURCES = $(sources)
 libCitcomS_la_LDFLAGS = -release $(VERSION)
 libCitcomS_la_SOURCES = $(sources)
 
-sources = Pices_benchmark.c pices_benchmark.h Pices.c Pices_checkpoint.c pices.h pices_sha256.h \
+sources = Pices_benchmark.c pices_benchmark.h Pices.c Pices_projection.c Pices_checkpoint.c pices.h pices_sha256.h \
 	Advection_diffusion.c \
 	advection_diffusion.h \
 	temperature_audit.h \

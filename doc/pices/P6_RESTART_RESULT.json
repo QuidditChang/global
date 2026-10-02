@@ -1,0 +1,104 @@
+{
+  "status": "PASS",
+  "scope": "P4 same-partition restart",
+  "provenance_checked": false,
+  "cases": {
+    "continuous": {
+      "particles": {
+        "0": 98304,
+        "1": 98304,
+        "2": 98304,
+        "3": 98304,
+        "4": 98304
+      },
+      "max_cfl": 3.931734597206592e-07,
+      "stokes": [
+        {
+          "iterations": 22,
+          "div_v": 6.934e-08,
+          "dv_v": 5.107e-06,
+          "dp_p": 5.709e-07,
+          "step": 1
+        },
+        {
+          "iterations": 37,
+          "div_v": 1.598e-07,
+          "dv_v": 7.576e-06,
+          "dp_p": 9.835e-07,
+          "step": 2
+        },
+        {
+          "iterations": 38,
+          "div_v": 1.157e-07,
+          "dv_v": 5.387e-06,
+          "dp_p": 5.951e-07,
+          "step": 3
+        },
+        {
+          "iterations": 38,
+          "div_v": 1.2e-07,
+          "dv_v": 5.336e-06,
+          "dp_p": 5.701e-07,
+          "step": 4
+        }
+      ]
+    },
+    "split": {
+      "particles": {
+        "0": 98304,
+        "1": 98304,
+        "2": 98304
+      },
+      "max_cfl": 9.602717620570494e-08,
+      "stokes": [
+        {
+          "iterations": 22,
+          "div_v": 6.934e-08,
+          "dv_v": 5.107e-06,
+          "dp_p": 5.709e-07,
+          "step": 1
+        },
+        {
+          "iterations": 37,
+          "div_v": 1.598e-07,
+          "dv_v": 7.576e-06,
+          "dp_p": 9.835e-07,
+          "step": 2
+        }
+      ]
+    },
+    "restart": {
+      "particles": {
+        "2": 98304,
+        "3": 98304,
+        "4": 98304
+      },
+      "max_cfl": 3.931734597206592e-07,
+      "stokes": [
+        {
+          "iterations": 38,
+          "div_v": 1.157e-07,
+          "dv_v": 5.387e-06,
+          "dp_p": 5.951e-07,
+          "step": 3
+        },
+        {
+          "iterations": 38,
+          "div_v": 1.2e-07,
+          "dv_v": 5.336e-06,
+          "dp_p": 5.701e-07,
+          "step": 4
+        }
+      ]
+    },
+    "P4": {
+      "status": "PASS",
+      "cbf_outputs_compared": 120,
+      "max_relative_heat_boundary_residual": 3.1650172910461413e-16,
+      "max_TA_delta": 3.021421274285174e-08,
+      "max_TA_mapping_error": 5.076995874945852e-14
+    }
+  },
+  "decoded_outputs_compared": 216,
+  "binary_live_state_equal": true
+}
