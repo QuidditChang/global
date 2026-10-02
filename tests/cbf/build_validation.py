@@ -16,15 +16,16 @@ ROOT=Path(__file__).resolve().parents[2]
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir',type=Path,required=True)
+    parser.add_argument('--optimization',choices=['O0','O1','O2'],default='O0')
     args=parser.parse_args();build=args.build_dir.resolve();build.mkdir(parents=True,exist_ok=True)
     source_list=(ROOT/'lib/Makefile.am').read_text().split('sources =',1)[1].split('EXTRA_DIST',1)[0]
     sources=[ROOT/'lib'/v for v in source_list.replace('\\','').split() if v.endswith('.c')]
-    (build/'VALIDATION_BUILD.txt').write_text('parser_workaround=False\nsource=%s\n'%ROOT)
+    (build/'VALIDATION_BUILD.txt').write_text('parser_workaround=False\nsource=%s\noptimization=%s\n'%(ROOT,args.optimization))
     flags=[]
     libs=[]
     compiler=os.environ.get('MPICC','mpicc')
     command=[compiler,'-std=gnu99','-w','-Wno-error=implicit-function-declaration',
-             '-Wno-error=implicit-int','-Wno-error=int-conversion','-O0','-g',
+             '-Wno-error=implicit-int','-Wno-error=int-conversion','-'+args.optimization,'-g',
              '-DUSE_GZDIR','-DPICES_SOLVER_COMMIT=\"'+subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()+'\"','-I'+str(ROOT/'lib'),
              '-I'+str(ROOT/'tests/cbf'),*flags]
     sources += [ROOT/'bin/Citcom.c',ROOT/'bin/CitcomSFull.c']

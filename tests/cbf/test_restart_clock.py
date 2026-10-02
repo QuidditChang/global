@@ -27,8 +27,11 @@ struct All_variables {
  struct {int me,nprocx,nprocy,nprocz,world;} parallel;
  struct {int nox,noy,noz;} lmesh;
  struct {int caps_per_proc;} sphere;
+ struct {int enabled;} pices;
  FILE *fp;
 };
+/* This fixture checks the legacy PG clock path. Unexpected PIC preflight fails. */
+void pices_checkpoint_preflight(struct All_variables *E,const char *path) {exit(43);}
 void parallel_process_termination(void) {exit(42);}
 '''
         main=r'''

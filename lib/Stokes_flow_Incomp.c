@@ -34,6 +34,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "pices.h"
+#include "pices_benchmark.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -1104,12 +1105,13 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 
 /* P3 needs an accurate Schur action even after its pressure RHS becomes
  * small. The legacy imp*initial_force_norm tolerance is then too permissive.
- * Keep PG and constant-physics PICES arithmetic unchanged. */
+ * P5 explicitly uses the same policy in both coupled benchmark arms.
+ * Ordinary PG and constant-physics PICES arithmetic remain unchanged. */
 static double pices_stokes_inner_tolerance(struct All_variables *E,
     double **rhs,int lev,double legacy_tolerance)
 {
     double global_vdot();
-    if(E->pices.enabled && E->pices.eba)
+    if(((E->pices.enabled && E->pices.eba) || p5_coupled()))
         return fmax(1.0e-14,1.0e-6*sqrt(global_vdot(E,rhs,rhs,lev)/E->mesh.neq));
     return legacy_tolerance;
 }
@@ -1270,7 +1272,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         assemble_grad_p(E, s2, F, lev);
         valid = solve_del2_u(E, E->u1, F,
             pices_stokes_inner_tolerance(E,F,lev,imp*v_res), lev);
-        if(E->pices.enabled && E->pices.eba && !valid)
+        if(((E->pices.enabled && E->pices.eba) || p5_coupled()) && !valid)
             pices_fail(E,"P3 Stokes inner velocity solve did not converge");
         if(!valid && (E->parallel.me==0)) {
             fputs("Warning: solver not converging! 1\n", stderr);
@@ -1358,7 +1360,7 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
         free((void *) s2[m]);
     }
 
-    if(E->pices.enabled && E->pices.eba) {
+    if(((E->pices.enabled && E->pices.eba) || p5_coupled())) {
         int converged=isfinite(dvelocity) && isfinite(dpressure) &&
             isfinite(E->monitor.incompressibility) &&
             ((dvelocity>=0 && dvelocity<imp) ||
@@ -2514,7 +2516,7 @@ static double initial_vel_residual(struct All_variables *E,
     /* solve K*u1 = F for u1 */
     valid = solve_del2_u(E, E->u1, F,
         pices_stokes_inner_tolerance(E,F,lev,imp*v_res), lev);
-    if(E->pices.enabled && E->pices.eba && !valid)
+    if(((E->pices.enabled && E->pices.eba) || p5_coupled()) && !valid)
         pices_fail(E,"P3 initial momentum correction did not converge");
     if(!valid && (E->parallel.me==0)) {
         fputs("Warning: solver not converging! 0\n", stderr);

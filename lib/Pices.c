@@ -8,6 +8,7 @@
 #include "global_defs.h"
 #include "parsing.h"
 #include "pices.h"
+#include "pices_benchmark.h"
 #include "temperature_audit.h"
 #include "phase_change.h"
 #include "lith_age.h"
@@ -216,6 +217,7 @@ static void assemble(struct All_variables *E,const double *field)
             }
             if(sqrt(rms)<p->length[e]) p->length[e]=sqrt(rms);
         }
+        if(p5_length_scale()!=1)p->length[e]*=p5_length_scale();
         for(a=1;a<=8;a++) for(b=1;b<=8;b++) p->rate[E->ien[1][e].node[a]]+=fabs(ke[(a-1)*8+b-1]);
     }
     for(d=0;d<3;d++) {

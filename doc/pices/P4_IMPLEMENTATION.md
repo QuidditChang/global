@@ -2,7 +2,8 @@
 
 2026-10-01。P3 HPC 作业 12249416 审计通过后进入本阶段。
 `pices_p4=on` 是显式开关，依赖 `energy_solver=pices`、`pices_eba=on`。
-本地验证记录见 `P4_LOCAL_RESULT.json`；HPC 验收仍待回传结果。
+本地验证记录见 `P4_LOCAL_RESULT.json`。2026-10-01，HPC 作业 12252234
+通过阶段验收；完整报告位于 runs 的 `PICES_P4_HPC_AUDIT_12252234.md`。
 
 ## TA 编排
 
@@ -91,8 +92,8 @@ P2/P3 继续使用原 schema 1。
 
 阶段范围仍为均匀 Newtonian 黏度、无组分反馈、固定分区、无补粒子。
 Pyre 参数已接线，但本阶段运行验证使用 standalone CitcomSFull；没有宣称
-在本地验证 Python 2.6/Pyre 安装或真实板块重建数据。本地通过后交给 HPC
-运行下面三段算例，回传通过审计才进入下一阶段。
+在本地验证 Python 2.6/Pyre 安装或真实板块重建数据。HPC 作业 12252234 已完成三段算例并通过审计；本次 HPC 每步只有一个热子步，
+多子步证据仍来自本地制造解。P5 可行性实验见 `P5_IMPLEMENTATION.md`。
 
 ## 重复验证
 

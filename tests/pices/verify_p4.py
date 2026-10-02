@@ -3,12 +3,13 @@ import math
 from pathlib import Path
 from verify_p2 import require, config, fields
 
-def boundary(root,step,side):
+def boundary(root,step,side,expected_state="pices"):
     total=0.; area=0.; declared=[]
     for rank in range(12):
         p=root/'DATA'/str(rank)/f'q.{side}.{rank}.{step}'
         lines=p.read_text().splitlines();nodes={}
-        require('state=PICES_heat_stage_average_before_TA derivative=material_heat_only advection=particles TA=excluded' in lines[3],'CBF stage semantics')
+        state='state=PICES_heat_stage_average_before_TA derivative=material_heat_only advection=particles TA=excluded' if expected_state=='pices' else 'state=output_T_and_solver_Tdot'
+        require(state in lines[3],'CBF stage semantics')
         scale=fields(lines[1]);length=float(scale['length_scale_m']);qscale=float(scale['k0_W_m_K'])*float(scale['deltaT_K'])/length
         hdr=fields(lines[2]);declared.append((float(hdr['global_heat_W']),float(hdr['global_area_m2'])))
         for line in lines:

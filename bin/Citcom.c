@@ -36,6 +36,7 @@
 #include "output.h"
 #include "parallel_related.h"
 #include "checkpoints.h"
+#include "pices_benchmark.h"
 
 extern int Emergency_stop;
 
@@ -144,7 +145,7 @@ int main(argc,argv)
               assert(0);
       }
       else
-          general_stokes_solver(E);
+          {p5_tick(1);if(!p5_velocity(E))general_stokes_solver(E);p5_tock(1);}
   }
 
   (E->problem_output)(E, E->monitor.solution_cycles);
@@ -153,6 +154,7 @@ int main(argc,argv)
 
   /* information about simulation time and wall clock time */
   output_time(E, E->monitor.solution_cycles);
+  p5_report(E);
 
   output_checkpoint(E);
 
@@ -183,6 +185,7 @@ int main(argc,argv)
     if(E->monitor.solution_cycles>E->control.print_convergence)
       E->control.print_convergence=1;
 
+    p5_tick(0);
     (E->next_buoyancy_field)(E);
     /* */
 
@@ -207,7 +210,8 @@ int main(argc,argv)
     if(E->control.tracer==1)
       tracer_advection(E);
 
-    general_stokes_solver(E);
+    p5_tock(0);
+    p5_tick(1);if(!p5_velocity(E))general_stokes_solver(E);p5_tock(1);
     if(E->output.write_q_files)
       if ((E->monitor.solution_cycles % E->output.write_q_files)==0)
 	heat_flux(E);
@@ -220,6 +224,7 @@ int main(argc,argv)
 
     /* information about simulation time and wall clock time */
     output_time(E, E->monitor.solution_cycles);
+    p5_report(E);
 
     if ((E->monitor.solution_cycles % E->control.checkpoint_frequency)==0) {
 	output_checkpoint(E);

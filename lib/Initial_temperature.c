@@ -31,6 +31,7 @@
 
 #include "global_defs.h"
 #include "pices.h"
+#include "pices_benchmark.h"
 #include "lith_age.h"
 #include "parsing.h"
 
@@ -56,6 +57,7 @@ void tic_input(struct All_variables *E)
   int n;
 
 
+  p5_parameters(E);
   input_int("tic_method", &(E->convection.tic_method), "0,0,2", m);
   /* When tic_method is 0 (default), the temperature is a linear profile +
      perturbation at some layers.
@@ -206,6 +208,7 @@ void convection_initial_temperature(struct All_variables *E)
   /* Note: it is the callee's responsibility to conform tbc. */
   /* like a call to temperatures_conform_bcs(E); */
 
+  p5_initial(E);
   initialize_temperature_anomaly(E);
   if(E->pices.enabled) pices_initialize(E);
 
