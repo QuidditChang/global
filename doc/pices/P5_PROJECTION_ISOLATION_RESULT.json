@@ -1,0 +1,544 @@
+{
+  "status": "PASS",
+  "scope": "Frozen production P/Q diagnostic plus offline consistent-projection candidate",
+  "production_algorithm_changed": false,
+  "production_approved": false,
+  "cases": {
+    "cold_grid_coarse": {
+      "global_nodes": 970,
+      "particles": 24576,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.2212453270876722e-15,
+      "boundary_reference_max_error": 9.992007221626409e-16,
+      "initial_energy": 1.3683405754116613,
+      "raw_projection_energy": 1.4074267216822705,
+      "clamped_projection_energy": 1.372458427214327,
+      "raw_change_percent": 2.8564632937856262,
+      "boundary_correction_percent": -2.5555256561345017,
+      "net_change_percent": 0.30093763765112486,
+      "grid_max_error_K": 168.05224980739837,
+      "grid_volume_weighted_rms_K": 27.17826544634654,
+      "consistent_candidate": {
+        "max_error_K": 1.5594092683812733e-08,
+        "energy_change_percent": 1.2819559767713645e-12,
+        "iterations": 35,
+        "solve_seconds": 0.002658514998984174
+      },
+      "input_case": "cold_pices_grid_coarse",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "cold_base": {
+      "global_nodes": 6930,
+      "particles": 196608,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.3322676295501878e-15,
+      "boundary_reference_max_error": 1.3322676295501878e-15,
+      "initial_energy": 1.4040587236662367,
+      "raw_projection_energy": 1.41532874937339,
+      "clamped_projection_energy": 1.405283899766152,
+      "raw_change_percent": 0.8026748110453121,
+      "boundary_correction_percent": -0.715415205783489,
+      "net_change_percent": 0.087259605261823,
+      "grid_max_error_K": 152.42496523980415,
+      "grid_volume_weighted_rms_K": 14.32481254370745,
+      "consistent_candidate": {
+        "max_error_K": 4.4085779471458864e-08,
+        "energy_change_percent": -4.111765149662764e-12,
+        "iterations": 40,
+        "solve_seconds": 0.00850834600169037
+      },
+      "input_case": "cold_pices_base",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "cold_grid_fine": {
+      "global_nodes": 22490,
+      "particles": 663552,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.887379141862766e-15,
+      "boundary_reference_max_error": 1.887379141862766e-15,
+      "initial_energy": 1.4108219690432584,
+      "raw_projection_energy": 1.415943312702527,
+      "clamped_projection_energy": 1.4113232007770207,
+      "raw_change_percent": 0.3630042465770179,
+      "boundary_correction_percent": -0.3274766077423199,
+      "net_change_percent": 0.035527638834698026,
+      "grid_max_error_K": 123.19840372860544,
+      "grid_volume_weighted_rms_K": 9.19412269003185,
+      "consistent_candidate": {
+        "max_error_K": 6.185167933381308e-08,
+        "energy_change_percent": 6.925014517123537e-13,
+        "iterations": 41,
+        "solve_seconds": 0.02081502500004717
+      },
+      "input_case": "cold_pices_grid_fine",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "cold_np_low": {
+      "global_nodes": 6930,
+      "particles": 98304,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.1102230246251565e-15,
+      "boundary_reference_max_error": 1.1102230246251565e-15,
+      "initial_energy": 1.4040587236662367,
+      "raw_projection_energy": 1.41521833924529,
+      "clamped_projection_energy": 1.4051001566587777,
+      "raw_change_percent": 0.7948111707118308,
+      "boundary_correction_percent": -0.7206381340013973,
+      "net_change_percent": 0.07417303671043356,
+      "grid_max_error_K": 167.98688653591375,
+      "grid_volume_weighted_rms_K": 18.928394156227494,
+      "consistent_candidate": {
+        "max_error_K": 8.731638745373971e-08,
+        "energy_change_percent": 5.408552619941021e-12,
+        "iterations": 42,
+        "solve_seconds": 0.008434433999354951
+      },
+      "input_case": "cold_pices_np_low",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "cold_np_high": {
+      "global_nodes": 6930,
+      "particles": 393216,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 2.220446049250313e-15,
+      "boundary_reference_max_error": 2.220446049250313e-15,
+      "initial_energy": 1.4040587236662367,
+      "raw_projection_energy": 1.415035550361167,
+      "clamped_projection_energy": 1.405164338322951,
+      "raw_change_percent": 0.7817925639369127,
+      "boundary_correction_percent": -0.7030483748172882,
+      "net_change_percent": 0.07874418911962444,
+      "grid_max_error_K": 164.7606153065164,
+      "grid_volume_weighted_rms_K": 11.025853380630691,
+      "consistent_candidate": {
+        "max_error_K": 3.047683216905739e-08,
+        "energy_change_percent": 5.614140877424159e-12,
+        "iterations": 39,
+        "solve_seconds": 0.007817555000656284
+      },
+      "input_case": "cold_pices_np_high",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "hot_grid_coarse": {
+      "global_nodes": 970,
+      "particles": 24576,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.3322676295501878e-15,
+      "boundary_reference_max_error": 1.3322676295501878e-15,
+      "initial_energy": 1.3700518479751498,
+      "raw_projection_energy": 1.4090397532499868,
+      "clamped_projection_energy": 1.3739599792274722,
+      "raw_change_percent": 2.845724804682293,
+      "boundary_correction_percent": -2.5604705452833993,
+      "net_change_percent": 0.28525425939889343,
+      "grid_max_error_K": 109.81867040138678,
+      "grid_volume_weighted_rms_K": 26.72518711313655,
+      "consistent_candidate": {
+        "max_error_K": 1.601705434950418e-08,
+        "energy_change_percent": 1.1344915426174524e-12,
+        "iterations": 35,
+        "solve_seconds": 0.0023684089992457302
+      },
+      "input_case": "hot_pices_grid_coarse",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "hot_base": {
+      "global_nodes": 6930,
+      "particles": 196608,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.3322676295501878e-15,
+      "boundary_reference_max_error": 1.3322676295501878e-15,
+      "initial_energy": 1.4058475059973177,
+      "raw_projection_energy": 1.4170703712863741,
+      "clamped_projection_energy": 1.407016032836517,
+      "raw_change_percent": 0.7982989080380305,
+      "boundary_correction_percent": -0.7151798759798219,
+      "net_change_percent": 0.0831190320582085,
+      "grid_max_error_K": 102.4414967246787,
+      "grid_volume_weighted_rms_K": 14.080858558053675,
+      "consistent_candidate": {
+        "max_error_K": 4.401556896738157e-08,
+        "energy_change_percent": -4.0907390332342945e-12,
+        "iterations": 40,
+        "solve_seconds": 0.008096092999039683
+      },
+      "input_case": "hot_pices_base",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "hot_grid_fine": {
+      "global_nodes": 22490,
+      "particles": 663552,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.887379141862766e-15,
+      "boundary_reference_max_error": 1.887379141862766e-15,
+      "initial_energy": 1.4126365107814334,
+      "raw_projection_energy": 1.417742443052857,
+      "clamped_projection_energy": 1.4131199967077381,
+      "raw_change_percent": 0.3614469987469786,
+      "boundary_correction_percent": -0.3272212143633293,
+      "net_change_percent": 0.034225784383649344,
+      "grid_max_error_K": 83.55665586814422,
+      "grid_volume_weighted_rms_K": 9.043861443257462,
+      "consistent_candidate": {
+        "max_error_K": 6.196643198563834e-08,
+        "energy_change_percent": 7.230488344734411e-13,
+        "iterations": 41,
+        "solve_seconds": 0.0315735219992348
+      },
+      "input_case": "hot_pices_grid_fine",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "hot_np_low": {
+      "global_nodes": 6930,
+      "particles": 98304,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.1102230246251565e-15,
+      "boundary_reference_max_error": 1.1102230246251565e-15,
+      "initial_energy": 1.4058475059973177,
+      "raw_projection_energy": 1.416960101608053,
+      "clamped_projection_energy": 1.406832027552832,
+      "raw_change_percent": 0.7904552636988931,
+      "boundary_correction_percent": -0.7204247979965691,
+      "net_change_percent": 0.07003046570232395,
+      "grid_max_error_K": 126.83730066883163,
+      "grid_volume_weighted_rms_K": 18.71816334859232,
+      "consistent_candidate": {
+        "max_error_K": 8.73343175555874e-08,
+        "energy_change_percent": 5.3542877693684394e-12,
+        "iterations": 42,
+        "solve_seconds": 0.007528535999881569
+      },
+      "input_case": "hot_pices_np_low",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "hot_np_high": {
+      "global_nodes": 6930,
+      "particles": 393216,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 2.220446049250313e-15,
+      "boundary_reference_max_error": 2.220446049250313e-15,
+      "initial_energy": 1.4058475059973177,
+      "raw_projection_energy": 1.416778907497462,
+      "clamped_projection_energy": 1.4068983490250129,
+      "raw_change_percent": 0.7775666602182046,
+      "boundary_correction_percent": -0.7028186506928238,
+      "net_change_percent": 0.07474800952538077,
+      "grid_max_error_K": 112.68083946821046,
+      "grid_volume_weighted_rms_K": 10.623827696216855,
+      "consistent_candidate": {
+        "max_error_K": 3.036264573097469e-08,
+        "energy_change_percent": 5.575408798191914e-12,
+        "iterations": 39,
+        "solve_seconds": 0.007186094000644516
+      },
+      "input_case": "hot_pices_np_high",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "assim_grid_coarse": {
+      "global_nodes": 970,
+      "particles": 24576,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 9.992007221626409e-16,
+      "boundary_reference_max_error": 9.992007221626409e-16,
+      "initial_energy": 1.971628835777199,
+      "raw_projection_energy": 2.009004744846761,
+      "clamped_projection_energy": 1.9259851536736332,
+      "raw_change_percent": 1.8956868753052585,
+      "boundary_correction_percent": -4.210710944507076,
+      "net_change_percent": -2.3150240692018174,
+      "grid_max_error_K": 298.17102878675473,
+      "grid_volume_weighted_rms_K": 116.51085581498094,
+      "consistent_candidate": {
+        "max_error_K": 1.8372126042720538e-08,
+        "energy_change_percent": 6.081473575742858e-13,
+        "iterations": 35,
+        "solve_seconds": 0.00231129200074065
+      },
+      "input_case": "assim_pices_grid_coarse",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "assim_base": {
+      "global_nodes": 6930,
+      "particles": 196608,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.4432899320127035e-15,
+      "boundary_reference_max_error": 1.4432899320127035e-15,
+      "initial_energy": 2.11972968528329,
+      "raw_projection_energy": 2.134477261493678,
+      "clamped_projection_energy": 2.0923136407503575,
+      "raw_change_percent": 0.6957290975720218,
+      "boundary_correction_percent": -1.9891036595869211,
+      "net_change_percent": -1.2933745620148995,
+      "grid_max_error_K": 296.2487162596639,
+      "grid_volume_weighted_rms_K": 85.12370528640874,
+      "consistent_candidate": {
+        "max_error_K": 4.8176862499360595e-08,
+        "energy_change_percent": -2.367381136446675e-12,
+        "iterations": 40,
+        "solve_seconds": 0.0059845700016012415
+      },
+      "input_case": "assim_pices_base",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "assim_grid_fine": {
+      "global_nodes": 22490,
+      "particles": 663552,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.4432899320127035e-15,
+      "boundary_reference_max_error": 1.4432899320127035e-15,
+      "initial_energy": 2.1646447257163066,
+      "raw_projection_energy": 2.1728225980526856,
+      "clamped_projection_energy": 2.144916612138355,
+      "raw_change_percent": 0.37779281926612024,
+      "boundary_correction_percent": -1.2891716401681697,
+      "net_change_percent": -0.9113788209020495,
+      "grid_max_error_K": 302.2195612844314,
+      "grid_volume_weighted_rms_K": 71.42041808081046,
+      "consistent_candidate": {
+        "max_error_K": 7.20382420382748e-08,
+        "energy_change_percent": -1.887432465052017e-12,
+        "iterations": 41,
+        "solve_seconds": 0.023511523999331985
+      },
+      "input_case": "assim_pices_grid_fine",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "assim_np_low": {
+      "global_nodes": 6930,
+      "particles": 98304,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 9.992007221626409e-16,
+      "boundary_reference_max_error": 9.992007221626409e-16,
+      "initial_energy": 2.11972968528329,
+      "raw_projection_energy": 2.1339836497972415,
+      "clamped_projection_energy": 2.091552731964125,
+      "raw_change_percent": 0.6724425577899327,
+      "boundary_correction_percent": -2.0017136207367843,
+      "net_change_percent": -1.3292710629468516,
+      "grid_max_error_K": 378.3213822145884,
+      "grid_volume_weighted_rms_K": 87.77473997114325,
+      "consistent_candidate": {
+        "max_error_K": 9.33086274912398e-08,
+        "energy_change_percent": 3.854850700054762e-12,
+        "iterations": 42,
+        "solve_seconds": 0.007372928999757278
+      },
+      "input_case": "assim_pices_np_low",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "assim_np_high": {
+      "global_nodes": 6930,
+      "particles": 393216,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.887379141862766e-15,
+      "boundary_reference_max_error": 1.887379141862766e-15,
+      "initial_energy": 2.11972968528329,
+      "raw_projection_energy": 2.1334630388242943,
+      "clamped_projection_energy": 2.0919789056558438,
+      "raw_change_percent": 0.6478823048217518,
+      "boundary_correction_percent": -1.9570482716010293,
+      "net_change_percent": -1.3091659667792774,
+      "grid_max_error_K": 261.5630160887297,
+      "grid_volume_weighted_rms_K": 85.27907268021349,
+      "consistent_candidate": {
+        "max_error_K": 3.1294633551226525e-08,
+        "energy_change_percent": 4.3157567620178316e-12,
+        "iterations": 39,
+        "solve_seconds": 0.007877301999542397
+      },
+      "input_case": "assim_pices_np_high",
+      "profile": "keep",
+      "mpi_exit": 0
+    },
+    "constant": {
+      "global_nodes": 6930,
+      "particles": 196608,
+      "Q_reference_max_error": 2.220446049250313e-16,
+      "P_reference_max_error": 3.3306690738754696e-16,
+      "boundary_reference_max_error": 3.3306690738754696e-16,
+      "initial_energy": 1.7308675229620376,
+      "raw_projection_energy": 1.7308675229620376,
+      "clamped_projection_energy": 1.7308675229620376,
+      "raw_change_percent": 0.0,
+      "boundary_correction_percent": 0.0,
+      "net_change_percent": 0.0,
+      "grid_max_error_K": 7.549516567451064e-13,
+      "grid_volume_weighted_rms_K": 1.561595747239644e-13,
+      "consistent_candidate": {
+        "max_error_K": 4.865965408384909e-08,
+        "energy_change_percent": -8.081964636055964e-13,
+        "iterations": 40,
+        "solve_seconds": 0.00805458600007114
+      },
+      "bounded_sharp_candidate": {
+        "min": 0.0,
+        "max": 1.0,
+        "min_K": 300.0,
+        "max_K": 3700.0,
+        "iterations": 21,
+        "projected_gradient_inf": 1.413576788955595e-06,
+        "FE_energy": 1.2526400650472658,
+        "lumped_FE_energy": 1.2529526607892585,
+        "unbounded_FE_energy": 1.2415474107010451,
+        "physical_energy_conservation_proven": false
+      },
+      "sharp_particle_profile": {
+        "particle_min": 0.0,
+        "particle_max": 1.0,
+        "lumped_min": 0.0,
+        "lumped_max": 1.0,
+        "consistent_min": -0.2758273167293416,
+        "consistent_max": 1.3433026819245764,
+        "consistent_min_K": -637.8128768797613,
+        "consistent_max_K": 4867.22911854356,
+        "consistent_iterations": 41
+      },
+      "input_case": "cold_pices_base",
+      "profile": "constant",
+      "mpi_exit": 0
+    },
+    "cartesian_linear": {
+      "global_nodes": 6930,
+      "particles": 196608,
+      "Q_reference_max_error": 3.3306690738754696e-16,
+      "P_reference_max_error": 1.1102230246251565e-15,
+      "boundary_reference_max_error": 1.1102230246251565e-15,
+      "initial_energy": 1.7308675229620378,
+      "raw_projection_energy": 1.7308663071876977,
+      "clamped_projection_energy": 1.7308721122263775,
+      "raw_change_percent": -7.024075060408696e-05,
+      "boundary_correction_percent": 0.0003353831880684482,
+      "net_change_percent": 0.00026514243746436123,
+      "grid_max_error_K": 19.656751238520442,
+      "grid_volume_weighted_rms_K": 3.494506907513537,
+      "consistent_candidate": {
+        "max_error_K": 6.131264385089708e-08,
+        "energy_change_percent": 1.6292214425065196e-12,
+        "iterations": 40,
+        "solve_seconds": 0.005730636999942362
+      },
+      "input_case": "cold_pices_base",
+      "profile": "cartesian_linear",
+      "mpi_exit": 0
+    }
+  },
+  "binary_sha256": "0749054f50afd9b54763058791577a67010753351f1053b077367c68a4a7c871",
+  "numpy": "2.2.6",
+  "source_sha256": {
+    "tests/pices/run_projection_probe.py": "1b514cb68a8bd07c58e3a24eca5e6a75f2aa6d19a3a11197d8473b0a3d935db5",
+    "tests/pices/build_projection_probe.py": "28aa5878588e5234b301ef7486b73d83afabd1cfdd240ce01b33e64ca2580002",
+    "tests/pices/projection_probe.inc": "ff65955a5eb99279db0735c549cb55142457c2a217bb31a48f354ce62142f775",
+    "lib/Pices.c": "c393b5b2776e2a6b7ebf302e7bd6eac826170520b2434a4a1c0599bd6c7763f3"
+  },
+  "full_step_control": {
+    "mpi_exit": 8,
+    "initial_particle_T_matches_printed_precision": true,
+    "initial_particle_T_max_rounding_difference": 4.999994909216099e-07,
+    "full_first_remap_percent": -1.293626288979717,
+    "frozen_remap_percent": -1.2933745620148995,
+    "difference_percentage_points": -0.0002517269648174558,
+    "frozen_to_full_magnitude_ratio": 0.9998054098258811,
+    "note": "Same-build one-step P5 assimilation control; initial particle temperatures matching at ASCII output precision. Frozen probe itself executes no temporal operators."
+  },
+  "date": "2026-10-02",
+  "solver_base_commit": "8d7cc8cb326e747b03a9cc4d62da041bfabdad6c",
+  "scipy": "1.15.3",
+  "byteorder": "little",
+  "compiler": "Apple clang 21.0.0 / OpenMPI 5.0.9; O2",
+  "case_count": 17,
+  "full_step_control_count": 1,
+  "raw_data_directory": "/tmp/pices-projection-isolation",
+  "stationary_PQ_consistency": "FAIL for nonconstant fields with current lumped projection",
+  "selected_next_direction": "Bounded consistent absolute-temperature projection, with separate signed-increment operators and explicit transport-energy accounting; not yet a production implementation.",
+  "input_sha256": {
+    "cold_grid_coarse": {
+      "case.cfg": "f193efdc39ee9ddc05a95d9bfd5e3766f12d82ae37a0715ed18e4111e9f96b12",
+      "refstate.txt": "e96d83af07d0e5cfbd7b3769800879b594931be4b1fcab6609aaedda3f774ab4"
+    },
+    "cold_base": {
+      "case.cfg": "3180eb1d8ce0fadb543d3973cf3da5944db18138b34e30f89ed89b746497b049",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "cold_grid_fine": {
+      "case.cfg": "0b457a2bec2b211b7ea7f0f4bb802435e50f572e553c2774a74fe6c477fe7b25",
+      "refstate.txt": "64d76a06e2e5a09072f5be9dbcc8354179993895000026d6bd15eb8511eb02f3"
+    },
+    "cold_np_low": {
+      "case.cfg": "06c361624b1a5ad579ea482b3404c4c7170238380683b721e98952b69616a72c",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "cold_np_high": {
+      "case.cfg": "03cddd7de09a5f7fa7e5ccf462633a743ef46e64af15928e9408eba91fa9f90a",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "hot_grid_coarse": {
+      "case.cfg": "323201f458acc19459177e36a3f11f98603ebb51143448d29e0b3bdeda906ba3",
+      "refstate.txt": "e96d83af07d0e5cfbd7b3769800879b594931be4b1fcab6609aaedda3f774ab4"
+    },
+    "hot_base": {
+      "case.cfg": "8641cd387f606ee129c24617255b27fdb607b13ccf9e339dd5a11b14ce5902ea",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "hot_grid_fine": {
+      "case.cfg": "ec15dd8f4eb8bd749c5d8cd34e58a62ab562e519f8e512f3fed7ce76fe79e572",
+      "refstate.txt": "64d76a06e2e5a09072f5be9dbcc8354179993895000026d6bd15eb8511eb02f3"
+    },
+    "hot_np_low": {
+      "case.cfg": "fd0ea8861ce0d80bd6805ed1ce0f34ea79faffd732a7da6737572c32c0583f57",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "hot_np_high": {
+      "case.cfg": "f3640afa237562941991b00f57393cc43c7dd1a79ad0302c290d190f5416d03c",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "assim_grid_coarse": {
+      "case.cfg": "c8cff9cd13b83dec01e549b5fb9449dcafe1a14aea7b1f4515ab602ef5046822",
+      "refstate.txt": "4629a5a1c5ae011198532c527fda6a4373c1e1e78517847d1b9cfeb48d157b54"
+    },
+    "assim_base": {
+      "case.cfg": "4859c231a03ae45e3dc59584fb4afc29927dfb6eb1ab979e9c271fbe63b9aa87",
+      "refstate.txt": "6a806588d439da44f704aa1f494d576dfde3d154b7ecc5b31d6c527f28c0eeb2"
+    },
+    "assim_grid_fine": {
+      "case.cfg": "caa788ad445368263a99185a788130e9a51f4ab1d0f00c87b7436c97dc08376f",
+      "refstate.txt": "d8801581dbcbed42f6b8ee76ddae067e8d5a288f2d744a0b5ef66980cccdf265"
+    },
+    "assim_np_low": {
+      "case.cfg": "8f772a3ecdc4d6086c59e20d2d4fae6cf51bb45337e6bf70b4cc3622e9f4ca6d",
+      "refstate.txt": "6a806588d439da44f704aa1f494d576dfde3d154b7ecc5b31d6c527f28c0eeb2"
+    },
+    "assim_np_high": {
+      "case.cfg": "da52ccbef94b71a1c27fce2bbe6042f05c176beb64f4af557d2187f9ed77a88d",
+      "refstate.txt": "6a806588d439da44f704aa1f494d576dfde3d154b7ecc5b31d6c527f28c0eeb2"
+    },
+    "constant": {
+      "case.cfg": "3180eb1d8ce0fadb543d3973cf3da5944db18138b34e30f89ed89b746497b049",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    },
+    "cartesian_linear": {
+      "case.cfg": "3180eb1d8ce0fadb543d3973cf3da5944db18138b34e30f89ed89b746497b049",
+      "refstate.txt": "f1b4a5de11efebc1eb055e2c2f8be4749647661607d16c42c0576ba258d2e1b4"
+    }
+  },
+  "findings": [
+    "Current Q and P agree with independent reconstruction to roundoff; this is a property of the present operators, not a discrepancy between C and reference implementations.",
+    "Same-build frozen/full-step remap magnitude ratio is 0.9998054; major bias already exists without any temporal operation.",
+    "Boundary reset is physically required and amplifies net energy loss in the assimilation profile; dropping it is not a fix.",
+    "Unbounded consistent projection restores frozen FE fields but produces negative absolute temperature for bounded sharp particle data.",
+    "A globally bounded QP avoids the demonstrated overshoot; local monotonicity, distributed implementation, signed increments and transport-energy conservation are not yet validated."
+  ]
+}
