@@ -27,9 +27,9 @@ def boundary(root,step,side,expected_state="pices"):
         require(math.isclose(area,a,rel_tol=1e-12),'CBF area integral')
     return total
 
-def verify_p4(root,local=False):
+def verify_p4(root,local=False,final_step=4,split_step=2):
     root=Path(root);max_balance=0.;max_delta=0.;max_mapping=0.;compared=0
-    for name,first,last in [('continuous',1,4),('split',1,2),('restart',3,4)]:
+    for name,first,last in [('continuous',1,final_step),('split',1,split_step),('restart',split_step+1,final_step)]:
         d=root/name;cfg=config(d/'case.cfg')
         for k,v in dict(pices_p4='on',lith_age='1',lith_age_asml='1',lith_age_time='1',temperature_bound_adj='0',output_q_surf_CBF='on',output_q_botm_CBF='on',CBF_use_advection='off').items():require(cfg.get(k)==v,'P4 cfg '+k)
         for rank in range(12):
@@ -39,7 +39,7 @@ def verify_p4(root,local=False):
                 require(row['calls']=='1','TA call count')
                 vals=[float(row[k]) for k in ['time','dt','delta_max','mapping_error','storage']]
                 require(all(map(math.isfinite,vals)) and vals[2]>0 and vals[3]>=0,'TA active finite ledger')
-                require(math.isclose(vals[0],int(row['step'])*vals[1],rel_tol=2e-7),'TA accepted end time')
+                require(math.isclose(vals[0],int(row['step'])*vals[1],rel_tol=max(2e-7,final_step*6e-8)),'TA accepted end time')
                 max_delta=max(max_delta,vals[2]);max_mapping=max(max_mapping,vals[3])
         log=(d/'DATA/0/log').read_text().splitlines()
         heat={int(fields(l)['step']):fields(l) for l in log if l.startswith('PICES_EBA ')}
@@ -53,7 +53,7 @@ def verify_p4(root,local=False):
         if name!='restart':require(not list((d/'DATA').glob('*/q.*.*.0')),'fabricated initial CBF')
         if not local:
             for f in (root/'pices_p4_forcing').iterdir():require((d/'pices_p4_forcing'/f.name).read_bytes()==f.read_bytes(),'actual forcing differs from archived input')
-    for name,steps in [('split',[1,2]),('restart',[2,3,4])]:
+    for name,steps in [('split',range(1,split_step+1)),('restart',range(split_step,final_step+1))]:
         for rank in range(12):
             for step in steps:
                 for side in ['surf','botm']:

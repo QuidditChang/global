@@ -43,10 +43,10 @@ def checkpoint(path):
     live.append(state.read_bytes())
     return meta,live
 
-def verify(root,local=False,stage="P2"):
+def verify(root,local=False,stage="P2",final_step=4,split_step=2):
     require(stage in ("P2","P3","P4"),"invalid audit stage")
     root=Path(root);summary={};states={}
-    for name,first,last in [('continuous',1,4),('split',1,2),('restart',3,4)]:
+    for name,first,last in [('continuous',1,final_step),('split',1,split_step),('restart',split_step+1,final_step)]:
         d=root/name;cfg=config(d/'case.cfg');dt=struct.unpack('f',struct.pack('f',float(cfg['fixed_timestep'])))[0]
         for k,v in dict(energy_solver='pices',pices_checkpoint='on',tracer='1',tracer_flavors='0',nodex='5',nodey='5',nodez='5',nproc_surf='12',nprocx='1',nprocy='1',nprocz='1',Q0=('1' if stage in ('P3','P4') else '0'),dissipation_number=('0.1' if stage in ('P3','P4') else '0'),CBF_frequency=('1' if stage=='P4' else '0'),tracers_per_element='128').items():require(cfg.get(k)==v,'unexpected '+name+' cfg '+k)
         if stage in ('P3','P4'):
@@ -62,7 +62,7 @@ def verify(root,local=False,stage="P2"):
             rows=[fields(x) for x in log.splitlines() if x.startswith('PICES_STEP ')];require([int(x['step']) for x in rows]==list(range(first,last+1)),'thermal steps')
             for row in rows:
                 require(all(math.isfinite(float(row[k])) for k in ['time','dt','cfl','Tmin','Tmax','mismatch','subgrid_max','remap_energy','heat_energy']),'nonfinite diagnostic')
-                require(math.isclose(float(row['time']),int(row['step'])*dt,rel_tol=2e-7),'time mismatch')
+                require(math.isclose(float(row['time']),int(row['step'])*dt,rel_tol=max(2e-7,final_step*6e-8)),'time mismatch')
                 cfl.append(float(row['cfl']));require(0<=cfl[-1]<=.25,'CFL')
             if stage in ('P3','P4'):
                 heat=[fields(x) for x in log.splitlines() if x.startswith('PICES_EBA ')]
@@ -109,13 +109,13 @@ def verify(root,local=False,stage="P2"):
                 if not local:require(metas[rank]['solver_commit']==(root/'solver_commit.txt').read_text().strip(),'checkpoint build commit')
         summary[name]=dict(particles=counts,max_cfl=max(cfl),stokes=blocks)
     compared=0
-    for name,steps in [('split',[0,1,2]),('restart',[2,3,4])]:
+    for name,steps in [('split',range(split_step+1)),('restart',range(split_step,final_step+1))]:
         for rank in range(12):
             for step in steps:
                 for field in ['velo','tracer','visc']:
                     rel=Path('DATA')/str(rank)/str(step)/f'{field}.{rank}.{step}.gz'
                     require(gzip.decompress((root/'continuous'/rel).read_bytes())==gzip.decompress((root/name/rel).read_bytes()),'field mismatch '+str(rel));compared+=1
-            for step in ([0,2] if name=='split' else [2,4]):require(states[('continuous',step,rank)]==states[(name,step,rank)],'binary live state mismatch')
+            for step in (range(0,split_step+1,2) if name=='split' else range(split_step,final_step+1,2)):require(states[('continuous',step,rank)]==states[(name,step,rank)],'binary live state mismatch')
     if not local:
         require((root/'launcher_exit_code.txt').read_text().strip()=='0','launcher failed')
         require((root/'runtime_source_diff.txt').read_text()=='','uncommitted runtime source')
@@ -135,7 +135,7 @@ def verify(root,local=False,stage="P2"):
         for f in ['runs_commit.txt','binary.sha256','platform.txt','mpi_version.txt','submitted.lsf']:require((root/f).stat().st_size>0,'missing provenance '+f)
     if stage=='P4':
         from verify_p4 import verify_p4
-        summary['P4']=verify_p4(root,local)
+        summary['P4']=verify_p4(root,local,final_step,split_step)
     return dict(status='PASS',scope=stage+' same-partition restart',provenance_checked=not local,cases=summary,decoded_outputs_compared=compared,binary_live_state_equal=True)
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--stage',choices=['P2','P3','P4'],default='P2');p.add_argument('--local',action='store_true');p.add_argument('--summary',type=Path);a=p.parse_args()

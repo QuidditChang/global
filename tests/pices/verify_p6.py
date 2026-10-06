@@ -4,9 +4,9 @@ from pathlib import Path
 from verify_p5 import verify as matrix
 from verify_p2 import verify as restart,require,config,fields
 
-def verify(root,local=False,partial=False):
+def verify(root,local=False,partial=False,stage="P6"):
  require(not partial or local,'partial audit allowed only for local validation')
- root=Path(root);report=matrix(root,local,partial);checks={}
+ root=Path(root);report=matrix(root,local,partial,"P7" if stage=="P7" else "P5");checks={}
  cases=[r['name'] for r in json.loads((root/'input/matrix.json').read_text())['cases'] if r['method']=='pices']
  for name in cases+['restart_suite/'+s for s in ['continuous','split','restart']]:
   d=root/name
@@ -28,9 +28,9 @@ def verify(root,local=False,partial=False):
   require((d/'refstate_EBA_PICES_P4.txt').read_bytes()==(archived/'refstate_EBA_PICES_P4.txt').read_bytes(),'restart refstate')
   for f in (archived/'pices_p4_forcing').iterdir():
    if not f.name.startswith('._'):require((d/'pices_p4_forcing'/f.name).read_bytes()==f.read_bytes(),'restart forcing')
- report['restart']=restart(suite,True,'P4');report['projection']=checks
+ report['restart']=restart(suite,True,'P4',64 if stage=='P7' else 4,32 if stage=='P7' else 2);report['projection']=checks
  if not local:
-  for f in ['p6_complete.txt','mpi_path.txt','binary_ldd.txt']:require((root/f).stat().st_size>0,'missing P6 provenance '+f)
+  for f in [stage.lower()+'_complete.txt','mpi_path.txt','binary_ldd.txt']:require((root/f).stat().st_size>0,'missing P6 provenance '+f)
  report['production_decision']='HOLD_PENDING_SCIENTIFIC_REVIEW_AND_PRODUCTION_PILOT'
  return report
 if __name__=='__main__':

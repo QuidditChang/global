@@ -17,9 +17,10 @@ def temps(d,step,n):
  return values
 
 def difference(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b))/len(a))
-def verify(root,local=False,partial=False):
+def verify(root,local=False,partial=False,stage="P5"):
  root=Path(root);matrix=json.loads((root/'input/matrix.json').read_text());rows=matrix['cases'];results={};finals={};initials={};complete=[]
- require(len(rows)==46 and len({r['name'] for r in rows})==46,'matrix size/names')
+ expected=11 if stage=='P7' else 46
+ require(stage in ('P5','P7') and len(rows)==expected and len({r['name'] for r in rows})==expected,'matrix size/names')
  for row in rows:
   name=row['name'];d=root/name
   if partial and not (d/'mpi_exit_code.txt').exists():continue
@@ -41,7 +42,7 @@ def verify(root,local=False,partial=False):
   require(all(v['rss_max_KiB']>0 and v['volume']>0 for v in metric),'diagnostic geometry/memory')
   stokes=[]
   if not row['prescribed']:
-   require(cfg.get('vlowstep')=='1000','coupled inner iteration budget')
+   require(cfg.get('vlowstep')==('2000' if stage=='P7' and row['variant']=='rheol7' else '1000'),'coupled inner iteration budget')
    stokes=[fields(l) for l in log.splitlines() if l.startswith('PICES_STOKES ')]
    require([int(v['step']) for v in stokes]==list(range(steps+1)),'shared Stokes guard '+name)
    require(all(v['status']=='PASS' and float(v['inner_relative'])==1e-6 for v in stokes),'Stokes failure')
@@ -65,7 +66,11 @@ def verify(root,local=False,partial=False):
   flux={side:boundary(d,steps,side,'pices' if pic else 'pg') for side in ['surf','botm']}
   if pic:
    reaction=float(heat[steps]['boundary_reaction'])/float(adv[steps]['dt'])*4*3400*6371000
-   require(abs(flux['botm']-flux['surf']-reaction)<1e-10*max(1,abs(reaction)+abs(flux['botm'])+abs(flux['surf'])),'CBF heat boundary ledger')
+   # Sharp plateaus have zero boundary conduction up to roundoff; use a
+   # 1e-12 nondimensional absolute flux floor only for that explicit test.
+   tolerance=1e-10*max(1,abs(reaction)+abs(flux['botm'])+abs(flux['surf']))
+   if row['scenario']=='sharp':tolerance=max(tolerance,1e-12*4*3400*6371000)
+   require(abs(flux['botm']-flux['surf']-reaction)<tolerance,'CBF heat boundary ledger')
    for step in [0,steps]:
     count=0
     for rank in range(12):
@@ -87,6 +92,7 @@ def verify(root,local=False,partial=False):
      x=rad*math.sin(th)*math.cos(ph);y=rad*math.sin(th)*math.sin(ph);z=rad*math.cos(th)
      anomaly=.15*math.sin(math.pi*(rad-.55)/.45)**2*math.exp(-((x-center)**2+y*y+z*z)/.12**2)
      expected_T=300+3400*((1-rad)/.45+(-1 if row['scenario']=='cold' else 1)*anomaly)
+     if row['scenario']=='sharp':expected_T=3700 if rad<.77 else 300
      initial_error=max(initial_error,abs(initials[name][rank*n**3+i]-expected_T))
    require(initial_error<.02,'analytic initial field '+name) # printed coordinates/T have finite decimal precision
 
@@ -147,7 +153,7 @@ def verify(root,local=False,partial=False):
   for f in ['runs_commit.txt','binary.sha256','platform.txt','mpi_version.txt','submitted.lsf']:require((root/f).stat().st_size>0,'missing provenance '+f)
   require(re.fullmatch('[0-9a-f]{40}',(root/'runs_commit.txt').read_text().strip()) is not None,'runs commit')
   require(re.fullmatch('[0-9a-f]{64}',(root/'binary.sha256').read_text().split()[0]) is not None,'binary hash format')
- return dict(status='PARTIAL_PASS' if partial else 'PASS',production_decision='REQUIRES_REVIEW',cases_completed=len(complete),cases_expected=46,provenance_checked=not local,cases=results,pairs=pairs,refinements=refinements,sensitivities=sensitivities,
+ return dict(status='PARTIAL_PASS' if partial else 'PASS',production_decision='REQUIRES_REVIEW',cases_completed=len(complete),cases_expected=expected,provenance_checked=not local,cases=results,pairs=pairs,refinements=refinements,sensitivities=sensitivities,
   interpretation=['energy_proxy_change includes physical heating, boundary exchange, TA and remapping; it is not by itself conservation drift.','rotated_initial_L2 compares with a nodally sampled rotated initial field; diffusion is active, so this is a shape diagnostic, not an exact diffusion solution.','P5 completion does not authorize production switching; inspect oscillation, diffusion, refinement, dynamics, timing and memory together.'])
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--local',action='store_true');p.add_argument('--partial',action='store_true');p.add_argument('--summary',type=Path);a=p.parse_args()

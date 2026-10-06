@@ -421,6 +421,7 @@ void pices_initialize(struct All_variables *E)
         E->trace.extraq[1][E->pices.slot][p]=v;
     }
     for(n=1;n<=E->lmesh.nno;n++) E->Tdot[1][n]=0;
+    p5_particle_initial(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
     fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d checkpoint=%d eba=%d\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion,E->pices.checkpoint,E->pices.eba);
     fflush(E->fp);

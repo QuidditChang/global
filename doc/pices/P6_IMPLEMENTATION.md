@@ -1,9 +1,13 @@
 # P6: opt-in bounded consistent projection
 
-Status: frozen projection, coupled restart, rejection guards and heat/TA/CBF
-checks pass locally. The selected local matrix is complete; the full matrix
-is reserved for HPC validation.
-Production is not approved.
+Status (2026-10-06): HPC job 12259598 passes all 46 matrix cases and coupled
+restart checks. The original large stationary projection defect is substantially
+reduced. Controlled production-configuration pilot may proceed, but formal
+production remains on hold: assimilation vrms differs from PG by 15.96% at base
+dt (4.37% at dt/4), the launcher/library MPI providers are mixed, and long-time
+real-configuration validation remains outstanding. HPC tests did not activate
+projection bounds; that branch currently has local sharp-profile coverage only.
+See runs/PICES_P6_HPC_AUDIT_12259598.md and its JSON for full evidence.
 
 ## Problem and method
 

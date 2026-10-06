@@ -19,7 +19,8 @@ void p5_parameters(struct All_variables *E) {
  else if(!strcmp(mode,"cold"))kind=1;
  else if(!strcmp(mode,"hot"))kind=2;
  else if(!strcmp(mode,"assim"))kind=3;
- else pices_fail(E,"p5_case must be off/cold/hot/assim");
+ else if(!strcmp(mode,"sharp"))kind=4;
+ else pices_fail(E,"p5_case must be off/cold/hot/assim/sharp");
  input_boolean("p5_prescribed_velocity",&prescribed,"off",E->parallel.me);
  input_double("p5_omega",&omega,"10000",E->parallel.me);
  input_double("p5_length_scale",&length_scale,"1",E->parallel.me);
@@ -40,6 +41,7 @@ static double background(struct All_variables *E,double r) {
 }
 static double initial_at(struct All_variables *E,const double x[3],double time) {
  double r=sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
+ if(kind==4)return r<.77?1.:0.;
  double center=kind==1?.82:.68,angle=prescribed?omega*time:0.;
  double dx=x[0]-center*cos(angle),dy=x[1]-center*sin(angle),dz=x[2];
  double taper=sin(M_PI*(r-E->sphere.ri)/(E->sphere.ro-E->sphere.ri));
@@ -48,6 +50,8 @@ static double initial_at(struct All_variables *E,const double x[3],double time) 
 void p5_initial(struct All_variables *E) {
  int n;double x[3];
  if(!kind)return;
+ if(kind==4 && (!E->pices.enabled || !E->pices.consistent_projection || !prescribed || omega!=0))
+  pices_fail(E,"sharp stress requires bounded PICES and prescribed zero velocity");
  if(E->control.restart || E->pices.checkpoint || E->sphere.caps_per_proc!=1 || E->sphere.caps!=12)
   pices_fail(E,"P5 benchmarks require a fresh full-sphere run, one cap/rank, checkpoint off");
  if(E->control.ala_pressure_buoyancy)pices_fail(E,"P5 benchmarks require EBA, not strict ALA");
@@ -64,6 +68,18 @@ void p5_initial(struct All_variables *E) {
  }
  temperatures_conform_bcs(E);
  fprintf(E->fp,"P5_INIT schema=1 case=%d velocity=%s length_method=min_directional_rms_scaled_v1 length_scale=%.17g omega=%.17g\n",kind,prescribed?"prescribed":"coupled",length_scale,omega);
+}
+/* Explicit stress input: discontinuous particle temperatures deliberately differ
+ * from interpolation of the nodal step. Never used by normal initialization. */
+void p5_particle_initial(struct All_variables *E) {
+ int p,a,nodes[9];double w[9];
+ if(kind!=4)return;
+ for(p=1;p<=E->trace.ntracers[1];p++) {
+  double radius=0;tracer_temperature_weights(E,1,p,nodes,w);
+  for(a=1;a<=8;a++)radius+=w[a]*E->sx[1][3][nodes[a]];
+  E->trace.extraq[1][E->pices.slot][p]=radius<.77?1.:0.;
+ }
+ fprintf(E->fp,"P7_STRESS particle_radial_step=0.77 bounds=0,1\n");
 }
 int p5_velocity(struct All_variables *E) {
  int n;
