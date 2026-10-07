@@ -52,7 +52,8 @@ static void full_input_arrays_init(struct All_variables *E, float age)
     }
     if (!E->flag_depth1) E->flag_depth1 = (float *)malloc(bytes);
     if (!E->flag_depth2) E->flag_depth2 = (float *)malloc(bytes);
-    if (!E->new_flag_depth) E->new_flag_depth = (float *)malloc(bytes);
+    /* New-trench history has no event before the first age crossing. */
+    if (!E->new_flag_depth) E->new_flag_depth = (float *)calloc(1,bytes);
     if (!E->tf_depth) E->tf_depth = (float *)malloc(bytes);
     if (!E->velo_1 || !E->velo_2 || !E->flag_depth || !E->flag_depth1 ||
         !E->flag_depth2 || !E->new_flag_depth || !E->tf_depth) {

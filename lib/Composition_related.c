@@ -52,9 +52,10 @@ void composition_input(struct All_variables *E)
 		  &(E->composition.ichemical_buoyancy),
 		  "1,0,nomax",m);
 
-    if (E->control.tracer && 
-	(E->composition.ichemical_buoyancy || 
-	 E->composition.icompositional_rheology)) {
+    /* Capability state belongs to parsing, not diagnostic output. */
+    E->composition.on = E->control.tracer &&
+        (E->composition.ichemical_buoyancy || E->composition.icompositional_rheology);
+    if (E->composition.on) {
 
         /* ibuoy_type=0 (absolute method) */
         /* ibuoy_type=1 (ratio method) */
@@ -133,10 +134,6 @@ void write_composition_instructions(struct All_variables *E)
 {
     int k;
     double kC_min, kC_max;
-
-    if (E->composition.ichemical_buoyancy ||
-        E->composition.icompositional_rheology)
-        E->composition.on = 1;
 
     if(E->control.kC_ratio != 1.0) {
         if(!E->control.tracer || !E->composition.on ||

@@ -159,3 +159,9 @@ struct TRACE{
                                 double*, double*, double*,
                                 double*, double*, double*);
 };
+
+/* Shared tracer lifecycle; recount never applies geological transformations. */
+struct All_variables;
+void tracer_move_particles(struct All_variables *);
+void tracer_update_composition(struct All_variables *);
+void recount_tracers_of_flavors(struct All_variables *);

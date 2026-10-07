@@ -238,17 +238,27 @@ void tracer_initial_settings(struct All_variables *E)
 
 void tracer_advection(struct All_variables *E)
 {
-  if(E->pices.enabled && !E->pices.moving) return;
+  if(E->pices.enabled) return; /* PICES owns the shared move/update calls. */
   if(E->control.verbose)
     fprintf(E->trace.fpt,"STEP %d\n",E->monitor.solution_cycles);
 
-    /* advect tracers */
+    tracer_move_particles(E);
+    tracer_update_composition(E);
+}
+
+/* Shared lifecycle: PICES inserts its thermal work around these operations. */
+void tracer_move_particles(struct All_variables *E)
+{
     predict_tracers(E);
     correct_tracers(E);
 
     /* check that the number of tracers is conserved */
     check_sum(E);
 
+}
+
+void tracer_update_composition(struct All_variables *E)
+{
     /* count # of tracers of each flavor */
     if (E->trace.nflavors > 0)
         count_tracers_of_flavors(E);
@@ -649,7 +659,7 @@ static void find_tracers(struct All_variables *E)
 /* This function computes the number of tracers in each element.       */
 /* Each tracer can be of different "flavors", which is the 0th index   */
 /* of extraq. How to interprete "flavor" is left for the application.  */
-void count_tracers_of_flavors(struct All_variables *E)
+static void count_flavors(struct All_variables *E, int reclassify)
 {
 
     int j, flavor, e, kk, i;
@@ -681,7 +691,7 @@ void count_tracers_of_flavors(struct All_variables *E)
         numtracers=E->trace.ntracers[j];
 
         /* Jiashun coded to define plateau */
-        if(E->trace.reclassify_flavors &&
+        if(reclassify &&
            intage==14 && intage<E->trench_visit_age) {
             geomx1=(double *) malloc(250*sizeof(double));
             geomy1=(double *) malloc(250*sizeof(double));
@@ -751,13 +761,17 @@ void count_tracers_of_flavors(struct All_variables *E)
         /* Fill arrays */
         for (kk=1; kk<=numtracers; kk++) {
             e = E->trace.ielement[j][kk];
+            if(E->pices.enabled && (!isfinite(E->trace.extraq[j][0][kk]) ||
+               E->trace.extraq[j][0][kk]<0 || E->trace.extraq[j][0][kk]>=E->trace.nflavors ||
+               floor(E->trace.extraq[j][0][kk])!=E->trace.extraq[j][0][kk]))
+                pices_fail(E,"invalid integer tracer flavor");
 	    flavor = E->trace.extraq[j][0][kk];
 
             /*
              * Preserve cfg/restart flavors when legacy geological
              * reclassification is disabled; only rebuild element counts.
              */
-            if(!E->trace.reclassify_flavors) {
+            if(!reclassify) {
                 if(flavor < 0 || flavor >= E->trace.nflavors) {
                     fprintf(stderr,
                             "Invalid tracer flavor %d (configured range 0..%d)\n",
@@ -1009,7 +1023,7 @@ void count_tracers_of_flavors(struct All_variables *E)
             E->trace.ntracer_flavor[j][flavor][e]++;
         } /* end of kk loop */
 
-        if(E->trace.reclassify_flavors &&
+        if(reclassify &&
            intage<E->trench_visit_age && E->monitor.solution_cycles>0)
 	    E->trench_visit_age=intage;
     } /* end of j loop */
@@ -1017,6 +1031,17 @@ void count_tracers_of_flavors(struct All_variables *E)
     return;
 }
 
+
+
+void count_tracers_of_flavors(struct All_variables *E)
+{
+    count_flavors(E,E->trace.reclassify_flavors);
+}
+
+void recount_tracers_of_flavors(struct All_variables *E)
+{
+    count_flavors(E,0);
+}
 
 
 void initialize_tracers(struct All_variables *E)

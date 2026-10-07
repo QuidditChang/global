@@ -1,0 +1,129 @@
+{
+  "status": "PASS",
+  "TA_CBF": {
+    "status": "PASS",
+    "cbf_outputs_compared": 168,
+    "max_relative_heat_boundary_residual": 4.718124450503069e-16,
+    "max_TA_delta": 3.119538324436455e-06,
+    "max_TA_mapping_error": 6.013875840996954e-14
+  },
+  "cases": {
+    "continuous": {
+      "max_cfl": 0.005593603466784573,
+      "max_heat_error": 3.131163168643928e-18,
+      "initial_flavors": {
+        "0": 90233,
+        "24": 4739,
+        "3": 2226,
+        "2": 472,
+        "1": 634
+      },
+      "final_flavors": {
+        "0": 90230,
+        "24": 4739,
+        "3": 2228,
+        "2": 471,
+        "1": 636
+      }
+    },
+    "split": {
+      "max_cfl": 0.004130598904802202,
+      "max_heat_error": 1.4844252400631613e-19,
+      "initial_flavors": {
+        "0": 90233,
+        "24": 4739,
+        "3": 2226,
+        "2": 472,
+        "1": 634
+      },
+      "final_flavors": {
+        "0": 90232,
+        "24": 4739,
+        "3": 2226,
+        "2": 473,
+        "1": 634
+      }
+    },
+    "restart": {
+      "max_cfl": 0.005593603466784573,
+      "max_heat_error": 3.131163168643928e-18,
+      "initial_flavors": {
+        "0": 90232,
+        "24": 4739,
+        "3": 2226,
+        "2": 473,
+        "1": 634
+      },
+      "final_flavors": {
+        "0": 90230,
+        "24": 4739,
+        "3": 2228,
+        "2": 471,
+        "1": 636
+      }
+    },
+    "conductivity_control": {
+      "max_cfl": 0.005593598240353631,
+      "max_heat_error": 2.4156320864508578e-18,
+      "initial_flavors": {
+        "0": 90233,
+        "24": 4739,
+        "3": 2226,
+        "2": 472,
+        "1": 634
+      },
+      "final_flavors": {
+        "0": 90230,
+        "24": 4739,
+        "3": 2228,
+        "2": 471,
+        "1": 636
+      }
+    },
+    "buoyancy_control": {
+      "max_cfl": 3.69279511627057e-08,
+      "max_heat_error": 2.887736487514883e-17,
+      "initial_flavors": {
+        "0": 90233,
+        "24": 4739,
+        "3": 2226,
+        "2": 472,
+        "1": 634
+      },
+      "final_flavors": {
+        "0": 90233,
+        "24": 4739,
+        "3": 2226,
+        "2": 472,
+        "1": 634
+      }
+    }
+  },
+  "restart_outputs_compared": 480,
+  "binary_live_state_equal": true,
+  "control_temperature_RMS_K": {
+    "conductivity_control": 0.00022060522810599898,
+    "buoyancy_control": 3.49304952832526
+  },
+  "production_decision": "HOLD_PENDING_P8B_P8C",
+  "date": "2026-10-07",
+  "scope": "local P8a; HPC pending",
+  "restart_guards": {
+    "wrong_buoyancy": "PASS",
+    "wrong_conductivity": "PASS"
+  },
+  "P4_regression": {
+    "status": "PASS",
+    "decoded_outputs_compared": 216,
+    "binary_live_state_equal": true
+  },
+  "PG_regression": {
+    "status": "PASS",
+    "decoded_outputs_identical": 180,
+    "scope": "PG composition path, two steps, before/after"
+  },
+  "compiled_base_commit": "1f24271f9fed969426ff2c291fde2ea6acf59f8e",
+  "runtime_diff_sha256": "45d0360d303fdf8276a2e5d81dc904eafdfa5cf284488fb466e2981bee08645b",
+  "local_binary_sha256": "620d1f176abe92aa84712482dde8fa82f93d06ea23e5678dfd8140c979b6b7bb",
+  "prior_PG_binary_sha256": "2e312b8b574e690318cd6db02f72b9a101855be1a0e958d94cd5654e9e332bee"
+}

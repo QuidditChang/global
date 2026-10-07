@@ -42,7 +42,7 @@ restart field equality; legacy MPI exit 8 alone is not success.
 - The generalized verifier still passes the full archived P6 HPC result.
 - Matrix-loop regression passes normal, truncated input, early break, MPI
   failure and stdin-isolation checks. Shell syntax and Python compilation pass.
-- Eight temporal controls remain for HPC; they reuse P6 inputs at refined dt.
+- Eight temporal controls were subsequently verified on HPC (see below).
 - Intel MPI provider selection cannot be executed on this macOS/OpenMPI host;
   the HPC script checks the actual library/launcher installation before runs.
 
@@ -65,3 +65,23 @@ these exact target features, including their checkpoint/fingerprint state,
 before a faithful production pilot or formal production can be approved.
 
 Audit downloaded results with `tests/pices/verify_p7.py JOBDIR --summary RESULT`.
+
+## HPC audit: job 12275166 (2026-10-06)
+
+PASS for the 11 targeted cases and same-partition constant-viscosity 64-step
+restart: 2376 decoded outputs, 1560 CBF outputs and binary live state match.
+Intel launcher/library installation matches. Sharp activates 4622 bounds
+with 42 CG and 133 projected iterations, residual 8.52e-13.
+
+Assimilation velocity difference drops from 15.9633% to 1.5233% at dt/8.
+However, PG/PIC temperature RMS difference grows from 9.2303 K to 11.5173 K.
+This is not evidence of full method equivalence or production readiness.
+The rheol7 probe does not validate rheol7 restart or the actual target setup.
+
+The initial launcher wrote a P7 completion value under p6_complete.txt.
+Future launchers use p7_complete.txt; audit accepts the legacy name only
+for P7 and verifies the exact P7 content. No HPC rerun is needed.
+The matrix report also now uses len(rows) for cases_expected, avoiding
+reuse of the particle-count variable. Numerical checks are unchanged.
+See runs PICES_P7_HPC_AUDIT_12275166.md/.json for full evidence and
+shared tracer/physics/checkpoint interface constraints on production work.

@@ -91,6 +91,13 @@ static void fingerprint(struct All_variables *E,char out[65]) {
   pices_sha_add(&s,E->pices.K+64,E->lmesh.nel*64*sizeof(double));
   pices_sha_add(&s,E->pices.emass+8,E->lmesh.nel*8*sizeof(double));
  }
+ if(E->composition.on) {
+  double composition[]={8,E->composition.ibuoy_type,E->composition.ncomp,
+   E->composition.ichemical_buoyancy,E->trace.reclassify_flavors,
+   E->control.kC_primordial_flavor};
+  pices_sha_add(&s,composition,sizeof(composition));
+  pices_sha_add(&s,E->composition.buoyancy_ratio,E->composition.ncomp*sizeof(double));
+ }
  pices_sha_end(&s,out);
 }
 static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
@@ -105,7 +112,7 @@ static void metadata(struct All_variables *E,const char *payload,const char *sta
  "\"interpolation\":\"gnomonic_wedge_radial_v1\",\n\"length\":\"min_directional_rms_cartesian_v1\",\n"
  "\"accepted_velocity_sha256\":\"%s\",\n"
  "\"physics_mesh_sha256\":\"%s\",\n\"checkpoint_sha256\":\"%s\"\n}\n",
- E->pices.p4?2:1,PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
+ E->composition.on?3:(E->pices.p4?2:1),PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
  E->parallel.me,E->parallel.nproc,E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz,E->lmesh.nox,E->lmesh.noy,E->lmesh.noz,E->sphere.capid[1],
  E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,E->trace.nflavors,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
@@ -135,6 +142,12 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
      fwrite(E->pices.heat_residual+8,sizeof(double),8*E->lmesh.nel,f)!=(size_t)(8*E->lmesh.nel))
    pices_fail(E,"P4 heat residual write failed");
  }
+ if(E->composition.on) {
+  int count=E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy:0;
+  if(fwrite(&E->trench_visit_age,sizeof(int),1,f)!=1 || fwrite(&count,sizeof(int),1,f)!=1 ||
+     (count && fwrite(E->new_flag_depth+1,sizeof(float),count,f)!=(size_t)count))
+   pices_fail(E,"composition history write failed");
+ }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -143,7 +156,7 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
  MPI_Barrier(E->parallel.world);
  if(rename(ct,cf))pices_fail(E,"manifest publish failed");
  MPI_Barrier(E->parallel.world);
- fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=%d\n",E->monitor.solution_cycles,E->pices.p4?2:1);
+ fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=%d\n",E->monitor.solution_cycles,E->composition.on?3:(E->pices.p4?2:1));
 }
 /* Called before any legacy array allocation/read. All ranks must have a complete
  * set. Payload hash + exact expected size prevents malformed legacy counts. */
@@ -157,7 +170,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -167,13 +180,23 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fseek(f,offset,SEEK_SET) || fread(sent,4,4,f)!=4 || fread(tr,4,5,f)!=5)pices_fail(E,"truncated tracer checkpoint");
  if(sent[0]||sent[1]||sent[2]||sent[3]||tr[0]!=12 || tr[1]!=1+(E->trace.nflavors>0) || tr[2]!=E->trace.nflavors || tr[4]!=np)pices_fail(E,"checkpoint tracer schema/count mismatch");
  bytes=offset+16+20+(8L*(6+tr[1])+4)*(np+1L);
+ if(E->composition.on) {
+  int cs[5];
+  if(fseek(f,bytes,SEEK_SET) || fread(cs,4,5,f)!=5 ||
+     cs[0] || cs[1] || cs[2] || cs[3] || cs[4]!=E->composition.ncomp)
+   pices_fail(E,"checkpoint composition schema mismatch");
+  bytes+=20+8L*E->composition.ncomp*(E->lmesh.nel+3L);
+ }
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
  pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);metadata(E,path,state,expected);
- if(strcmp(actual,expected))pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
+ if(strcmp(actual,expected)) {
+  if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT expected=%s actual=%s\n",expected,actual);
+  pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
+ }
 }
 
 /* U is the Stokes iterate; nodal V can differ after rigid-rotation removal.
@@ -193,6 +216,13 @@ void pices_checkpoint_restore_velocity(struct All_variables *E,const char *path)
    pices_fail(E,"P4 heat residual read failed");
   if(E->pices.cbf_valid!=(E->monitor.solution_cycles>0))pices_fail(E,"invalid P4 residual lifecycle");
   for(n=8;n<8*(E->lmesh.nel+1);n++)if(!isfinite(E->pices.heat_residual[n]))pices_fail(E,"nonfinite restored heat residual");
+ }
+ if(E->composition.on) {
+  int count,n,expected=E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy:0;
+  if(fread(&E->trench_visit_age,sizeof(int),1,f)!=1 || fread(&count,sizeof(int),1,f)!=1 ||
+     count!=expected || (count && fread(E->new_flag_depth+1,sizeof(float),count,f)!=(size_t)count))
+   pices_fail(E,"composition history read failed");
+  for(n=1;n<=count;n++)if(!isfinite(E->new_flag_depth[n]))pices_fail(E,"invalid composition history");
  }
  if(fclose(f))pices_fail(E,"velocity close failed");
 }

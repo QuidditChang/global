@@ -30,7 +30,13 @@ def verify(root,local=False,partial=False,stage="P6"):
    if not f.name.startswith('._'):require((d/'pices_p4_forcing'/f.name).read_bytes()==f.read_bytes(),'restart forcing')
  report['restart']=restart(suite,True,'P4',64 if stage=='P7' else 4,32 if stage=='P7' else 2);report['projection']=checks
  if not local:
-  for f in [stage.lower()+'_complete.txt','mpi_path.txt','binary_ldd.txt']:require((root/f).stat().st_size>0,'missing P6 provenance '+f)
+  marker=root/(stage.lower()+'_complete.txt')
+  # Initial P7 launcher retained the P6 filename, but wrote a P7-specific value.
+  legacy=stage=='P7' and not marker.exists() and (root/'p6_complete.txt').is_file()
+  if legacy:marker=root/'p6_complete.txt'
+  require(marker.read_text().strip()==stage+'_ALL_RUNS_COMPLETE_PENDING_LOCAL_AUDIT','wrong completion marker')
+  report['legacy_completion_filename']=legacy
+  for f in ['mpi_path.txt','binary_ldd.txt']:require((root/f).stat().st_size>0,'missing provenance '+f)
  report['production_decision']='HOLD_PENDING_SCIENTIFIC_REVIEW_AND_PRODUCTION_PILOT'
  return report
 if __name__=='__main__':

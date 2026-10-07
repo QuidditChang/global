@@ -153,7 +153,7 @@ def verify(root,local=False,partial=False,stage="P5"):
   for f in ['runs_commit.txt','binary.sha256','platform.txt','mpi_version.txt','submitted.lsf']:require((root/f).stat().st_size>0,'missing provenance '+f)
   require(re.fullmatch('[0-9a-f]{40}',(root/'runs_commit.txt').read_text().strip()) is not None,'runs commit')
   require(re.fullmatch('[0-9a-f]{64}',(root/'binary.sha256').read_text().split()[0]) is not None,'binary hash format')
- return dict(status='PARTIAL_PASS' if partial else 'PASS',production_decision='REQUIRES_REVIEW',cases_completed=len(complete),cases_expected=expected,provenance_checked=not local,cases=results,pairs=pairs,refinements=refinements,sensitivities=sensitivities,
+ return dict(status='PARTIAL_PASS' if partial else 'PASS',production_decision='REQUIRES_REVIEW',cases_completed=len(complete),cases_expected=len(rows),provenance_checked=not local,cases=results,pairs=pairs,refinements=refinements,sensitivities=sensitivities,
   interpretation=['energy_proxy_change includes physical heating, boundary exchange, TA and remapping; it is not by itself conservation drift.','rotated_initial_L2 compares with a nodally sampled rotated initial field; diffusion is active, so this is a shape diagnostic, not an exact diffusion solution.','P5 completion does not authorize production switching; inspect oscillation, diffusion, refinement, dynamics, timing and memory together.'])
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--local',action='store_true');p.add_argument('--partial',action='store_true');p.add_argument('--summary',type=Path);a=p.parse_args()

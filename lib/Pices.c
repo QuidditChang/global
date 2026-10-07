@@ -15,7 +15,6 @@
 void CBF_heat_sources(struct All_variables *, int, double *, double *);
 
 void temperatures_conform_bcs(struct All_variables *);
-void tracer_advection(struct All_variables *);
 void get_global_shape_fn();
 
 void pices_fail(struct All_variables *E, const char *why)
@@ -54,7 +53,7 @@ void pices_parameters(struct All_variables *E)
     if(strcmp(projection,"lumped") && strcmp(projection,"bounded_consistent"))pices_fail(E,"unknown pices_projection");
     E->pices.consistent_projection=!strcmp(projection,"bounded_consistent");
     if(E->pices.consistent_projection && !E->pices.enabled)pices_fail(E,"pices_projection requires PICES");
-    E->pices.initialized=E->pices.moving=0;
+    E->pices.initialized=0;
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
@@ -78,6 +77,8 @@ void pices_validate(struct All_variables *E)
     if(!isfinite(E->control.Q0) || !isfinite(E->control.disptn_number))
         pices_fail(E,"nonfinite EBA heating parameters");
     if(E->pices.checkpoint) {
+        if(E->composition.on && !E->pices.p4)
+            pices_fail(E,"composition checkpoint requires P4 heat-state schema");
         if(!E->viscosity.update_allowed || E->viscosity.RHEOL!=1 || E->viscosity.SDEPV ||
            E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
            E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones)
@@ -86,6 +87,13 @@ void pices_validate(struct All_variables *E)
             if(E->viscosity.N0[i]!=E->viscosity.N0[0] || E->viscosity.E[i]!=0 || E->viscosity.Z[i]!=0)
                 pices_fail(E,"P2 checkpoint requires uniform temperature-independent viscosity");
     }
+    if(E->composition.on && (!E->pices.eba || E->composition.ibuoy_type!=1 ||
+       E->viscosity.CDEPV || E->composition.ncomp!=E->trace.nflavors-1))
+        pices_fail(E,"P8a supports EBA ratio composition without compositional rheology");
+    if(E->trace.reclassify_flavors && (E->trace.nflavors!=25 ||
+       E->control.kC_primordial_flavor!=24 || !E->composition.on ||
+       !E->pices.p4 || !E->control.lith_age))
+        pices_fail(E,"P8a reclassification requires 25 flavors, primordial 24 and P4 age forcing");
     if(E->pices.max_substeps<1 || E->pices.max_substeps>1000000 ||
        E->trace.itperel<1 || strcmp(E->output.format,"ascii-gz") ||
        E->control.ala_pressure_buoyancy)
@@ -93,12 +101,11 @@ void pices_validate(struct All_variables *E)
     if(E->sphere.caps!=12 || E->sphere.caps_per_proc!=1 || !E->control.tracer)
         pices_fail(E,"P1 requires full sphere, one cap per rank, tracer=on");
     if((E->control.restart && !E->pices.checkpoint) || E->control.post_p || E->control.stokes ||
-       E->control.pseudo_free_surf || (E->control.lith_age && !E->pices.p4) || E->composition.on ||
-       E->control.mat_control || E->control.vbcs_file || E->trace.ic_method!=0 ||
-       E->trace.reclassify_flavors)
+       E->control.pseudo_free_surf || (E->control.lith_age && !E->pices.p4) ||
+       E->control.mat_control || E->control.vbcs_file || E->trace.ic_method!=0)
         pices_fail(E,"unsupported P1 restart/forcing/composition/tracer initialization");
-    if(E->control.tracer_enriched || (E->pices.eba && (!E->control.eba_formulation || E->control.kC_ratio!=1 || E->control.qvis_mode!=0)))
-        pices_fail(E,"P3 requires EBA, kC_ratio=1, qvis_mode=0 and no enriched heating");
+    if(E->control.tracer_enriched || (E->pices.eba && (!E->control.eba_formulation || E->control.qvis_mode!=0)))
+        pices_fail(E,"PICES requires EBA, qvis_mode=0 and no enriched heating");
     if(!E->pices.eba && (E->control.Q0!=0 || E->control.disptn_number!=0))
         pices_fail(E,"P1 requires Q0=0, Di=0 and no enriched heating");
     for(i=0;!E->pices.eba && i<PHASE_TRANSITIONS;i++)
@@ -409,6 +416,36 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     free(before);free(mapped);free(increment);
 }
 
+/* Check the shared ratio reconstruction before using it in thermal physics. */
+static void composition_check(struct All_variables *E)
+{
+    int e,i,p,total,primordial=0,global_primordial;
+    double error=0,global_error,cmin=1,cmax=0,global_min,global_max;
+    if(!E->composition.on)return;
+    for(p=1;p<=E->trace.ntracers[1];p++)
+        if(E->trace.extraq[1][0][p]==E->control.kC_primordial_flavor)primordial++;
+    for(e=1;e<=E->lmesh.nel;e++) {
+        total=0;
+        for(i=0;i<E->trace.nflavors;i++)total+=E->trace.ntracer_flavor[1][i][e];
+        if(total==0)pices_fail(E,"empty composition element");
+        for(i=0;i<E->composition.ncomp;i++) {
+            double c=E->composition.comp_el[1][i][e];
+            if(!isfinite(c) || c<0 || c>1)pices_fail(E,"invalid composition fraction");
+            error=fmax(error,fabs(c-E->trace.ntracer_flavor[1][i+1][e]/(double)total));
+        }
+        if(E->control.kC_primordial_flavor>0 && E->control.kC_primordial_flavor<=E->composition.ncomp) {
+            double c=E->composition.comp_el[1][E->control.kC_primordial_flavor-1][e];
+            cmin=fmin(cmin,c);cmax=fmax(cmax,c);
+        }
+    }
+    MPI_Allreduce(&primordial,&global_primordial,1,MPI_INT,MPI_SUM,E->parallel.world);
+    global_error=reduce(E,error,MPI_MAX);
+    global_min=reduce(E,cmin,MPI_MIN);global_max=reduce(E,cmax,MPI_MAX);
+    if(global_error>1e-12)pices_fail(E,"composition/count mismatch");
+    fprintf(E->fp,"PICES_COMPOSITION step=%d primordial=%d error=%.17g Cmin=%.17g Cmax=%.17g kC_ratio=%.17g\n",
+        E->monitor.solution_cycles,global_primordial,global_error,global_min,global_max,E->control.kC_ratio);
+}
+
 void pices_initialize(struct All_variables *E)
 {
     int p,n,a,nodes[9]; double w[9],v;
@@ -422,6 +459,7 @@ void pices_initialize(struct All_variables *E)
     }
     for(n=1;n<=E->lmesh.nno;n++) E->Tdot[1][n]=0;
     p5_particle_initial(E);
+    composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
     fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d checkpoint=%d eba=%d\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion,E->pices.checkpoint,E->pices.eba);
     fflush(E->fp);
@@ -452,7 +490,17 @@ void pices_advance(struct All_variables *E)
     for(n=1;n<=nn;n++) previous[n]=E->T[1][n];
     if(E->pices.eba)assemble(E,previous);
     before=energy(E,previous);
-    E->pices.moving=1;tracer_advection(E);E->pices.moving=0;
+    tracer_move_particles(E);
+    /* Reclassify once at the arrival age, before conductivity is evaluated.
+     * Like TA, this temporary clock view does not commit the accepted step. */
+    {
+        double time=E->monitor.elapsed_time;
+        E->monitor.elapsed_time=time+dt;
+        if(E->trace.reclassify_flavors) lith_age_conform_tbc(E);
+        tracer_update_composition(E);
+        composition_check(E);
+        E->monitor.elapsed_time=time;
+    }
     np=E->trace.ntracers[1];sub=array(E,np+1);
     temperatures_conform_bcs(E);
     project(E,E->trace.extraq[1][E->pices.slot],g,1);
@@ -536,6 +584,7 @@ void pices_restore(struct All_variables *E)
         lith_age_temperature_bound_adj(E,E->mesh.levmax);
         temperatures_conform_bcs(E);
     }
+    composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
     E->advection.total_timesteps=E->monitor.solution_cycles+1;
     E->monitor.T_interior=0;

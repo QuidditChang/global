@@ -401,7 +401,9 @@ static void read_tracer_checkpoint(struct All_variables *E, FILE *fp)
     }
 
     /* init E->trace.ntracer_flavor */
-    if(!E->pices.enabled || E->trace.nflavors>0) count_tracers_of_flavors(E);
+    if(E->pices.enabled) {
+        if(E->trace.nflavors>0) recount_tracers_of_flavors(E);
+    } else count_tracers_of_flavors(E);
 
     return;
 }
