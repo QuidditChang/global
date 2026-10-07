@@ -1042,6 +1042,22 @@ void gzdir_output_tracer(struct All_variables *E, int cycles)
 }
 
 
+/* Preserve the five-column header: cap, rows, time, initial/current bulk.
+ * Multi-component bulk values are cached totals over the represented components,
+ * not array addresses (passing double* to %e was undefined behavior). */
+static void gzdir_composition_header(gzFile *fp, struct All_variables *E,
+                                     int cap, int rows)
+{
+    int k;
+    double initial=0.0, current=0.0;
+    for(k=0;k<E->composition.ncomp;k++) {
+        initial+=E->composition.initial_bulk_composition[k];
+        current+=E->composition.bulk_composition[k];
+    }
+    gzprintf(fp,"%3d %7d %.5e %.5e %.5e\n",cap,rows,
+             E->monitor.elapsed_time,initial,current);
+}
+
 void gzdir_output_comp_nd(struct All_variables *E, int cycles)
 {
   int i, j, k;
@@ -1060,11 +1076,7 @@ void gzdir_output_comp_nd(struct All_variables *E, int cycles)
 	     E->parallel.me, cycles);
     gz1 = gzdir_output_open(output_file,"w");
     for(j=1;j<=E->sphere.caps_per_proc;j++) {
-      gzprintf(gz1,"%3d %7d %.5e %.5e %.5e\n",
-	       j, E->lmesh.nel,
-	       E->monitor.elapsed_time,
-	       E->composition.initial_bulk_composition,
-	       E->composition.bulk_composition);
+      gzdir_composition_header(gz1,E,j,E->lmesh.nno);
       for(i=1;i<=E->lmesh.nno;i++) {
 	for(k=0;k<E->composition.ncomp;k++)
 	  gzprintf(gz1,"%.6e ",E->composition.comp_node[j][k][i]);
@@ -1115,11 +1127,7 @@ void gzdir_output_comp_el(struct All_variables *E, int cycles)
     fp1 = gzdir_output_open(output_file,"w");
 
     for(j=1;j<=E->sphere.caps_per_proc;j++) {
-        gzprintf(fp1,"%3d %7d %.5e %.5e %.5e\n",
-                j, E->lmesh.nel,
-                E->monitor.elapsed_time,
-                E->composition.initial_bulk_composition,
-                E->composition.bulk_composition);
+        gzdir_composition_header(fp1,E,j,E->lmesh.nel);
 
         for(i=1;i<=E->lmesh.nel;i++) {
 	  for(k=0;k<E->composition.ncomp;k++)

@@ -44,12 +44,23 @@ def verify(root,local=False):
      flavor=int(v[3]);require(v[3]==flavor and 0<=flavor<25 and flavor not in (18,19) and 300+3400*v[4]>=0,'flavor/Tp');hist[step][flavor]+=1
     for f in folder_step.glob('*.gz'):
      if f.name.startswith('._'):continue
-     for token in gzip.decompress(f.read_bytes()).decode().split():
+     data=gzip.decompress(f.read_bytes()).decode()
+     if f.name.startswith(('comp_el.','comp_nd.')):
+      header=data.splitlines()[0].split();expected_rows=64 if f.name.startswith('comp_el.') else 125
+      require(len(header)==5 and int(header[0])==1 and int(header[1])==expected_rows,'composition header shape')
+      require(len(data.splitlines())==expected_rows+1,'composition output rows')
+      require(all(math.isfinite(float(v)) and 0<=float(v)<=1.00001 for v in header[3:]),'composition header totals')
+     for token in data.split():
       try:v=float(token)
       except ValueError:continue
       require(math.isfinite(v),'nonfinite output '+str(f))
    for step in range(initial,last+1,2):
     path=folder/f'PICES_P4.chkpt.{rank}.{step}';meta,live=checkpoint(path);require(meta['schema']==3,'composition schema');states[name,rank,step]=live
+    # Header totals must represent the cached component arrays, not merely be finite.
+    totals=[sum(x[0] for x in struct.iter_unpack('=d',live[i])) for i in (15,14)]
+    for field in ('comp_el','comp_nd'):
+     header=gzip.decompress((folder/str(step)/f'{field}.{rank}.{step}.gz').read_bytes()).decode().splitlines()[0].split()
+     require(all(math.isclose(float(v),expected,rel_tol=6e-6,abs_tol=1e-12) for v,expected in zip(header[3:],totals)),'composition header/checkpoint totals')
     colors=[int(x[0]) for x in struct.iter_unpack('=d',live[11])];elements=[x[0] for x in struct.iter_unpack('=i',live[13])]
     counts=Counter(elements);pairs=Counter(zip(elements,colors))
     require(len(counts)==64,'empty checkpoint element')

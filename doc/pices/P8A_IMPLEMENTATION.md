@@ -91,3 +91,22 @@ which is unavailable in this local checkout. Reusable check:
 For all sources, omit --source and supply --pythia-include PYTHIA_INCLUDE.
 This complements the standalone build; it does not replace the Intel/HDF5 HPC
 build or its link/install checks. Rebuild successfully before submitting again.
+
+## HPC output repair: job 12279561
+
+All five cases completed, but the launcher correctly rejected unequal gzip
+outputs. 85 comp_el files differed only in their header. Both comp_el and
+comp_nd passed double* arrays to %e (undefined behavior); comp_nd also declared
+the element count instead of the node count. The shared header writer now
+emits cached sums over represented components and the actual row count.
+The five-column layout and all numerical field rows are retained.
+
+An explicitly qualified audit of the original archive, excluding only the two
+invalid floating header tokens during comparison, passed 480 field comparisons,
+168 CBF comparisons and binary live-state equality. This does not turn the
+failed HPC output gate into a PASS. Downloaded data were not modified.
+
+The repaired local five-case suite passes strict output equality, TA/CBF and
+checkpoint checks. The verifier now checks header shape/range and compares
+header totals with component arrays in checkpoints. See P8A_HEADER_FIX_RESULT.json.
+Submit the repaired build for a clean P8a HPC pass before P8b.
