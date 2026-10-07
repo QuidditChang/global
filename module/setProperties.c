@@ -112,7 +112,7 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     if(strcmp(pices_projection,"lumped") && strcmp(pices_projection,"bounded_consistent"))pices_fail(E,"unknown pices_projection");
     E->pices.consistent_projection=!strcmp(pices_projection,"bounded_consistent");
     if(E->pices.consistent_projection && !E->pices.enabled)pices_fail(E,"pices_projection requires PICES");
-    E->pices.initialized=E->pices.moving=0;
+    E->pices.initialized=0;
     E->pices.slot=-1;
     getIntProperty(properties, "pices_test_no_diffusion", E->pices.no_diffusion, fp);
     getIntProperty(properties, "pices_p4", E->pices.p4, fp);

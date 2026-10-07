@@ -74,3 +74,20 @@ automatic particle-safe timesteps, full-physics restart and actual-grid pilot.
 P7's temperature discrepancy and projection energy limitations remain open.
 No claim is made here about all geological events (e.g. 14 Ma polygons),
 changed MPI partition restarts, rheol7 restart or formal production readiness.
+
+## HPC build repair: job 12279558
+
+The first HPC submission stopped before MPI because the build did not complete.
+The build log identified module/setProperties.c still initializing the removed
+PICES_STATE.moving member. The standalone local build had missed this Python
+binding compilation path. The binding now initializes only initialized, matching
+Pices.c. No numerical algorithm or input changes are involved.
+
+Local validation reproduces the removed-member failure with the old binding,
+and compiles the repaired setProperties.c against the actual Python 2.6
+headers. The complete module build additionally needs Pythia mpi/pympi.h,
+which is unavailable in this local checkout. Reusable check:
+`python3 tests/build/check_python_bindings.py --python-include PYTHON_INCLUDE --source setProperties.c`.
+For all sources, omit --source and supply --pythia-include PYTHIA_INCLUDE.
+This complements the standalone build; it does not replace the Intel/HDF5 HPC
+build or its link/install checks. Rebuild successfully before submitting again.
