@@ -162,6 +162,9 @@ struct PyMethodDef pyCitcom_methods[] = {
      METH_VARARGS,
      pyCitcom_set_convection_defaults__doc__},
 
+    {pyCitcom_pices_time_finished__name__, pyCitcom_pices_time_finished,
+     METH_VARARGS, pyCitcom_pices_time_finished__doc__},
+
     {pyCitcom_stable_timestep__name__,
      pyCitcom_stable_timestep,
      METH_VARARGS,

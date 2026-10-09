@@ -34,6 +34,8 @@
 #include "advection_diffusion.h"
 
 
+#include "pices.h"
+
 extern void set_convection_defaults(struct All_variables *);
 
 
@@ -131,3 +133,13 @@ PyObject * pyCitcom_stable_timestep(PyObject *self, PyObject *args)
 /* $Id: advdiffu.c 7715 2007-07-19 18:51:47Z tan2 $ */
 
 /* End of file */
+
+/* Share present-day termination with the standalone driver. */
+char pyCitcom_pices_time_finished__doc__[] = "";
+char pyCitcom_pices_time_finished__name__[] = "pices_time_finished";
+PyObject *pyCitcom_pices_time_finished(PyObject *self, PyObject *args)
+{
+    PyObject *obj;
+    if (!PyArg_ParseTuple(args, "O:pices_time_finished", &obj)) return NULL;
+    return PyBool_FromLong(pices_time_finished((struct All_variables *)PyCObject_AsVoidPtr(obj)));
+}

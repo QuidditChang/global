@@ -12,7 +12,7 @@
 #include "temperature_audit.h"
 #include "phase_change.h"
 #include "lith_age.h"
-void CBF_heat_sources(struct All_variables *, int, double *, double *);
+void thermal_heat_sources(struct All_variables *, int, double *, double *, double *);
 
 void temperatures_conform_bcs(struct All_variables *);
 void get_global_shape_fn();
@@ -56,6 +56,7 @@ void pices_parameters(struct All_variables *E)
     E->pices.initialized=0;
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
+    input_double("pices_max_timestep_Ma",&E->pices.max_timestep_Ma,"0.1",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
     input_boolean("pices_p4",&E->pices.p4,"off",E->parallel.me);
     input_boolean("pices_eba",&E->pices.eba,"off",E->parallel.me);
@@ -76,7 +77,11 @@ void pices_validate(struct All_variables *E)
         pices_fail(E,"P4 requires P3 EBA and relaxed TA with time-dependent ages and no boundary adjustment");
     if(!isfinite(E->control.Q0) || !isfinite(E->control.disptn_number))
         pices_fail(E,"nonfinite EBA heating parameters");
+    if(!isfinite(E->pices.max_timestep_Ma) || E->pices.max_timestep_Ma<=0)
+        pices_fail(E,"pices_max_timestep_Ma must be finite and positive");
     if(E->pices.checkpoint) {
+        if(E->control.vbcs_file || E->control.qvis_mode || E->advection.fixed_timestep<=0)
+            pices_fail(E,"P8b plates/capped heating/automatic-step restart requires P8c");
         if(E->composition.on && !E->pices.p4)
             pices_fail(E,"composition checkpoint requires P4 heat-state schema");
         if(!E->viscosity.update_allowed || E->viscosity.RHEOL!=1 || E->viscosity.SDEPV ||
@@ -94,6 +99,8 @@ void pices_validate(struct All_variables *E)
        E->control.kC_primordial_flavor!=24 || !E->composition.on ||
        !E->pices.p4 || !E->control.lith_age))
         pices_fail(E,"P8a reclassification requires 25 flavors, primordial 24 and P4 age forcing");
+    if(E->control.vbcs_file && (!E->pices.eba || E->mesh.topvbc!=1 || E->data.timedir!=1 || E->control.remove_rigid_rotation))
+        pices_fail(E,"P8b plate forcing requires forward EBA, prescribed top velocities and remove_rigid_rotation=off");
     if(E->pices.max_substeps<1 || E->pices.max_substeps>1000000 ||
        E->trace.itperel<1 || strcmp(E->output.format,"ascii-gz") ||
        E->control.ala_pressure_buoyancy)
@@ -102,18 +109,18 @@ void pices_validate(struct All_variables *E)
         pices_fail(E,"P1 requires full sphere, one cap per rank, tracer=on");
     if((E->control.restart && !E->pices.checkpoint) || E->control.post_p || E->control.stokes ||
        E->control.pseudo_free_surf || (E->control.lith_age && !E->pices.p4) ||
-       E->control.mat_control || E->control.vbcs_file || E->trace.ic_method!=0)
+       E->control.mat_control || E->trace.ic_method!=0)
         pices_fail(E,"unsupported P1 restart/forcing/composition/tracer initialization");
-    if(E->control.tracer_enriched || (E->pices.eba && (!E->control.eba_formulation || E->control.qvis_mode!=0)))
-        pices_fail(E,"PICES requires EBA, qvis_mode=0 and no enriched heating");
+    if(E->control.tracer_enriched || (E->pices.eba && !E->control.eba_formulation))
+        pices_fail(E,"PICES requires EBA and no enriched heating");
     if(!E->pices.eba && (E->control.Q0!=0 || E->control.disptn_number!=0))
         pices_fail(E,"P1 requires Q0=0, Di=0 and no enriched heating");
     for(i=0;!E->pices.eba && i<PHASE_TRANSITIONS;i++)
         if(E->control.phase[i].entropy_jump!=0 || E->control.phase[i].density_jump!=0)
             pices_fail(E,"P1 phase transitions are unsupported");
     if(E->advection.filter_temperature || !E->advection.ADVECTION ||
-       E->advection.fixed_timestep<=0 || E->mesh.toptbc!=1 || E->mesh.bottbc!=1)
-        pices_fail(E,"P1 requires fixed positive dt, ADV=on, no filter, radial Dirichlet");
+       !isfinite(E->advection.fixed_timestep) || E->advection.fixed_timestep<0 || E->mesh.toptbc!=1 || E->mesh.bottbc!=1)
+        pices_fail(E,"PICES requires nonnegative fixed dt, ADV=on, no filter, radial Dirichlet");
     if((!E->pices.p4 && (E->output.CBF_frequency!=0 || E->output.output_q_surf_CBF || E->output.output_q_botm_CBF)) || E->output.write_q_files)
         pices_fail(E,"P1 legacy CBF/heat-flux output is unsupported");
     if(!E->pices.eba && (E->control.kT_exponent!=0 || E->control.kC_ratio!=1 ||
@@ -251,14 +258,14 @@ static void assemble(struct All_variables *E,const double *field)
 /* Element heating follows the established EBA quadrature convention. The
  * shared source routines use actual velocity; only their temperature view is
  * switched to the frozen heat-stage field. No legacy CBF residual is called. */
-static void heat_load(struct All_variables *E,const double *field,double *load,double totals[4])
+static void heat_load(struct All_variables *E,const double *field,double *load,double totals[5])
 {
     int e,a,g,z,n; struct Shape_function GN;struct Shape_function_dx dx;
     struct Shape_function_dA omega; double rtf[4][9],tg[9],rho[9],cp[9],k[9],kap[9];
-    double *adi=array(E,E->lmesh.nel+1),*visc=array(E,E->lmesh.nel+1),*save=E->T[1];
-    E->T[1]=(double *)field;CBF_heat_sources(E,1,adi,visc);E->T[1]=save;
+    double *adi=array(E,E->lmesh.nel+1),*visc=array(E,E->lmesh.nel+1),*raw=array(E,E->lmesh.nel+1),*save=E->T[1];
+    E->T[1]=(double *)field;thermal_heat_sources(E,1,adi,visc,raw);E->T[1]=save;
     if(E->pices.p4)memset(E->pices.element_source,0,(E->lmesh.nel+1)*8*sizeof(double));
-    memset(load,0,(E->lmesh.nno+1)*sizeof(double));memset(totals,0,4*sizeof(double));
+    memset(load,0,(E->lmesh.nno+1)*sizeof(double));memset(totals,0,5*sizeof(double));
     for(e=1;e<=E->lmesh.nel;e++) {
         get_global_shape_fn(E,e,&GN,&dx,&omega,0,1,rtf,E->mesh.levmax,1);
         z=(e-1)%E->lmesh.elz+1;
@@ -268,21 +275,21 @@ static void heat_load(struct All_variables *E,const double *field,double *load,d
             double capacity,pressure,fractions[PHASE_TRANSITIONS],w=omega.vpt[g]*g_point[g].weight[2];
             double internal=.5*(E->refstate.rho[z]+E->refstate.rho[z+1])*E->control.Q0;
             phase_coefficients(E,e,g,&dx,rtf[3][g],tg[g],rho[g],cp[g],&capacity,&pressure,fractions);
-            totals[0]+=w*internal;totals[1]-=w*adi[e];totals[2]+=w*visc[e];totals[3]+=w*pressure;
+            totals[0]+=w*internal;totals[1]-=w*adi[e];totals[2]+=w*visc[e];totals[3]+=w*pressure;totals[4]+=w*raw[e];
             for(a=1;a<=8;a++) {n=E->ien[1][e].node[a];load[n]+=w*E->N.vpt[GNVINDEX(a,g)]*(internal-adi[e]+visc[e]+pressure);
                 if(E->pices.p4)E->pices.element_source[e*8+a-1]+=w*E->N.vpt[GNVINDEX(a,g)]*(internal-adi[e]+visc[e]+pressure);}
         }
     }
-    free(adi);free(visc);
+    free(adi);free(visc);free(raw);
 }
 
 /* Trial updates never modify Tp. Each retry starts from the same frozen
  * coefficients; coefficients are rebuilt for the next accepted substep. */
 static double eba_heat_stage(struct All_variables *E,double *g,const double *old,
-    double *rhs,double remaining,double ledger[6])
+    double *rhs,double remaining,double ledger[7])
 {
     int e,a,b,n,j,attempt,nn=E->lmesh.nno,ng=(E->lmesh.nel+1)*8;
-    double ds,maxrate=0,change,totals[4],storage=0,boundary=0;
+    double ds,maxrate=0,change,totals[5],storage=0,boundary=0;
     double *capacity=array(E,ng),*conductivity=array(E,ng),*fraction=array(E,ng*PHASE_TRANSITIONS);
     assemble(E,old);
     memcpy(capacity,E->pices.gp_capacity,ng*sizeof(double));memcpy(conductivity,E->pices.gp_k,ng*sizeof(double));
@@ -331,7 +338,7 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
             E->pices.heat_residual[e*8+a-1]+=(ds*residual-E->pices.emass[e*8+a-1]*(g[n]-old[n]))/E->advection.timestep;
         }
     }
-    ledger[0]+=storage;
+    ledger[6]+=ds*totals[4];ledger[0]+=storage;
     for(j=0;j<4;j++)ledger[j+1]+=ds*totals[j];
     /* Boundary reaction closes the frozen-capacity FE ledger. It is not CBF. */
     ledger[5]+=boundary;
@@ -465,13 +472,54 @@ void pices_initialize(struct All_variables *E)
     fflush(E->fp);
 }
 
+/* Bound the outer step; heat/source subcycling has its own stability limit.
+ * Existing clocks are float: use an explicit resolution bound at forcing knots. */
+int pices_time_finished(struct All_variables *E)
+{
+    double age=E->control.start_age-(double)E->monitor.elapsed_time*E->data.scalet;
+    return E->pices.enabled && E->advection.fixed_timestep==0 &&
+        (E->control.lith_age || E->control.vbcs_file) &&
+        age<=4*FLT_EPSILON*fmax(1.0,fabs(E->control.start_age));
+}
+
+void pices_limit_timestep(struct All_variables *E)
+{
+    int n,d;
+    double speed=0,limit=E->advection.timestep,candidate=limit,particle,age=-1,knot=0;
+    if(!E->pices.initialized || !(E->data.scalet>0))pices_fail(E,"automatic step before PICES setup");
+    for(n=1;n<=E->lmesh.nno;n++) {
+        double v=0;
+        for(d=1;d<=3;d++)v+=E->sphere.cap[1].V[d][n]*E->sphere.cap[1].V[d][n];
+        if(!isfinite(v))pices_fail(E,"nonfinite automatic-step velocity");
+        speed=fmax(speed,sqrt(v));
+    }
+    speed=reduce(E,speed,MPI_MAX);
+    particle=speed>0?.24*E->pices.min_edge/speed:DBL_MAX;
+    limit=fmin(limit,fmin(particle,E->pices.max_timestep_Ma/E->data.scalet));
+    if(E->control.lith_age || E->control.vbcs_file) {
+        double resolution=4*FLT_EPSILON*fmax(1.0,fabs(E->control.start_age));
+        age=E->control.start_age-(double)E->monitor.elapsed_time*E->data.scalet;
+        if(pices_time_finished(E))pices_fail(E,"automatic step requested past present day; stop the time controller");
+        knot=age-floor(age);
+        if(knot<=resolution)knot=fmin(age,1.0);
+        limit=fmin(limit,fmin(age,knot)/E->data.scalet);
+    }
+    if(!(limit>0) || !isfinite(limit))pices_fail(E,"invalid automatic timestep");
+    E->advection.timestep=(float)limit;
+    if(E->advection.timestep>limit)E->advection.timestep=nextafterf(E->advection.timestep,0.f);
+    if(E->monitor.elapsed_time+E->advection.timestep==E->monitor.elapsed_time)
+        pices_fail(E,"automatic timestep below clock resolution");
+    fprintf(E->fp,"PICES_TIMESTEP step=%d candidate=%.17g dt=%.17g particle_limit=%.17g age_Ma=%.17g knot_Ma=%.17g\n",
+        E->monitor.solution_cycles,candidate,(double)E->advection.timestep,particle,age,knot);
+}
+
 void pices_advance(struct All_variables *E)
 {
     int n,e,a,b,p,s,ns,nodes[9];
     int nn=E->lmesh.nno,np;
     double dt=E->advection.timestep,speed=0,cfl,ds,w[9],remaining;
     double *g,*old,*dg,*sub,*mapped,*rhs,*previous;
-    double ledger[6]={0,0,0,0,0,0};
+    double ledger[7]={0,0,0,0,0,0,0};
     double before,advected,heated,mismatch=0,submax=0,tmin=DBL_MAX,tmax=-DBL_MAX;
     FILE *f;
     if(!E->pices.initialized) pices_fail(E,"PICES not initialized");
@@ -541,9 +589,11 @@ void pices_advance(struct All_variables *E)
         }
     }
     if(E->pices.eba) {
-        ns=s;for(a=0;a<6;a++)ledger[a]=reduce(E,ledger[a],MPI_SUM);
+        ns=s;for(a=0;a<7;a++)ledger[a]=reduce(E,ledger[a],MPI_SUM);
         fprintf(E->fp,"PICES_EBA step=%d storage=%.17g internal=%.17g adiabatic=%.17g viscous=%.17g phase_pressure=%.17g boundary_reaction=%.17g\n",E->monitor.solution_cycles,ledger[0],ledger[1],ledger[2],ledger[3],ledger[4],ledger[5]);
     }
+    if(E->pices.eba)fprintf(E->fp,"PICES_VISCOUS step=%d mode=%d raw=%.17g applied=%.17g state=accepted_stokes\n",
+        E->monitor.solution_cycles,E->control.qvis_mode,ledger[6],ledger[3]);
     heated=E->pices.eba?advected+ledger[0]:energy(E,g);
     if(E->pices.p4) {
         E->pices.cbf_valid=1;

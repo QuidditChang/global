@@ -32,6 +32,7 @@
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "qvis_limiter.h"
+#include "pices.h"
 #include "drive_solvers.h"
 #include "phase_change.h"
 
@@ -90,12 +91,22 @@ void general_stokes_solver(struct All_variables *E)
 
   //velocities_conform_bcs(E,E->U);
 
+  if(E->pices.enabled && E->control.vbcs_file && E->monitor.solution_cycles>0) {
+    void read_velocity_boundary_from_file(struct All_variables *);
+    read_velocity_boundary_from_file(E);
+  }
+  /* Boundary lifting and the Stokes matrix must use the same viscosity. */
+  if(E->monitor.solution_cycles==0 || E->viscosity.update_allowed)
+    get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
   assemble_forces(E,0);
 
   if(E->monitor.solution_cycles==0 || E->viscosity.update_allowed) {
-    get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
     velocities_conform_bcs(E,E->U);
     construct_stiffness_B_matrix(E);
+  }
+  else if(E->pices.enabled && E->control.vbcs_file) {
+    /* Prescribed velocities can change even when viscosity is frozen. */
+    velocities_conform_bcs(E,E->U);
   }
 
   solve_constrained_flow_iterative(E);

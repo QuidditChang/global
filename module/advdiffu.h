@@ -45,6 +45,10 @@ extern char pyCitcom_stable_timestep__doc__[];
 extern char pyCitcom_stable_timestep__name__[];
 PyObject * pyCitcom_stable_timestep(PyObject *, PyObject *);
 
+extern char pyCitcom_pices_time_finished__doc__[];
+extern char pyCitcom_pices_time_finished__name__[];
+PyObject *pyCitcom_pices_time_finished(PyObject *, PyObject *);
+
 #endif
 
 /* $Id: advdiffu.h 4957 2006-10-12 14:48:43Z leif $ */

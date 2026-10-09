@@ -37,6 +37,7 @@
 #include "parallel_related.h"
 #include "checkpoints.h"
 #include "pices_benchmark.h"
+#include "pices.h"
 
 extern int Emergency_stop;
 
@@ -197,6 +198,8 @@ int main(argc,argv)
     else
       E->control.keep_going = 0;
 
+    if(pices_time_finished(E)) E->control.keep_going=0;
+
     cpu_total_seconds = CPU_time0()-start_time;
     if (cpu_total_seconds > E->control.record_all_until)  {
       E->control.keep_going = 0;
@@ -237,7 +240,7 @@ int main(argc,argv)
       construct_mat_group(E);
     */
 
-    if(E->control.vbcs_file==1)
+    if(E->control.vbcs_file==1 && !E->pices.enabled)
       read_velocity_boundary_from_file(E);
     /*
       else

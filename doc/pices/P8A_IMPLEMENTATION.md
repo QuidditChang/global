@@ -1,6 +1,6 @@
 # P8a: shared tracer composition and conductivity
 
-Implemented 2026-10-07 on cmbhf_EBA_PICES; local gates PASS, awaiting HPC audit.
+Implemented 2026-10-07 on cmbhf_EBA_PICES; HPC gate PASS (job 12280286).
 This is not the full 384-rank production configuration. The confirmed eventual
 start remains fresh at 249.9 Ma; no PG checkpoint conversion is introduced.
 
@@ -110,3 +110,13 @@ The repaired local five-case suite passes strict output equality, TA/CBF and
 checkpoint checks. The verifier now checks header shape/range and compares
 header totals with component arrays in checkpoints. See P8A_HEADER_FIX_RESULT.json.
 Submit the repaired build for a clean P8a HPC pass before P8b.
+
+## HPC acceptance: job 12280286
+
+Full P8a verifier PASS without header exclusions. All five cases complete;
+480 decoded field outputs (including composition headers), 168 CBF outputs
+and binary live state match. Header totals match checkpoint component arrays.
+All 60 input files and the submitted launcher match their committed versions.
+Intel MPI launcher/library match; no empty elements. P8a is complete.
+The full target remains on hold pending P8b/P8c and scientific acceptance.
+See runs/PICES_P8A_HPC_AUDIT_12280286.md/.json for provenance and metrics.

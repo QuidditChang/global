@@ -238,6 +238,11 @@ int solve_del2_u(E,d0,F,acc,high_lev)
 
   else  {
 
+    if(E->pices.enabled) for(m=1;m<=E->sphere.caps_per_proc;m++) {
+      r[m]=(double *)malloc(neq*sizeof(double));
+      Au[m]=(double *)malloc((neq+1)*sizeof(double));
+      for(i=0;i<neq;i++)r[m][i]=F[m][i];
+    }
     counts =0;
     if(E->parallel.me==0){	/* output */
       snprintf(message,200,"resi = %.6e for iter %d acc %.6e",residual,counts,acc);
@@ -257,6 +262,16 @@ int solve_del2_u(E,d0,F,acc,high_lev)
     }  while (!valid);
 
     cycles = counts;
+    if(E->pices.enabled) {
+      double true_residual;
+      assemble_del2_u(E,d0,Au,high_lev,1);
+      for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)Au[m][i]-=r[m][i];
+      true_residual=sqrt(global_vdot(E,Au,Au,high_lev)/gneq);
+      valid=isfinite(true_residual) && true_residual<acc;
+      if(E->parallel.me==0)fprintf(E->fp,"PICES_MG_RESIDUAL reported=%.17g actual=%.17g tolerance=%.17g status=%s\n",residual,true_residual,acc,valid?"PASS":"FAIL");
+      for(m=1;m<=E->sphere.caps_per_proc;m++){free(r[m]);free(Au[m]);}
+    }
   }
 
 
@@ -361,6 +376,9 @@ double multi_grid(E,d1,F,acc,hl)
       interp_vector(E,lev-1,vel[lev-1],vel[lev]);
       strip_bcs_from_residual(E,vel[lev],lev);
 
+      for(Vn=1;Vn<=Vnmax;Vn++) {
+      /* Each cycle smooths the accumulated solution against the original
+       * level RHS. Reusing the previous residual here subtracts K*u twice. */
       if (lev==levmax)
         for(m=1;m<=E->sphere.caps_per_proc;m++)
           for(j=0;j<E->lmesh.NEQ[lev];j++)
@@ -370,7 +388,6 @@ double multi_grid(E,d1,F,acc,hl)
           for(j=0;j<E->lmesh.NEQ[lev];j++)
              res[lev][m][j]=fl[lev][m][j];
 
-      for(Vn=1;Vn<=Vnmax;Vn++)   {
                                         /*    Downward stoke of the V    */
         for (dlev=lev;dlev>=levmin+1;dlev--)   {
 
@@ -423,7 +440,8 @@ double multi_grid(E,d1,F,acc,hl)
         d1[m][j]+=vel[levmax][m][j];
         }
 
-     residual = sqrt(global_vdot(E,F,F,hl)/E->mesh.NEQ[hl]);
+     /* Use the same global normalization as solve_del2_u and conj_grad. */
+     residual = sqrt(global_vdot(E,F,F,hl)/E->mesh.neq);
 
       for(i=E->mesh.levmin;i<=E->mesh.levmax;i++)
         for(m=1;m<=E->sphere.caps_per_proc;m++) {

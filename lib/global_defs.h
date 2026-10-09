@@ -779,6 +779,7 @@ struct PICES_STATE {
     int enabled, initialized, slot, no_diffusion, max_substeps, checkpoint, eba, p4, cbf_valid, consistent_projection;
     double *K, *mass, *emass, *length, *rate;
     double kappa, dt_heat, min_edge;
+    double max_timestep_Ma;
     double *ekappa, *gp_capacity, *gp_k, *gp_fraction;
     double *heat_residual, *element_source;
 };

@@ -119,6 +119,7 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     getIntProperty(properties, "pices_eba", E->pices.eba, fp);
     getIntProperty(properties, "pices_checkpoint", E->pices.checkpoint, fp);
     getIntProperty(properties, "pices_max_substeps", E->pices.max_substeps, fp);
+    getDoubleProperty(properties, "pices_max_timestep_Ma", E->pices.max_timestep_Ma, fp);
 
     getIntProperty(properties, "ADV", E->advection.ADVECTION, fp);
     getIntProperty(properties, "filter_temp", E->advection.filter_temperature, fp);

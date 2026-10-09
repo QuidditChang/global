@@ -203,7 +203,8 @@ class Solver(Component):
     def endTimestep(self, done):
         self.inventory.visc.updateMaterial()
         self.inventory.bc.updatePlateVelocity()
-        return done
+        from CitcomSLib import pices_time_finished
+        return done or pices_time_finished(self.all_variables)
 
 
     def endSimulation(self):

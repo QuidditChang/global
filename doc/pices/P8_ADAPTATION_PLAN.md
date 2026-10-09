@@ -1,7 +1,8 @@
 # P8 production adaptation plan
 
-Status: P8a implemented and locally verified 2026-10-07; awaiting HPC audit.
-P8b/P8c remain planned. See P8A_IMPLEMENTATION.md.
+Status: P8a HPC audit PASS, job 12280286, 2026-10-07.
+P8b local implementation and validation PASS, 2026-10-09; HPC audit pending.
+P8c remains planned. See P8A_IMPLEMENTATION.md and P8B_IMPLEMENTATION.md.
 Branch: cmbhf_EBA_PICES. Target remains the exact P7 production snapshot.
 
 ## Scope and architecture
@@ -11,11 +12,12 @@ background reclassification, B24=0.3, kC_ratio=0.8, qvis_mode=2, rheol7,
 time-dependent plate velocities and TA. Temperature is an independent extraq
 slot on the existing tracer population, not a second particle system.
 
-Existing reuse is substantial: Pices.c calls tracer_advection,
-thermal_transport_at_gp and CBF_heat_sources. Extend these interfaces only
-where necessary; do not copy transport or heating formulas. Tracer_setup.c
-already performs movement, flavor counts and composition reconstruction.
-The PICES moving flag currently suppresses a second outer tracer call.
+Pices.c owns the accepted-step particle lifecycle through the shared
+tracer_move_particles and tracer_update_composition functions. It reuses
+thermal_transport_at_gp and thermal_heat_sources; CBF wraps the same source
+function. The outer tracer_advection returns early for PICES, avoiding a
+second move without a transient moving flag. Keep one implementation of
+transport, reclassification, composition and physical heating.
 Make ownership/order explicit without broadly refactoring the PG driver.
 
 A previously omitted production gap is automatic timestep selection:
@@ -45,7 +47,8 @@ must be consistent; automatic steps must not skip forcing coverage/end time.
    avoid mixing current temperature with stale or reconstructed viscosity
    silently. Add variable-step particle CFL and forcing-time checks.
    Validate rheol7 plus qvis_mode=2 and a changing plate/age forcing interval,
-   then the actual target multigrid configuration. Fixed-step controls remain.
+   then a three-level small-mesh multigrid gate. Fixed-step controls remain.
+   The actual 384-rank multigrid mesh is validated in the integrated P8c pilot.
 
 3. P8c: restart and integrated pilot.
    Inventory persistent versus derived fields, especially accepted viscosity,

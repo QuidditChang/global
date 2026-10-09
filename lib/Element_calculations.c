@@ -86,7 +86,10 @@ void assemble_forces(E,penalty)
       E->F[m][a] = 0.0;
 
     for (e=1;e<=nel;e++)  {
-      get_elt_f(E,e,elt_f,1,m);
+      /* Nodal assembly masks Dirichlet columns, so its RHS needs lifting.
+       * Element assembly retains those columns; initial_vel_residual already
+       * subtracts K times the prescribed velocity. Do not subtract it twice. */
+      get_elt_f(E,e,elt_f,E->control.NMULTIGRID || E->control.NASSEMBLE,m);
       add_force(E, e, elt_f, m);
     }
 

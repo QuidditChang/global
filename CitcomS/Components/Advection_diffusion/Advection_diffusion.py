@@ -92,6 +92,7 @@ class Advection_diffusion(CitcomComponent):
         pices_eba = prop.bool("pices_eba", default=False)
         pices_checkpoint = prop.bool("pices_checkpoint", default=False)
         pices_max_substeps = prop.int("pices_max_substeps", default=10000)
+        pices_max_timestep_Ma = prop.float("pices_max_timestep_Ma", default=0.1)
 
         ADV = prop.bool("ADV", default=True)
         filter_temp = prop.bool("filter_temp", default=False)

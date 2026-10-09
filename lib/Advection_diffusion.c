@@ -281,6 +281,7 @@ void std_timestep(struct All_variables *E)
 				 E->advection.diff_timestep);
 
     E->advection.timestep = global_fmin(E,adv_timestep);
+    if(E->pices.enabled) pices_limit_timestep(E);
 
      if (E->parallel.me==0)
        fprintf(stderr, "adv_timestep=%g diff_timestep=%g\n",adv_timestep,E->advection.diff_timestep);
@@ -1448,16 +1449,22 @@ static void process_heating(struct All_variables *E, int psc_pass)
 /* Re-evaluate physical sources for the same T/u state used by CBF, including
  * initial output and a Stokes update after thermal advancement. The caller
  * owns temporary output arrays and restores all persistent heating pointers. */
-void CBF_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
+void thermal_heat_sources(struct All_variables *E, int m, double *adi, double *visc, double *raw)
 {
     if(E->control.disptn_number != 0) {
         process_adi_heating(E,m,adi);
-        process_visc_heating(E,m,visc,NULL,NULL);
+        process_visc_heating(E,m,visc,raw,NULL);
     }
     else {
         memset(adi,0,(E->lmesh.nel+1)*sizeof(double));
         memset(visc,0,(E->lmesh.nel+1)*sizeof(double));
+        if(raw)memset(raw,0,(E->lmesh.nel+1)*sizeof(double));
     }
+}
+
+void CBF_heat_sources(struct All_variables *E, int m, double *adi, double *visc)
+{
+    thermal_heat_sources(E,m,adi,visc,NULL);
 }
 
 static void measure_temperature_assimilation(struct All_variables *E)
