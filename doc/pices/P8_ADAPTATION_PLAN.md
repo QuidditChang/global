@@ -2,7 +2,7 @@
 
 Status: P8a HPC audit PASS, job 12280286, 2026-10-07.
 P8b local and HPC validation PASS, job 12291387, 2026-10-09.
-P8c implementation is locally validated; HPC restart gate and original-model pilot are pending.
+P8c local and HPC restart gate PASS (job 12292213); original-model pilot is pending.
 See P8C_IMPLEMENTATION.md for state ownership and validation.
 Branch: cmbhf_EBA_PICES. Target remains the exact P7 production snapshot.
 

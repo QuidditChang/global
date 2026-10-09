@@ -14,6 +14,7 @@ def prepare(runs):
         if m and (section,m[1]) in changes:
             key=(section,m[1]);line=m[1]+' = '+changes[key]+'\n';found.add(key)
         lines.append(line)
+        if line.strip()=='[CitcomS.solver.output]':lines.append('output_format = ascii-gz\n')
         if line.strip()=='[CitcomS.solver.tsolver]':lines.extend(k+' = '+v+'\n' for k,v in added.items())
     assert found==set(changes)
     text=''.join(lines)
@@ -28,7 +29,7 @@ def prepare(runs):
         return out
     before,after=parse(original),parse(text)
     delta=[dict(section=s,key=k,before=before.get((s,k)),after=after.get((s,k))) for s,k in sorted(set(before)|set(after)) if before.get((s,k))!=after.get((s,k))]
-    assert len(delta)==len(changes)+len(added)
+    assert len(delta)==len(changes)+len(added)+1
     (runs/'PICES_P8C_PILOT_CONFIG_DIFF.json').write_text(json.dumps(dict(target=TARGET,solver_ranks=384,nodes_at_40_slots=10,mesh=[129,129,65],particles_per_element=27,initial_particles=12*128*128*64*27,changes=delta),indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('runs',type=Path);prepare(p.parse_args().runs)

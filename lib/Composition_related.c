@@ -41,20 +41,25 @@ static void check_initial_composition(struct All_variables *E);
 static void fill_composition_from_neighbors(struct All_variables *E);
 
 
+/* Derived capability shared by the standalone parser and Pyre setup. */
+void composition_set_capabilities(struct All_variables *E)
+{
+    E->composition.icompositional_rheology = E->viscosity.CDEPV;
+    E->composition.on = E->control.tracer &&
+        (E->composition.ichemical_buoyancy || E->composition.icompositional_rheology);
+}
+
 void composition_input(struct All_variables *E)
 {
     int i;
     int m = E->parallel.me;
     input_boolean("CDEPV",&(E->viscosity.CDEPV),"off",m);
-    E->composition.icompositional_rheology = E->viscosity.CDEPV;
 
     input_boolean("chemical_buoyancy",
 		  &(E->composition.ichemical_buoyancy),
 		  "1,0,nomax",m);
 
-    /* Capability state belongs to parsing, not diagnostic output. */
-    E->composition.on = E->control.tracer &&
-        (E->composition.ichemical_buoyancy || E->composition.icompositional_rheology);
+    composition_set_capabilities(E);
     if (E->composition.on) {
 
         /* ibuoy_type=0 (absolute method) */

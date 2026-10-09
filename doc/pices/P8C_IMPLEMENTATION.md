@@ -1,7 +1,9 @@
 # P8c: coupled restart and original-model pilot
 
 Branch: `cmbhf_EBA_PICES`; based on P8b `ad70c94948bfd9511c421921cbbc152e54847fb7`.
-HPC acceptance is pending. This phase does not change the Stokes algorithm.
+HPC coupled-restart gate PASS: job 12292213, 2026-10-09. Original-model pilot
+job 12292363 failed at step 0; see the Pyre startup correction below.
+This phase does not change the Stokes algorithm.
 
 ## Accepted-state ownership
 
@@ -65,7 +67,7 @@ and actual forcing data are not emulated by these tests.
 Grid 129x129x65 per cap, 384 ranks (4x4x2x12), 27 particles/element,
 249.9 Ma fresh initialization, Q0=30, rheol7/cold_scale=1, B24=.3,
 kC=.8, qvis and all geological paths remain the target's values.
-Only PICES controls, heat-stage CBF semantics, job name/queue and two-step
+Only PICES controls, heat-stage CBF semantics, output format, job name/queue and two-step
 output/checkpoint frequency change. LSF copies reference/coordinate/polygon
 inputs and makes run-local path substitutions. No flat-config translation.
 
@@ -79,3 +81,33 @@ Production release remains separate: measure actual-data memory/runtime and
 resolve the outstanding P7 temperature-accuracy trend with targeted spatial/
 particle-density comparisons. Passing restart integrity is not a scientific
 accuracy certification.
+
+## Pyre pilot startup correction — job 12292363
+
+The first actual-model pilot exited 72 before PICES_INIT or an accepted step.
+User-supplied stderr identifies the reclassification guard. Standalone parsing
+sets composition.on; Pyre supplied tracer/chemical/rheology inputs but left that
+capability at its zero-initialized value. The prior move of capability setup out
+of diagnostic output did not cover this second input frontend.
+
+composition_set_capabilities now derives composition.on and compositional
+rheology from inputs. The standalone parser uses it before parsing composition
+arrays; initial_mesh_solver_setup also uses it after either frontend has supplied
+its inputs, before restart preflight and PICES validation. No numerical solver
+algorithm or physical parameter changes.
+
+A second defect was implicit Pyre output_format=ascii. The pilot generator now
+explicitly selects ascii-gz, as required by PICES. The configuration diff therefore
+has 14 entries. LSF creates a compact diagnostic archive containing root metadata,
+solver.stderr/stdout, rank logs and checkpoint JSON/manifests, while leaving
+particle payloads on HPC. An archive failure cannot turn a failed solve into a
+successful run.
+
+check_pyre_composition_setup.py injects Pyre's unset derived flags at the common
+setup boundary, reproduces the exact abort without finalization, then runs the
+real continuous/split/restart gate with finalization. It tests the C boundary,
+not a complete local Pythia installation; the actual Pyre pilot must be rerun.
+
+Requested eventual production basename:
+`cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES`.
+Production is not released by this failed pilot.

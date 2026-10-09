@@ -25,6 +25,7 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
 
+void composition_set_capabilities(struct All_variables *E);
 void composition_input(struct All_variables *E);
 void composition_setup(struct All_variables *E);
 void write_composition_instructions(struct All_variables *E);

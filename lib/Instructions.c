@@ -42,6 +42,7 @@
 #include "pices.h"
 
 #include "citcom_init.h"
+#include "composition_related.h"
 #include "initial_temperature.h"
 #include "lith_age.h"
 #include "material_properties.h"
@@ -84,6 +85,9 @@ void open_qfiles(struct All_variables *) ;
 
 void initial_mesh_solver_setup(struct All_variables *E)
 {
+    /* Both entry points have supplied tracer and rheology inputs by now.
+     * Resolve capability before restart preflight and PICES validation. */
+    composition_set_capabilities(E);
 
     E->monitor.cpu_time_at_last_cycle =
         E->monitor.cpu_time_at_start = CPU_time0();
