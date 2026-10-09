@@ -190,13 +190,14 @@ void read_checkpoint(struct All_variables *E)
     fclose(fp);
 
     if(E->pices.enabled) {
-        pices_checkpoint_restore_velocity(E,output_file);
+        pices_checkpoint_restore_state(E,output_file);
         pices_restore(E);
         pices_checkpoint_check_state(E,output_file);
     }
 
     /* finally, init viscosity */
-    initial_viscosity(E);
+    /* Schema 4 restores the accepted viscosity used by the next heat step. */
+    if(!E->pices.enabled || !pices_checkpoint_coupled(E)) initial_viscosity(E);
 
     return;
 }

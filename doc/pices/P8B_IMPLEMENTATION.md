@@ -108,5 +108,8 @@ outputs, 168 CBF outputs and identical checkpoint live-state payloads.
 Standalone O2 compilation and all three changed Python C binding sources
 compile successfully. Shell syntax and git diff checks pass.
 
-HPC audit is pending. The runs worktree stores PICES_P8B_LOCAL_AUDIT.json
+HPC audit PASS: job 12291387, 2026-10-09; seven cases, 110 committed inputs,
+282 true MG residual checks. CG/MG velocity relative L2=2.3296636737439687e-6.
+Run time 95 s, max memory 229 MB. This does not release production or P8c restart.
+The runs worktree stores PICES_P8B_LOCAL_AUDIT.json
 (with source/input hashes), PICES_P8B_LOCAL_AUDIT.md and PICES_P8B_RUNBOOK.md.

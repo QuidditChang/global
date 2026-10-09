@@ -1,8 +1,9 @@
 # P8 production adaptation plan
 
 Status: P8a HPC audit PASS, job 12280286, 2026-10-07.
-P8b local implementation and validation PASS, 2026-10-09; HPC audit pending.
-P8c remains planned. See P8A_IMPLEMENTATION.md and P8B_IMPLEMENTATION.md.
+P8b local and HPC validation PASS, job 12291387, 2026-10-09.
+P8c implementation is locally validated; HPC restart gate and original-model pilot are pending.
+See P8C_IMPLEMENTATION.md for state ownership and validation.
 Branch: cmbhf_EBA_PICES. Target remains the exact P7 production snapshot.
 
 ## Scope and architecture
@@ -21,7 +22,7 @@ transport, reclassification, composition and physical heating.
 Make ownership/order explicit without broadly refactoring the PG driver.
 
 A previously omitted production gap is automatic timestep selection:
-PICES validation requires fixed_timestep>0; the target omits this setting,
+Before P8b, PICES validation required fixed_timestep>0; the target omits this setting,
 and the parser default is zero. Retain fixed steps for comparisons, and
 add a global particle CFL constraint to automatic outer step selection.
 Thermal subcycling remains separate. Forcing timestamps and accepted clocks

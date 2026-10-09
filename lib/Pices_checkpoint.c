@@ -21,7 +21,7 @@ static void pathcat(struct All_variables *E,char *out,const char *base,const cha
 }
 static void hashfile(struct All_variables *E,const char *path,char hex[65]) {
  FILE *f=fopen(path,"rb");unsigned char b[8192];size_t n;PicesSHA s;
- if(!f)pices_fail(E,"missing checkpoint/metadata file");pices_sha_init(&s);
+ if(!f)pices_fail(E,"missing checkpoint/input file");pices_sha_init(&s);
  while((n=fread(b,1,sizeof(b),f)))pices_sha_add(&s,b,n);
  if(ferror(f))pices_fail(E,"checkpoint hash read failed");
  if(fclose(f))pices_fail(E,"checkpoint close failed");pices_sha_end(&s,hex);
@@ -37,6 +37,32 @@ static void writetext(struct All_variables *E,const char *path,const char *text)
  FILE *f=fopen(path,"wb");if(!f)pices_fail(E,"cannot write PICES metadata");
  if(fputs(text,f)<0 || fflush(f) || fsync(fileno(f)))pices_fail(E,"metadata write failed");
  if(fclose(f))pices_fail(E,"metadata close failed");
+}
+/* Older constant-viscosity checkpoints keep their original schema. */
+int pices_checkpoint_coupled(struct All_variables *E) {
+ return E->viscosity.RHEOL==7 || E->control.vbcs_file ||
+        E->control.qvis_mode || E->advection.fixed_timestep<=0;
+}
+static int schema(struct All_variables *E) {
+ return pices_checkpoint_coupled(E)?4:(E->composition.on?3:(E->pices.p4?2:1));
+}
+/* Identity of the current forcing brackets, independent of relocation. Future
+ * forcing coverage belongs to the run's input manifest, not this checkpoint. */
+static void forcing_hash(struct All_variables *E,PicesSHA *s) {
+ extern float find_age_in_MY(struct All_variables *);
+ float age=find_age_in_MY(E);int a=age<0?0:(int)age,b=age<0?0:a+1,k,j;
+ const char *prefix[]={E->control.velocity_boundary_file,E->control.lith_age_file,
+ E->control.flag_depth_file,E->control.flag_depth_new_file,E->control.tf_file};
+ char path[1200],digest[65];
+ for(k=0;k<5;k++) {
+  if(k==0?!E->control.vbcs_file:!E->control.lith_age)continue;
+  for(j=a;j<=((k<3)?b:a);j++) {
+   int n=k<2?snprintf(path,sizeof(path),"%s%d.%d",prefix[k],j,E->sphere.capid[1]-1):
+               snprintf(path,sizeof(path),"%s%d.xyz",prefix[k],j);
+   if(n<0 || n>=sizeof(path))pices_fail(E,"forcing identity path too long");
+   hashfile(E,path,digest);pices_sha_add(s,digest,64);
+  }
+ }
 }
 static void fingerprint(struct All_variables *E,char out[65]) {
  PicesSHA s;int d;double params[]={E->data.Ttop,E->data.ref_temperature,E->control.Atemp,
@@ -98,6 +124,23 @@ static void fingerprint(struct All_variables *E,char out[65]) {
   pices_sha_add(&s,composition,sizeof(composition));
   pices_sha_add(&s,E->composition.buoyancy_ratio,E->composition.ncomp*sizeof(double));
  }
+ if(pices_checkpoint_coupled(E)) {
+  double coupled[]={4,E->control.qvis_mode,E->control.qvis_cohesion_pa,
+   E->control.qvis_friction_angle_rad,E->data.ref_viscosity,E->viscosity.cold_scale,
+   E->pices.max_timestep_Ma,E->advection.fine_tune_dt,E->control.NMULTIGRID,
+   E->control.NASSEMBLE,E->mesh.levmax,E->control.mg_cycle,
+   E->control.v_steps_high,E->control.v_steps_upper,E->control.vbcs_file,
+   E->control.precondition,E->control.down_heavy,E->control.up_heavy,
+   E->viscosity.SMOOTH,E->viscosity.smooth_cycles,E->viscosity.TDEPV_AVE,
+   E->viscosity.EQUIVDD,E->viscosity.equivddopt,E->viscosity.rheol_layers,
+   E->viscosity.zlith,E->viscosity.z410,E->viscosity.zlm,E->viscosity.zcmb,
+   E->refstate.has_lithostatic_pressure};
+  pices_sha_add(&s,coupled,sizeof(coupled));
+  if(E->refstate.has_lithostatic_pressure)
+   pices_sha_add(&s,E->refstate.lithostatic_pressure_pa+1,E->lmesh.noz*sizeof(double));
+  pices_sha_add(&s,E->mat[1]+1,E->lmesh.nel*sizeof(E->mat[1][0]));
+  forcing_hash(E,&s);
+ }
  pices_sha_end(&s,out);
 }
 static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
@@ -112,7 +155,7 @@ static void metadata(struct All_variables *E,const char *payload,const char *sta
  "\"interpolation\":\"gnomonic_wedge_radial_v1\",\n\"length\":\"min_directional_rms_cartesian_v1\",\n"
  "\"accepted_velocity_sha256\":\"%s\",\n"
  "\"physics_mesh_sha256\":\"%s\",\n\"checkpoint_sha256\":\"%s\"\n}\n",
- E->composition.on?3:(E->pices.p4?2:1),PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
+ schema(E),PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
  E->parallel.me,E->parallel.nproc,E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz,E->lmesh.nox,E->lmesh.noy,E->lmesh.noz,E->sphere.capid[1],
  E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,E->trace.nflavors,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
@@ -148,6 +191,11 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
      (count && fwrite(E->new_flag_depth+1,sizeof(float),count,f)!=(size_t)count))
    pices_fail(E,"composition history write failed");
  }
+ if(pices_checkpoint_coupled(E)) {
+  if(fwrite(E->EVI[E->mesh.levmax][1]+1,sizeof(float),8*E->lmesh.nel,f)!=(size_t)(8*E->lmesh.nel) ||
+     fwrite(E->VI[E->mesh.levmax][1]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)
+   pices_fail(E,"accepted viscosity write failed");
+ }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -156,7 +204,7 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
  MPI_Barrier(E->parallel.world);
  if(rename(ct,cf))pices_fail(E,"manifest publish failed");
  MPI_Barrier(E->parallel.world);
- fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=%d\n",E->monitor.solution_cycles,E->composition.on?3:(E->pices.p4?2:1));
+ fprintf(E->fp,"PICES_CHECKPOINT step=%d phase=accepted schema=%d\n",E->monitor.solution_cycles,schema(E));
 }
 /* Called before any legacy array allocation/read. All ranks must have a complete
  * set. Payload hash + exact expected size prevents malformed legacy counts. */
@@ -170,7 +218,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -201,7 +249,7 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
 
 /* U is the Stokes iterate; nodal V can differ after rigid-rotation removal.
  * Restore the accepted tracer velocity exactly, without a second projection. */
-void pices_checkpoint_restore_velocity(struct All_variables *E,const char *path) {
+void pices_checkpoint_restore_state(struct All_variables *E,const char *path) {
  char state[512];FILE *f;int d,n;
  pathcat(E,state,path,".pices.state");f=fopen(state,"rb");if(!f)pices_fail(E,"missing accepted velocity");
  for(d=1;d<=3;d++) {
@@ -223,6 +271,14 @@ void pices_checkpoint_restore_velocity(struct All_variables *E,const char *path)
      count!=expected || (count && fread(E->new_flag_depth+1,sizeof(float),count,f)!=(size_t)count))
    pices_fail(E,"composition history read failed");
   for(n=1;n<=count;n++)if(!isfinite(E->new_flag_depth[n]))pices_fail(E,"invalid composition history");
+ }
+ if(pices_checkpoint_coupled(E)) {
+  float *eta=E->EVI[E->mesh.levmax][1],*vi=E->VI[E->mesh.levmax][1];
+  if(fread(eta+1,sizeof(float),8*E->lmesh.nel,f)!=(size_t)(8*E->lmesh.nel) ||
+     fread(vi+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)
+   pices_fail(E,"accepted viscosity read failed");
+  for(n=1;n<=8*E->lmesh.nel;n++)if(!isfinite(eta[n]) || eta[n]<=0)pices_fail(E,"invalid restored integration viscosity");
+  for(n=1;n<=E->lmesh.nno;n++)if(!isfinite(vi[n]) || vi[n]<=0)pices_fail(E,"invalid restored nodal viscosity");
  }
  if(fclose(f))pices_fail(E,"velocity close failed");
 }

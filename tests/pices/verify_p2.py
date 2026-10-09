@@ -15,7 +15,7 @@ def config(p):
 def fields(s):return dict(re.findall(r'(\w+)=([^\s]+)',s))
 def checkpoint(path):
     meta=json.loads(Path(str(path)+'.pices.json').read_text());b=path.read_bytes();state=Path(str(path)+'.pices.state')
-    require(meta['magic']=='CITCOMS_EBA_PICES' and meta['schema'] in (1,2,3) and meta['phase']=='accepted','checkpoint schema')
+    require(meta['magic']=='CITCOMS_EBA_PICES' and meta['schema'] in (1,2,3,4) and meta['phase']=='accepted','checkpoint schema')
     require(meta['checkpoint_sha256']==sha(path) and meta['accepted_velocity_sha256']==sha(state),'checkpoint checksum')
     nx,ny,nz=meta['local_mesh'];nn=nx*ny*nz;ne=(nx-1)*(ny-1)*(nz-1);neq=nn*3
     h=struct.unpack_from('=8i3f',b);require(list(h[:3])==[nx,ny,nz] and list(h[3:6])==meta['decomposition'] and h[6]==1,'binary mesh')
@@ -36,18 +36,21 @@ def checkpoint(path):
     for i in range(6+header[1]):
         v=array(header[4]+1,skip=1);require(all(math.isfinite(x[0]) for x in struct.iter_unpack('=d',v[8:])),'nonfinite checkpoint particle')
     array(header[4]+1,4,1)
-    if meta['schema']==3:
+    if meta['schema']>=3 and meta['flavors']:
         sentinel();nc=struct.unpack_from('=i',b,off)[0];off+=4
         require(nc==meta['flavors']-1,'composition count')
         array(nc);array(nc)
         for i in range(nc):array(ne+1,skip=1)
     require(off==len(b),'unexpected checkpoint size')
     state_bytes=nn*3*4+(4+ne*8*8 if meta['schema']>=2 else 0)
-    if meta['schema']==3:
+    if meta['schema']>=3 and meta['flavors']:
         raw=state.read_bytes();visit,count=struct.unpack_from('=2i',raw,state_bytes)
         require(count in (0,((nx-1)*meta['decomposition'][0]+1)*((ny-1)*meta['decomposition'][1]+1)),'history shape')
         state_bytes+=8+4*count
         require(all(math.isfinite(x[0]) for x in struct.iter_unpack('=f',raw[state_bytes-count*4:state_bytes])),'finite history')
+    if meta['schema']==4:
+        raw=state.read_bytes();eta=raw[state_bytes:];state_bytes+=(8*ne+nn)*4
+        require(all(math.isfinite(x[0]) and x[0]>0 for x in struct.iter_unpack('=f',eta)),'accepted viscosity')
     require(state.stat().st_size==state_bytes,'state companion size')
     if meta['schema']>=2:
         raw=state.read_bytes();require(struct.unpack_from('=i',raw,nn*3*4)[0]==int(meta['step']>0),'CBF validity')

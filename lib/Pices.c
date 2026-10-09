@@ -80,15 +80,15 @@ void pices_validate(struct All_variables *E)
     if(!isfinite(E->pices.max_timestep_Ma) || E->pices.max_timestep_Ma<=0)
         pices_fail(E,"pices_max_timestep_Ma must be finite and positive");
     if(E->pices.checkpoint) {
-        if(E->control.vbcs_file || E->control.qvis_mode || E->advection.fixed_timestep<=0)
-            pices_fail(E,"P8b plates/capped heating/automatic-step restart requires P8c");
+        if(pices_checkpoint_coupled(E) && !E->pices.p4)
+            pices_fail(E,"coupled checkpoint requires P4 EBA heat state");
         if(E->composition.on && !E->pices.p4)
             pices_fail(E,"composition checkpoint requires P4 heat-state schema");
-        if(!E->viscosity.update_allowed || E->viscosity.RHEOL!=1 || E->viscosity.SDEPV ||
+        if(!E->viscosity.update_allowed || !E->viscosity.FROM_SYSTEM || (E->viscosity.RHEOL!=1 && E->viscosity.RHEOL!=7) || E->viscosity.SDEPV ||
            E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
            E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones)
-            pices_fail(E,"P2 checkpoint requires constant Newtonian viscosity and rebuilds");
-        for(i=0;i<E->viscosity.num_mat;i++)
+            pices_fail(E,"checkpoint requires supported Newtonian rheology and viscosity rebuilds");
+        if(E->viscosity.RHEOL==1)for(i=0;i<E->viscosity.num_mat;i++)
             if(E->viscosity.N0[i]!=E->viscosity.N0[0] || E->viscosity.E[i]!=0 || E->viscosity.Z[i]!=0)
                 pices_fail(E,"P2 checkpoint requires uniform temperature-independent viscosity");
     }

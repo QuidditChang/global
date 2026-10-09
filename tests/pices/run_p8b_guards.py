@@ -15,7 +15,7 @@ def run(name,changes,plate_scale=1):
  with (d/'stdout').open('w') as out,(d/'stderr').open('w') as err:
   r=subprocess.run([os.environ.get('MPIEXEC','/usr/local/bin/mpiexec'),'--oversubscribe','-n','12',str(a.build.resolve()/'CitcomSFull'),'case.cfg'],cwd=d,stdout=out,stderr=err,timeout=900)
  return d,r.returncode
-for name,changes,message in [('checkpoint',dict(pices_checkpoint='on',p5_case='off'),'requires P8c'),('rotation',dict(remove_rigid_rotation=1),'remove_rigid_rotation=off'),('invalid_limit',dict(pices_max_timestep_Ma=0),'must be finite and positive')]:
+for name,changes,message in [('checkpoint',dict(pices_checkpoint='on',p5_case='off',VISC_UPDATE='off'),'viscosity rebuilds'),('rotation',dict(remove_rigid_rotation=1),'remove_rigid_rotation=off'),('invalid_limit',dict(pices_max_timestep_Ma=0),'must be finite and positive')]:
  d,code=run(name,changes)
  assert code not in (0,8) and message in (d/'stderr').read_text(),name
  assert not any('PICES_STEP ' in f.read_text() for f in (d/'DATA').glob('*/log')),name
