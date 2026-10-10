@@ -19,8 +19,8 @@ def temps(d,step,n):
 def difference(a,b):return math.sqrt(sum((x-y)**2 for x,y in zip(a,b))/len(a))
 def verify(root,local=False,partial=False,stage="P5"):
  root=Path(root);matrix=json.loads((root/'input/matrix.json').read_text());rows=matrix['cases'];results={};finals={};initials={};complete=[]
- expected=11 if stage=='P7' else 46
- require(stage in ('P5','P7') and len(rows)==expected and len({r['name'] for r in rows})==expected,'matrix size/names')
+ expected={'P5':46,'P7':11,'P7_accuracy':10}.get(stage)
+ require(stage in ('P5','P7','P7_accuracy') and len(rows)==expected and len({r['name'] for r in rows})==expected,'matrix size/names')
  for row in rows:
   name=row['name'];d=root/name
   if partial and not (d/'mpi_exit_code.txt').exists():continue
@@ -42,7 +42,7 @@ def verify(root,local=False,partial=False,stage="P5"):
   require(all(v['rss_max_KiB']>0 and v['volume']>0 for v in metric),'diagnostic geometry/memory')
   stokes=[]
   if not row['prescribed']:
-   require(cfg.get('vlowstep')==('2000' if stage=='P7' and row['variant']=='rheol7' else '1000'),'coupled inner iteration budget')
+   require(cfg.get('vlowstep')==('2000' if stage=='P7_accuracy' or (stage=='P7' and row['variant']=='rheol7') else '1000'),'coupled inner iteration budget')
    stokes=[fields(l) for l in log.splitlines() if l.startswith('PICES_STOKES ')]
    require([int(v['step']) for v in stokes]==list(range(steps+1)),'shared Stokes guard '+name)
    require(all(v['status']=='PASS' and float(v['inner_relative'])==1e-6 for v in stokes),'Stokes failure')
