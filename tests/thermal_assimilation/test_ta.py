@@ -16,7 +16,7 @@ class ThermalAssimilationTest(unittest.TestCase):
   src=(ROOT/'lib/Lith_age.c').read_text()
   input_src=(ROOT/'lib/Full_read_input_from_files.c').read_text()
   src += '\n' + function(input_src, 'static void full_input_arrays_init(')
-  funcs=['static void full_input_arrays_init(', 'static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static double lith_age_relaxation_fraction(', 'static void assimilate_lith_relaxed(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_construct_tic(']
+  funcs=['static void full_input_arrays_init(', 'static float effective_plate_age_nd(', 'static double lith_age_surface_anomaly(', 'static double lith_age_target_temperature(', 'static double lith_age_old_temperature_weight(', 'static double lith_age_asml_thickness(', 'static double lith_age_relaxation_fraction(', 'static void assimilate_lith_relaxed(', 'static void validate_lith_age_asml(', 'void lith_age_temperature_bound_adj(', 'void lith_age_conform_tbc(', 'void assimilate_lith_conform_bcs(', 'void lith_age_update_tbc(', 'void lith_age_apply_initial_shallow(', 'void lith_age_construct_tic(']
   prefix=r'''
 #include <assert.h>
 #include <math.h>
@@ -28,6 +28,8 @@ class ThermalAssimilationTest(unittest.TestCase):
 static int reads=0;
 void parallel_process_termination(void) { abort(); }
 float find_age_in_MY(struct All_variables *E) { return 100.; }
+void thermal_preage_run(struct All_variables *E) { abort(); }
+void lith_age_apply_initial_shallow(struct All_variables *E);
 void temperatures_conform_bcs(struct All_variables *E);
 void temperatures_conform_bcs2(struct All_variables *E);
 void reader(struct All_variables *E,int output) { reads++; }
