@@ -15,5 +15,6 @@ for row in json.loads((src/'matrix.json').read_text())['cases']:
   result=subprocess.run([os.environ.get('MPIEXEC','/usr/local/bin/mpiexec'),'--oversubscribe','-n','12',str(a.build.resolve()/'CitcomSFull'),'case.cfg'],cwd=d,stdout=out,stderr=err,timeout=3600)
  (d/'mpi_exit_code.txt').write_text(str(result.returncode)+'\n')
  assert result.returncode in (0,8),(name,result.returncode,(d/'solver.stderr').read_text()[-1500:])
- assert all(f"PICES_STEP step={row['last']} " in (d/f'DATA/{rank}/log').read_text() for rank in range(12)),(name,'premature exit')
+ log_name='PICES_P8c.log' if 'output_format=ascii\n' in (d/'case.cfg').read_text() else 'log'
+ assert all(f"PICES_STEP step={row['last']} " in (d/f'DATA/{rank}'/log_name).read_text() for rank in range(12)),(name,'premature exit')
  print(name,'complete',flush=True)

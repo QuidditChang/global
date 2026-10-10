@@ -102,9 +102,10 @@ void pices_validate(struct All_variables *E)
     if(E->control.vbcs_file && (!E->pices.eba || E->mesh.topvbc!=1 || E->data.timedir!=1 || E->control.remove_rigid_rotation))
         pices_fail(E,"P8b plate forcing requires forward EBA, prescribed top velocities and remove_rigid_rotation=off");
     if(E->pices.max_substeps<1 || E->pices.max_substeps>1000000 ||
-       E->trace.itperel<1 || strcmp(E->output.format,"ascii-gz") ||
+       E->trace.itperel<1 ||
+       (strcmp(E->output.format,"ascii") && strcmp(E->output.format,"ascii-gz")) ||
        E->control.ala_pressure_buoyancy)
-        pices_fail(E,"P1 requires positive tracer density, valid substep limit, ascii-gz and BA/EBA");
+        pices_fail(E,"P1 requires positive tracer density, valid substep limit, ascii/ascii-gz and BA/EBA");
     if(E->sphere.caps!=12 || E->sphere.caps_per_proc!=1 || !E->control.tracer)
         pices_fail(E,"P1 requires full sphere, one cap per rank, tracer=on");
     if((E->control.restart && !E->pices.checkpoint) || E->control.post_p || E->control.stokes ||

@@ -106,7 +106,8 @@ void output(struct All_variables *E, int cycles)
   output_velo(E, cycles);
   output_visc(E, cycles);
 
-  output_surf_botm(E, cycles);
+  /* PICES boundary heat flux is written by the heat-stage CBF path. */
+  if(!E->pices.enabled) output_surf_botm(E, cycles);
 
   /* optiotnal output below */
 

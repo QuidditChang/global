@@ -28,7 +28,6 @@ void p5_parameters(struct All_variables *E) {
   pices_fail(E,"invalid P5 rotation or length scale");
  if(kind) {
   int restart=0,checkpoint=0;
-  if(E->control.thermal_preage)pices_fail(E,"thermal_preage cannot combine with P5 initial overrides");
   input_boolean("restart",&restart,"off",E->parallel.me);
   input_boolean("pices_checkpoint",&checkpoint,"off",E->parallel.me);
   if(restart || checkpoint)pices_fail(E,"P5 experiments are fresh runs, not restart/checkpoint modes");
@@ -51,7 +50,6 @@ static double initial_at(struct All_variables *E,const double x[3],double time) 
 void p5_initial(struct All_variables *E) {
  int n;double x[3];
  if(!kind)return;
- if(E->control.thermal_preage)pices_fail(E,"thermal_preage cannot combine with P5 initial overrides");
  if(kind==4 && (!E->pices.enabled || !E->pices.consistent_projection || !prescribed || omega!=0))
   pices_fail(E,"sharp stress requires bounded PICES and prescribed zero velocity");
  if(E->control.restart || E->pices.checkpoint || E->sphere.caps_per_proc!=1 || E->sphere.caps!=12)

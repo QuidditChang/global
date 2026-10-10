@@ -31,7 +31,9 @@ def verify(root, local=False):
         require(row['dt'] == 4e-7/row['steps'], 'matched final time')
         require(row['name'] == name(row['method'],row['nodes'],row['particles'],row['steps']), 'case identity')
         c = config(root/'input/cases'/f'{row["name"]}.cfg')
-        require(c['pices_projection']=='bounded_consistent' and c['p5_length_scale']=='1', 'projection/length')
+        require(c['p5_length_scale']=='1', 'length scale')
+        if row['method']=='pices':
+            require(c.get('pices_projection')=='bounded_consistent', 'PICES projection')
     report = integrity(root, local=local, stage='P7_accuracy')
     final = {r['name']:temps(root/r['name'],r['steps'],r['nodes']) for r in rows}
     initial = {r['name']:temps(root/r['name'],0,r['nodes']) for r in rows}
@@ -53,18 +55,25 @@ def verify(root, local=False):
                 xyz.extend(tuple(map(float,line.split())) for line in f)
         require(len(xyz)==12*n**3 and all(len(x)==3 for x in xyz), 'coordinate shape')
         coordinates.append(common_nodes(xyz,n))
-    for xyz in coordinates[:2]:
-        require(max(abs(a-b) for p,q in zip(xyz,coordinates[2]) for a,b in zip(p,q)) < 2e-6, 'physical nested-node alignment')
-    spatial = {}
-    for method in ('pg','pices'):
-        values = [common_nodes(final[name(method,n)],n) for n in (5,9,17)]
-        starts = [common_nodes(initial[name(method,n)],n) for n in (5,9,17)]
-        spatial[method] = dict(common_nodes_per_cap=125,
-            initial_rms_K=[difference(starts[i],starts[2]) for i in (0,1)],
-            successive_final_rms_K=[difference(values[i],values[i+1]) for i in (0,1)],
-            note='Same 5x5x5 nodes per cap; boundary duplicates retained. This is not a volume-weighted error norm.')
+    coordinate_gap = [max(abs(a-b) for p,q in zip(xyz,coordinates[2]) for a,b in zip(p,q))
+                      for xyz in coordinates[:2]]
+    aligned = max(coordinate_gap) < 2e-6
+    spatial = dict(status='ALIGNED' if aligned else 'NON_NESTED_NOT_COMPARABLE',
+                   maximum_spherical_coordinate_difference=coordinate_gap,
+                   note='Equal logical indices are not necessarily equal physical locations. '
+                        'Do not interpret index-wise differences as spatial convergence.', methods={})
+    if aligned:
+        for method in ('pg','pices'):
+            values = [common_nodes(final[name(method,n)],n) for n in (5,9,17)]
+            starts = [common_nodes(initial[name(method,n)],n) for n in (5,9,17)]
+            spatial['methods'][method] = dict(common_nodes_per_cap=125,
+                initial_rms_K=[difference(starts[i],starts[2]) for i in (0,1)],
+                successive_final_rms_K=[difference(values[i],values[i+1]) for i in (0,1)],
+                note='Sampled nodes, not a volume-weighted norm; boundary copies retained.')
     particle = {f'{a}_to_{b}':difference(final[name('pices',9,a)],final[name('pices',9,b)]) for a,b in ((32,64),(64,128))}
     temporal = {m:difference(final[name(m,17)],final[name(m,17,steps=64)]) for m in ('pg','pices')}
+    pairs['17_half_dt'] = dict(nodal_rms_K=difference(final[name('pices',17,steps=64)],final[name('pg',17,steps=64)]),
+        vrms_ratio_minus_one_percent=100*(report['cases'][name('pices',17,steps=64)]['final']['vrms']/report['cases'][name('pg',17,steps=64)]['final']['vrms']-1))
     for row in rows:
         if row['method'] != 'pices': continue
         d = root/row['name']
