@@ -537,6 +537,9 @@ PyObject * pyCitcom_Param_set_properties(PyObject *self, PyObject *args)
     getFloatProperty(properties, "max_plate_age_Ma",
                      E->control.max_plate_age_Ma, fp);
     getFloatProperty(properties, "mantle_temp", E->control.lith_age_mantle_temp, fp);
+    getIntProperty(properties, "thermal_preage", E->control.thermal_preage, fp);
+    getDoubleProperty(properties, "thermal_preage_Ma", E->control.thermal_preage_Ma, fp);
+    getDoubleProperty(properties, "thermal_preage_max_dt_Ma", E->control.thermal_preage_max_dt_Ma, fp);
     getFloatProperty(properties, "bottom_tbl_thickness",
                      E->control.bottom_tbl_thickness, fp);
     getFloatProperty(properties, "bottom_tbl_diffusivity_ratio",
