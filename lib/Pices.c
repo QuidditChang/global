@@ -497,11 +497,94 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     free(before);free(projected);free(alpha);free(target);
 }
 
+/* Read-only coverage snapshots around movement. Never relocate, replenish,
+ * or change composition while diagnosing an empty element. */
+static int *coverage_before;
+static int coverage_before_valid, coverage_before_particles;
+static void capture_particle_coverage(struct All_variables *E)
+{
+    int p,e;
+    if(!E->composition.on)return;
+    if(!coverage_before)coverage_before=calloc(E->lmesh.nel+1,sizeof(int));
+    if(!coverage_before)pices_fail(E,"coverage diagnostic allocation failed");
+    memset(coverage_before,0,(E->lmesh.nel+1)*sizeof(int));
+    for(p=1;p<=E->trace.ntracers[1];p++) {
+        e=E->trace.ielement[1][p];
+        if(e>0 && e<=E->lmesh.nel)coverage_before[e]++;
+    }
+    coverage_before_particles=E->trace.ntracers[1];coverage_before_valid=1;
+}
+
+static void report_empty_elements(struct All_variables *E)
+{
+    int e,i,p,a,n,empty=0,global_empty,shown=0,bad_hosts=0,count_mismatch=0;
+    int *direct=calloc(E->lmesh.nel+1,sizeof(int));
+    long long local[5],global[5];
+    if(!direct)pices_fail(E,"coverage diagnostic allocation failed");
+    for(p=1;p<=E->trace.ntracers[1];p++) {
+        e=E->trace.ielement[1][p];
+        if(e>0 && e<=E->lmesh.nel)direct[e]++;else bad_hosts++;
+    }
+    for(e=1;e<=E->lmesh.nel;e++) {
+        int count=0;
+        for(i=0;i<E->trace.nflavors;i++)count+=E->trace.ntracer_flavor[1][i][e];
+        if(!count)empty++;
+        if(count!=direct[e])count_mismatch++;
+    }
+    local[0]=coverage_before_valid?coverage_before_particles:E->trace.ntracers[1];
+    local[1]=E->trace.ntracers[1];local[2]=bad_hosts;local[3]=count_mismatch;local[4]=empty;
+    MPI_Allreduce(local,global,5,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
+    global_empty=global[4]>0;
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"PICES_PARTICLE_BALANCE step=%d before_valid=%d before=%lld after=%lld delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld empty_elements=%lld\n",
+            E->monitor.solution_cycles,coverage_before_valid,global[0],global[1],global[1]-global[0],global[2],global[3],global[4]);
+        fflush(E->fp);
+    }
+    if(global_empty) {
+        for(e=1;e<=E->lmesh.nel && shown<8;e++) {
+            int count=0,ix,iy,iz,neighbors[6];double x=0,y=0,z=0,rad=0;
+            for(i=0;i<E->trace.nflavors;i++)count+=E->trace.ntracer_flavor[1][i][e];
+            if(count)continue;
+            shown++;iz=(e-1)%E->lmesh.elz;ix=((e-1)/E->lmesh.elz)%E->lmesh.elx;
+            iy=(e-1)/(E->lmesh.elz*E->lmesh.elx);
+            for(a=1;a<=8;a++) {n=E->ien[1][e].node[a];x+=E->x[1][1][n];y+=E->x[1][2][n];z+=E->x[1][3][n];rad+=E->sx[1][3][n];}
+            fprintf(stderr,"PICES_EMPTY rank=%d step=%d cap=%d element=%d local_ijk=%d,%d,%d lon_deg=%.17g lat_deg=%.17g depth_km=%.17g before=%d after_direct=%d after_flavor=%d rank_particles_before=%d rank_particles_after=%d time=%.17g dt=%.17g\n",
+                E->parallel.me,E->monitor.solution_cycles,E->sphere.capid[1],e,ix+1,iy+1,iz+1,
+                atan2(y,x)*180/M_PI,atan2(z,hypot(x,y))*180/M_PI,(E->sphere.ro-rad/8)*E->data.radius_km,
+                coverage_before_valid?coverage_before[e]:-1,direct[e],count,
+                coverage_before_valid?coverage_before_particles:-1,E->trace.ntracers[1],
+                (double)E->monitor.elapsed_time,(double)E->advection.timestep);
+            neighbors[0]=ix?e-E->lmesh.elz:0;
+            neighbors[1]=ix+1<E->lmesh.elx?e+E->lmesh.elz:0;
+            neighbors[2]=iy?e-E->lmesh.elz*E->lmesh.elx:0;
+            neighbors[3]=iy+1<E->lmesh.ely?e+E->lmesh.elz*E->lmesh.elx:0;
+            neighbors[4]=iz?e-1:0;neighbors[5]=iz+1<E->lmesh.elz?e+1:0;
+            for(i=0;i<6;i++) {int neighbor=neighbors[i];
+                fprintf(stderr,"PICES_EMPTY_NEIGHBOR rank=%d element=%d face=%d neighbor=%d before=%d after=%d remote_or_domain_boundary=%d\n",
+                    E->parallel.me,e,i,neighbor,neighbor&&coverage_before_valid?coverage_before[neighbor]:-1,
+                    neighbor?direct[neighbor]:-1,!neighbor);
+            }
+            for(a=1;a<=8;a++) {int incident=0,other,b;n=E->ien[1][e].node[a];
+                for(other=1;other<=E->lmesh.nel;other++)for(b=1;b<=8;b++)
+                    if(E->ien[1][other].node[b]==n){incident+=direct[other];break;}
+                fprintf(stderr,"PICES_EMPTY_NODE rank=%d element=%d corner=%d node=%d theta=%.17g phi=%.17g radius=%.17g local_incident_particles=%d\n",
+                    E->parallel.me,e,a,n,E->sx[1][1][n],E->sx[1][2][n],E->sx[1][3][n],incident);
+            }
+        }
+        fprintf(stderr,"PICES_EMPTY_SUMMARY rank=%d local_empty=%d reported=%d global_empty=%lld global_particle_delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld\n",
+            E->parallel.me,empty,shown,global[4],global[1]-global[0],global[2],global[3]);
+        fflush(stderr);MPI_Barrier(E->parallel.world);
+        free(direct);pices_fail(E,"empty composition element");
+    }
+    free(direct);coverage_before_valid=0;
+}
+
 static void composition_check(struct All_variables *E)
 {
     int e,i,p,total,primordial=0,global_primordial;
     double error=0,global_error,cmin=1,cmax=0,global_min,global_max;
     if(!E->composition.on)return;
+    report_empty_elements(E);
     for(p=1;p<=E->trace.ntracers[1];p++)
         if(E->trace.extraq[1][0][p]==E->control.kC_primordial_flavor)primordial++;
     for(e=1;e<=E->lmesh.nel;e++) {
@@ -620,6 +703,7 @@ void pices_advance(struct All_variables *E)
     }
     memset(diagnostics.q,0,(E->lmesh.nel+1)*PD_NQ*sizeof(double));
 
+    capture_particle_coverage(E);
     tracer_move_particles(E);
     /* Reclassify once at the arrival age, before conductivity is evaluated.
      * Like TA, this temporary clock view does not commit the accepted step. */

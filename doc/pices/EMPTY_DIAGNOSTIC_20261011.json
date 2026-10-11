@@ -1,0 +1,30 @@
+{
+  "status": "PASS",
+  "purpose": "Locate production rank161 step97 empty element without changing handling",
+  "tests": [
+    "full O2 build",
+    "controlled true-empty case",
+    "controlled stale flavor counts",
+    "read-only state memcmp on failure",
+    "24-rank 4-step coupled run: 393216 particles conserved, no invalid hosts, no count mismatches"
+  ],
+  "HPC": {
+    "initialization": "fresh same production physics",
+    "steps": 100,
+    "cores": 400,
+    "solver_ranks": 384,
+    "queue": "medium",
+    "walltime_hours": 4
+  },
+  "diagnostics": {
+    "PICES_EMPTY": "element id, cap, local ijk, centroid lon/lat degrees, mean-node depth km, counts before/after",
+    "PICES_EMPTY_NEIGHBOR": "six local face neighbors; face order x-,x+,y-,y+,z-,z+; zero neighbor denotes remote/domain boundary, not an empty neighbor",
+    "PICES_EMPTY_NODE": "corner geometry and LOCAL incident particle counts; this is not a globally assembled interpolation-weight test",
+    "PICES_PARTICLE_BALANCE": "MPI-global counts, invalid host count and direct/flavor count discrepancies"
+  },
+  "limits": [
+    "prints at most 8 empty elements per rank",
+    "global count conservation alone does not prove correct individual migration",
+    "actual production failure has not yet been reproduced locally"
+  ]
+}
