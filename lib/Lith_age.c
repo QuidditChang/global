@@ -143,6 +143,7 @@ void lith_age_input(struct All_variables *E)
   input_float("lith_age_asml_tau_Ma",&(E->control.lith_age_asml_tau_Ma),"1.0",m);
   input_float("lith_age_asml_exp",&(E->control.lith_age_asml_exp),"3.0",m);
   input_float("mantle_temp",&(E->control.lith_age_mantle_temp),"1.0",m);
+  input_double("thermal_preage_top_depth_km",&(E->control.thermal_preage_top_depth_km),"0.0",m);
   input_boolean("thermal_preage",&(E->control.thermal_preage),"off",m);
   input_double("thermal_preage_Ma",&(E->control.thermal_preage_Ma),"1000.0",m);
   input_double("thermal_preage_max_dt_Ma",&(E->control.thermal_preage_max_dt_Ma),"5.0",m);

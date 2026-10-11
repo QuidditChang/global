@@ -117,3 +117,22 @@ MPICC=mpicc python tests/cbf/build_validation.py --build-dir /tmp/preage-build -
 See `tests/thermal_preage/` for real MPI initialization/state-isolation and
 convergence tests. `tests/thermal_assimilation/test_ta.py` covers preservation of
 the lifted shallow initializer and existing assimilation behavior.
+
+## Optional lower-mantle-only initialization
+
+`thermal_preage_top_depth_km=0` retains full-mantle behavior. A positive value
+selects the first global radial node at least that deep (1e-6 km geometric
+comparison tolerance). All nodes at and above that mesh surface stay at Tref;
+only deeper interior nodes evolve. The CMB remains fixed at temperature 1.
+This is a fixed-temperature internal boundary, not an insulating boundary.
+Existing shallow HSC/slab overlays and real surface BCs are applied afterward.
+The `THERMAL_PREAGE_DOMAIN` record reports requested/actual depths and the
+global radial index. Selection is collective across radial MPI partitions.
+The full FE mesh is retained, with homogeneous corrections constrained to zero
+at frozen nodes. No control/reference/boundary metadata or production clock
+is mutated. A cutoff leaving no free interior radial node is rejected.
+
+For the current 65-node production mesh, a requested 660 km selects about
+694.53449 km. This freezes the entire mesh region above that surface, including
+the cell that straddles 660 km. Phase physics below the boundary remains active;
+this does not freeze the entire finite-width 660-km phase transition.

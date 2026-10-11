@@ -161,7 +161,7 @@ def inspect(directory, ranks, enabled):
     return result
 
 
-def independent_be(directory, ranks, duration, exponent=0., radial_only=False, phase_capacity=False):
+def independent_be(directory, ranks, duration, exponent=0., radial_only=False, phase_capacity=False, top_depth_km=0.):
     """Independent global SciPy solve from exported geometry, no production K.
 
     This deliberately checks full 3-D coupling, constrained solve, shared-node
@@ -172,7 +172,11 @@ def independent_be(directory, ranks, duration, exponent=0., radial_only=False, p
     size = len(initial)
     old = initial[:, 7].copy()
     nz = int(initial[:, 5].max())
-    fixed = (initial[:, 5] == 1) | (initial[:, 5] == nz)
+    top_index=nz
+    if top_depth_km:
+        depth=(1.-initial[:,6])*6371.
+        top_index=int(initial[depth+1e-6>=top_depth_km,5].max())
+    fixed = (initial[:, 5] == 1) | (initial[:, 5] >= top_index)
     old[initial[:, 5] == 1] = 1.
     old[initial[:, 5] == nz] = .4
     free = np.flatnonzero(~fixed)
@@ -359,7 +363,35 @@ def main():
         assert len(profile['temperature_depth_km']) == 17
     results['ascii_initial_fields']['initial_npz_verified'] = True
 
+    # Freeze the entire upper region, including cells straddling 660 km.
+    # A second cutoff snaps to the radial MPI interface on this test mesh.
+    for cutoff in (660., 1400.):
+        changes=dict(thermal_preage='on', thermal_preage_top_depth_km=cutoff,
+                     thermal_preage_Ma=100., thermal_preage_max_dt_Ma=100.)
+        case=run('cutoff_%g_12' % cutoff,changes,env={'PREAGE_TEST_QUADRATURE':'1'})
+        reference,observed,error=independent_be(case,12,100.,top_depth_km=cutoff)
+        assert error['reference_max_error']<2e-8,error
+        nodes,_,_=merged(data(case,'preaged',12))
+        old,_,_=merged(data(case,'before',12))
+        depth=(1.-nodes[:,6])*6371.
+        index=int(nodes[depth+1e-6>=cutoff,5].max())
+        upper=nodes[:,5]>=index
+        assert np.array_equal(nodes[upper,7],old[upper,7]), 'frozen upper temperature changed'
+        lower=(nodes[:,5]>1)&~upper
+        assert np.max(abs(nodes[lower,7]-old[lower,7]))>1e-6
+        expected,_,_=merged(data(zero,'final',12))
+        final,_,_=merged(data(case,'final',12))
+        assert np.array_equal(final[upper,7],expected[upper,7]), 'upper shallow overlay changed'
+        decomposed=run('cutoff_%g_24' % cutoff,dict(changes,nprocz=2),ranks=24)
+        mismatch=distance(field(case,'preaged',12),field(decomposed,'preaged',24))
+        assert mismatch<2e-9,mismatch
+        results['cutoff_%g_12' % cutoff].update(error,upper_bitwise_unchanged=True,
+            final_upper_matches_unaged=True,max_12_24_rank_difference=mismatch)
+
     for name, changes in (
+        ('negative_top', {'thermal_preage_top_depth_km': -1}),
+        ('nan_top', {'thermal_preage_top_depth_km': 'nan'}),
+        ('cmb_top', {'thermal_preage_top_depth_km': 2866.95}),
         ('negative_duration', {'thermal_preage_Ma': -1}),
         ('zero_dt', {'thermal_preage_max_dt_Ma': 0}),
         ('nan_duration', {'thermal_preage_Ma': 'nan'}),

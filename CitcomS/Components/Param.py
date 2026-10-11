@@ -79,6 +79,7 @@ class Param(CitcomComponent):
         lith_age_depth = pyre.inventory.float("lith_age_depth", default=0.0314)
         max_plate_age_Ma = pyre.inventory.float("max_plate_age_Ma", default=70.0)
         mantle_temp = pyre.inventory.float("mantle_temp", default=1.0)
+        thermal_preage_top_depth_km = pyre.inventory.float("thermal_preage_top_depth_km", default=0.0)
         thermal_preage = pyre.inventory.bool("thermal_preage", default=False)
         thermal_preage_Ma = pyre.inventory.float("thermal_preage_Ma", default=1000.0)
         thermal_preage_max_dt_Ma = pyre.inventory.float("thermal_preage_max_dt_Ma", default=5.0)

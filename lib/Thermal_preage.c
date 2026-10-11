@@ -21,7 +21,8 @@ void get_global_shape_fn();
 
 struct Preage {
     struct All_variables *E;
-    int nn, ne;
+    int nn, ne, top_index;
+    double top_depth_km;
     double *K, *mass, *copies, *diag;
     double *capacity, *conductivity, *oldcapacity, *oldconductivity;
     double *fraction, *oldfraction;
@@ -45,23 +46,50 @@ static void share(struct All_variables *E,double *x)
 /* Local radial endpoints are often MPI interfaces, not physical boundaries. */
 static int radial_index(struct All_variables *E,int n)
 { return (n-1)%E->lmesh.noz+E->lmesh.nzs; }
-static int fixed(struct All_variables *E,int n)
+/* Freeze every node at/above the first mesh level at least as deep as
+ * the requested cutoff. Select its GLOBAL radial index across MPI ranks. */
+static void select_top(struct Preage *A)
 {
-    int k=radial_index(E,n);return k==1 || k==E->mesh.noz;
+    struct All_variables *E=A->E;
+    int n, local=0;
+    double depth=0;
+    A->top_index=E->mesh.noz;A->top_depth_km=0;
+    if(E->control.thermal_preage_top_depth_km==0)return;
+    for(n=1;n<=E->lmesh.noz;n++) {
+        double z=(E->sphere.ro-E->sx[1][3][n])*E->data.radius_km;
+        int k=radial_index(E,n);
+        if(z+1e-6>=E->control.thermal_preage_top_depth_km && k>local)local=k;
+    }
+    MPI_Allreduce(&local,&A->top_index,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(A->top_index<=2 || A->top_index>=E->mesh.noz)
+        pices_fail(E,"thermal_preage cutoff leaves no interior conductive node");
+    for(n=1;n<=E->lmesh.noz;n++)if(radial_index(E,n)==A->top_index)
+        depth=(E->sphere.ro-E->sx[1][3][n])*E->data.radius_km;
+    A->top_depth_km=global(E,depth,MPI_MAX);
 }
-static void boundary(struct All_variables *E,double *t)
+static int fixed(struct Preage *A,int n)
 {
+    int k=radial_index(A->E,n);return k==1 || k>=A->top_index;
+}
+static void boundary(struct Preage *A,double *t)
+{
+    struct All_variables *E=A->E;
     int n;
     for(n=1;n<=E->lmesh.nno;n++) {
-        int k=radial_index(E,n);
+        int k=radial_index(E,n),nz=(n-1)%E->lmesh.noz+1;
         if(k==1)t[n]=1.0;
         else if(k==E->mesh.noz)t[n]=E->refstate.temperature_surface;
+        else if(k>=A->top_index)t[n]=E->refstate.Tref[nz];
     }
 }
 
 void thermal_preage_validate(struct All_variables *E)
 {
     if(!E->control.thermal_preage)return;
+    if(!isfinite(E->control.thermal_preage_top_depth_km) ||
+       E->control.thermal_preage_top_depth_km<0 ||
+       E->control.thermal_preage_top_depth_km >= (E->sphere.ro-E->sphere.ri)*E->data.radius_km)
+        pices_fail(E,"thermal_preage requires finite top depth within the mantle");
     if(!isfinite(E->control.thermal_preage_Ma) || E->control.thermal_preage_Ma<0 ||
        !isfinite(E->control.thermal_preage_max_dt_Ma) || E->control.thermal_preage_max_dt_Ma<=0)
         pices_fail(E,"thermal_preage requires finite age>=0 and max_dt_Ma>0");
@@ -153,7 +181,7 @@ static double residual(struct Preage *A,const double *old,const double *x,double
     int n;double error=0;
     apply(A,x,A->work,dt);
     for(n=1;n<=A->nn;n++) {
-        A->r[n]=fixed(A->E,n)?0:A->mass[n]*old[n]-A->work[n];
+        A->r[n]=fixed(A,n)?0:A->mass[n]*old[n]-A->work[n];
         if(!isfinite(A->r[n]))error=DBL_MAX;
         else error=fmax(error,fabs(A->r[n])/A->mass[n]);
     }
@@ -180,7 +208,7 @@ static int solve(struct Preage *A,const double *old,double *x,double dt,int *ite
         pap=dot(A,A->direction,A->work);
         if(!(pap>0) || !isfinite(pap) || !(rz>0) || !isfinite(rz))return 0;
         alpha=rz/pap;
-        for(n=1;n<=A->nn;n++)if(!fixed(A->E,n))x[n]+=alpha*A->direction[n];
+        for(n=1;n<=A->nn;n++)if(!fixed(A,n))x[n]+=alpha*A->direction[n];
         /* True residual on every iteration avoids recursive false convergence. */
         error=residual(A,old,x,dt);
         (*iterations)++;
@@ -215,7 +243,10 @@ void thermal_preage_run(struct All_variables *E)
     maxdt=E->control.thermal_preage_max_dt_Ma/E->data.scalet;
     if(!isfinite(duration) || !isfinite(maxdt) || !(maxdt>0))
         pices_fail(E,"thermal_preage invalid scaled duration or timestep");
-    boundary(E,E->T[1]);
+    select_top(&A);
+    boundary(&A,E->T[1]);
+    fprintf(E->fp,"THERMAL_PREAGE_DOMAIN requested_top_km=%.17g actual_top_km=%.17g top_radial_index=%d upper_temperature=Tref\n",
+        E->control.thermal_preage_top_depth_km,A.top_depth_km,A.top_index);
     {
         double bad=0;
         for(n=1;n<=A.nn;n++)if(!isfinite(E->T[1][n]) ||
@@ -269,7 +300,7 @@ void thermal_preage_run(struct All_variables *E)
             apply(&A,trial,A.work,dt);
             for(n=1;n<=A.nn;n++) {
                 storage+=A.mass[n]*(trial[n]-old[n])/A.copies[n];
-                if(fixed(E,n))reaction+=(A.work[n]-A.mass[n]*trial[n])/A.copies[n];
+                if(fixed(&A,n))reaction+=(A.work[n]-A.mass[n]*trial[n])/A.copies[n];
             }
             ledger_storage+=global(E,storage,MPI_SUM);
             ledger_boundary+=global(E,reaction,MPI_SUM);
