@@ -1,3 +1,4 @@
+#include "pices.h"
 /* Shared NODE/GP/ELEMENT depth-frequency profile engine. */
 
 #include <float.h>
@@ -263,29 +264,34 @@ static double ala_relative_residual_at_element(struct All_variables *E,
 
 static double qvisc_at_element(struct All_variables *E, int cap, int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_VISC);
     return E->heating_visc[cap][element];
 }
 
 static double qadi_at_element(struct All_variables *E, int cap, int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_ADI);
     return E->heating_adi[cap][element];
 }
 
 static double qadi_base_at_element(struct All_variables *E, int cap,
                                    int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_ADI);
     return E->heating_adi_base[cap][element];
 }
 
 static double qphase_at_element(struct All_variables *E, int cap,
                                 int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_PHASE);
     return E->heating_phase[cap][element];
 }
 
 static double qinternal_at_element(struct All_variables *E, int cap,
                                    int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_INTERNAL);
     int radial_element = (element - 1) % E->lmesh.elz + 1;
     double rho = 0.5 * (E->refstate.rho[radial_element]
                         + E->refstate.rho[radial_element + 1]);
@@ -301,22 +307,23 @@ static double qinternal_at_element(struct All_variables *E, int cap,
 
 static double qassim_at_element(struct All_variables *E, int cap, int element)
 {
+    if(E->pices.enabled)return pices_profile_source(E,element,PD_TA);
     return E->heating_assim[cap][element];
 }
 
 static double qtotal_at_element(struct All_variables *E, int cap, int element)
 {
     return qinternal_at_element(E, cap, element)
-        + E->heating_visc[cap][element] - E->heating_adi[cap][element]
-        - E->heating_phase[cap][element]
-        + E->heating_assim[cap][element];
+        + qvisc_at_element(E,cap,element) - qadi_at_element(E,cap,element)
+        - qphase_at_element(E,cap,element)
+        + qassim_at_element(E,cap,element);
 }
 
 static double qvisc_minus_qadi_base_at_element(struct All_variables *E,
                                                int cap, int element)
 {
-    return E->heating_visc[cap][element]
-        - E->heating_adi_base[cap][element];
+    return qvisc_at_element(E,cap,element)
+        - qadi_base_at_element(E,cap,element);
 }
 
 static double buoyancy_thermal_at_node(struct All_variables *E,
@@ -1002,6 +1009,23 @@ static int write_profiles_npz(struct All_variables *E, int cycles,
     status |= add_f64(&writer, "T_surface_K", &surface_temperature, 0, NULL);
 
     status |= write_eba_power_npz(&writer, E);
+    if(E->pices.enabled) {
+        const struct Pices_diagnostics *pd=pices_diagnostics(E);
+        int valid=pd->valid && pd->step==cycles,version=1;
+        status |= npz_add_i32(&writer,"pices_diagnostics_version",&version,0,NULL);
+        status |= npz_add_i32(&writer,"pices_diagnostics_valid",&valid,0,NULL);
+        status |= npz_add_i32(&writer,"pices_source_accepted_step_average",&version,0,NULL);
+        status |= npz_add_i32(&writer,"pices_statistics_global",&version,0,NULL);
+        status |= npz_add_i32(&writer,"pices_energy_frozen_capacity_T",&version,0,NULL);
+        if(valid) {
+            status |= npz_add_i32(&writer,"pices_diagnostics_step",&pd->step,0,NULL);
+            for(i=0;i<PD_NVALUES;i++) {
+                snprintf(filename,sizeof(filename),"pices_%s",pices_diagnostic_names[i]);
+                status |= add_f64(&writer,filename,&pd->values[i],0,NULL);
+            }
+        }
+    }
+
 
     shape[0] = node_depth_count;
     status |= add_f64(&writer, "node_depth_km", node_depth, 1, shape);
@@ -1094,13 +1118,19 @@ void output_profiles(struct All_variables *E, int cycles)
     for (variable_index = 0; variable_index < PROFILE_VARIABLE_COUNT;
          ++variable_index)
         if (profile_flag(E, profile_variables[variable_index].flag_id))
+        {
+            const struct Pices_diagnostics *pd=pices_diagnostics(E);
+            int heat=profile_variables[variable_index].flag_id>=PROFILE_FLAG_QVISC &&
+                     profile_variables[variable_index].flag_id<=PROFILE_FLAG_QVISC_MINUS_QADI_BASE;
+            if(pd && heat && (!pd->valid || pd->step!=cycles))continue;
             enabled_indices[result_count++] = variable_index;
+        }
     if (result_count == 0)
         return;
 
     node_depth_count = E->mesh.noz;
     element_depth_count = E->mesh.noz - 1;
-    volume_scale = E->data.radius_km * E->data.radius_km
+    volume_scale = (double)E->data.radius_km * E->data.radius_km
         * E->data.radius_km;
     local_node_volume = profile_allocate(node_depth_count, sizeof(double), E);
     global_node_volume = profile_allocate(node_depth_count, sizeof(double), E);

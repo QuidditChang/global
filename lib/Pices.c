@@ -17,6 +17,24 @@ void thermal_heat_sources(struct All_variables *, int, double *, double *, doubl
 void temperatures_conform_bcs(struct All_variables *);
 void get_global_shape_fn();
 
+/* One accepted-step snapshot feeds both text and NPZ diagnostics. Q arrays
+ * are element-volume averages, time averaged over accepted heat substeps.
+ * adi and phase follow the existing profile sink-positive convention. */
+static double energy(struct All_variables *,const double *);
+static struct Pices_diagnostics diagnostics;
+const char *pices_diagnostic_names[PD_NVALUES]={
+ "dt_nd","time_nd","energy_before_nd","energy_after_nd","remap_nd",
+ "capacity_rebase_nd","heat_storage_nd","boundary_reaction_nd",
+ "ta_storage_nd","reconciliation_nd","closure_residual_nd","heat_residual_nd",
+ "particle_count_global","particle_Tmin_K","particle_Tmax_K","particle_Tmean_count_K",
+ "grid_Tmin_K","grid_Tmax_K","energy_scale_J","source_scale_W_m3","internal_input_nd","adiabatic_sink_nd",
+ "viscous_input_nd","phase_sink_nd","viscous_raw_nd"};
+const struct Pices_diagnostics *pices_diagnostics(struct All_variables *E)
+{ return E->pices.enabled ? &diagnostics : NULL; }
+double pices_profile_source(struct All_variables *E,int element,int term)
+{ return diagnostics.valid && diagnostics.step==E->monitor.solution_cycles ?
+    diagnostics.q[element*PD_NQ+term] : NAN; }
+
 void pices_fail(struct All_variables *E, const char *why)
 {
     fprintf(stderr,"PICES_ERROR rank=%d step=%d: %s\n",
@@ -267,6 +285,8 @@ static void heat_load(struct All_variables *E,const double *field,double *load,d
     E->T[1]=(double *)field;thermal_heat_sources(E,1,adi,visc,raw);E->T[1]=save;
     if(E->pices.p4)memset(E->pices.element_source,0,(E->lmesh.nel+1)*8*sizeof(double));
     memset(load,0,(E->lmesh.nno+1)*sizeof(double));memset(totals,0,5*sizeof(double));
+    memset(diagnostics.trial,0,(E->lmesh.nel+1)*PD_NQ*sizeof(double));
+    memset(diagnostics.volume,0,(E->lmesh.nel+1)*sizeof(double));
     for(e=1;e<=E->lmesh.nel;e++) {
         get_global_shape_fn(E,e,&GN,&dx,&omega,0,1,rtf,E->mesh.levmax,1);
         z=(e-1)%E->lmesh.elz+1;
@@ -276,6 +296,12 @@ static void heat_load(struct All_variables *E,const double *field,double *load,d
             double capacity,pressure,fractions[PHASE_TRANSITIONS],w=omega.vpt[g]*g_point[g].weight[2];
             double internal=.5*(E->refstate.rho[z]+E->refstate.rho[z+1])*E->control.Q0;
             phase_coefficients(E,e,g,&dx,rtf[3][g],tg[g],rho[g],cp[g],&capacity,&pressure,fractions);
+            diagnostics.volume[e]+=w;
+            diagnostics.trial[e*PD_NQ+PD_INTERNAL]+=w*internal;
+            diagnostics.trial[e*PD_NQ+PD_ADI]+=w*adi[e];
+            diagnostics.trial[e*PD_NQ+PD_VISC]+=w*visc[e];
+            diagnostics.trial[e*PD_NQ+PD_PHASE]-=w*pressure;
+            diagnostics.trial[e*PD_NQ+PD_RAW]+=w*raw[e];
             totals[0]+=w*internal;totals[1]-=w*adi[e];totals[2]+=w*visc[e];totals[3]+=w*pressure;totals[4]+=w*raw[e];
             for(a=1;a<=8;a++) {n=E->ien[1][e].node[a];load[n]+=w*E->N.vpt[GNVINDEX(a,g)]*(internal-adi[e]+visc[e]+pressure);
                 if(E->pices.p4)E->pices.element_source[e*8+a-1]+=w*E->N.vpt[GNVINDEX(a,g)]*(internal-adi[e]+visc[e]+pressure);}
@@ -292,7 +318,9 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
     int e,a,b,n,j,attempt,nn=E->lmesh.nno,ng=(E->lmesh.nel+1)*8;
     double ds,maxrate=0,change,totals[5],storage=0,boundary=0;
     double *capacity=array(E,ng),*conductivity=array(E,ng),*fraction=array(E,ng*PHASE_TRANSITIONS);
+    double energy_old_mass=energy(E,old);
     assemble(E,old);
+    diagnostics.values[PD_REBASE]+=energy(E,old)-energy_old_mass;
     memcpy(capacity,E->pices.gp_capacity,ng*sizeof(double));memcpy(conductivity,E->pices.gp_k,ng*sizeof(double));
     memcpy(fraction,E->pices.gp_fraction,ng*PHASE_TRANSITIONS*sizeof(double));
     heat_load(E,old,rhs,totals);
@@ -339,6 +367,8 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
             E->pices.heat_residual[e*8+a-1]+=(ds*residual-E->pices.emass[e*8+a-1]*(g[n]-old[n]))/E->advection.timestep;
         }
     }
+    for(e=1;e<=E->lmesh.nel;e++)for(j=0;j<PD_TA;j++)
+        diagnostics.q[e*PD_NQ+j]+=ds*diagnostics.trial[e*PD_NQ+j];
     ledger[6]+=ds*totals[4];ledger[0]+=storage;
     for(j=0;j<4;j++)ledger[j+1]+=ds*totals[j];
     /* Boundary reaction closes the frozen-capacity FE ledger. It is not CBF. */
@@ -411,7 +441,9 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     double *alpha=array(E,nn+1),*target=array(E,nn+1);
     double *save=E->T[1],time=E->monitor.elapsed_time,stored=0,reconciliation=0;
     memcpy(before,g,(nn+1)*sizeof(double));
+    double before_rebase=energy(E,g);
     assemble(E,g); /* same frozen heat capacity for both diagnostic ledgers */
+    diagnostics.values[PD_REBASE]+=energy(E,g)-before_rebase;
     E->T[1]=g;E->monitor.elapsed_time=time+dt;
     lith_age_conform_tbc(E);
     lith_age_temperature_bound_adj(E,E->mesh.levmax);
@@ -456,6 +488,11 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=particle_relaxation_v1 delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
         E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,
         reduce(E,maximum,MPI_MAX),stored,reconciliation,stored+reconciliation);
+    diagnostics.values[PD_TASTORE]=stored;
+    diagnostics.values[PD_RECON]=reconciliation;
+    for(int e=1;e<=E->lmesh.nel;e++)for(int a=1;a<=8;a++)
+        diagnostics.q[e*PD_NQ+PD_TA]+=E->pices.emass[e*8+a-1]*
+            E->assim_delta_T[1][E->ien[1][e].node[a]];
     E->monitor.elapsed_time=time;E->T[1]=save;
     free(before);free(projected);free(alpha);free(target);
 }
@@ -574,6 +611,15 @@ void pices_advance(struct All_variables *E)
     for(n=1;n<=nn;n++) previous[n]=E->T[1][n];
     if(E->pices.eba)assemble(E,previous);
     before=energy(E,previous);
+    diagnostics.valid=0;diagnostics.step=E->monitor.solution_cycles;
+    memset(diagnostics.values,0,sizeof(diagnostics.values));
+    if(!diagnostics.q) {
+        diagnostics.q=array(E,(E->lmesh.nel+1)*PD_NQ);
+        diagnostics.trial=array(E,(E->lmesh.nel+1)*PD_NQ);
+        diagnostics.volume=array(E,E->lmesh.nel+1);
+    }
+    memset(diagnostics.q,0,(E->lmesh.nel+1)*PD_NQ*sizeof(double));
+
     tracer_move_particles(E);
     /* Reclassify once at the arrival age, before conductivity is evaluated.
      * Like TA, this temporary clock view does not commit the accepted step. */
@@ -646,6 +692,38 @@ void pices_advance(struct All_variables *E)
     E->advection.timesteps++;E->advection.total_timesteps++;
     E->advection.last_sub_iterations=ns;E->monitor.elapsed_time+=dt;
     audit_temperature(E,"thermal_exit",ns,-1);
+    if(E->pices.eba) {
+        double *v=diagnostics.values,lo=DBL_MAX,hi=-DBL_MAX,sum=0;
+        const double length=E->data.radius_km*1000.0;
+        v[PD_DT]=dt;v[PD_TIME]=E->monitor.elapsed_time;
+        v[PD_BEFORE]=before;v[PD_AFTER]=energy(E,g);v[PD_REMAP]=advected-before;
+        v[PD_HEAT]=ledger[0];v[PD_BOUNDARY]=ledger[5];
+        v[PD_QINTERNAL]=ledger[1];v[PD_QADI]=-ledger[2];v[PD_QVISC]=ledger[3];
+        v[PD_QPHASE]=-ledger[4];v[PD_QRAW]=ledger[6];
+        v[PD_HEAT_RESIDUAL]=ledger[0]-ledger[1]-ledger[2]-ledger[3]-ledger[4]-ledger[5];
+        v[PD_RESIDUAL]=v[PD_AFTER]-before-v[PD_REMAP]-v[PD_REBASE]
+            -ledger[1]-ledger[2]-ledger[3]-ledger[4]-ledger[5]-v[PD_TASTORE]-v[PD_RECON];
+        for(p=1;p<=np;p++) {
+            double t=E->data.Ttop+E->data.ref_temperature*E->trace.extraq[1][E->pices.slot][p];
+            lo=fmin(lo,t);hi=fmax(hi,t);sum+=t;
+        }
+        v[PD_PARTICLES]=reduce(E,(double)np,MPI_SUM);
+        v[PD_TPMIN]=reduce(E,lo,MPI_MIN);v[PD_TPMAX]=reduce(E,hi,MPI_MAX);
+        v[PD_TPMEAN]=reduce(E,sum,MPI_SUM)/v[PD_PARTICLES];
+        v[PD_GRIDMIN]=E->data.Ttop+E->data.ref_temperature*reduce(E,tmin,MPI_MIN);
+        v[PD_GRIDMAX]=E->data.Ttop+E->data.ref_temperature*reduce(E,tmax,MPI_MAX);
+        v[PD_ENERGY_SCALE]=E->data.k0*E->data.ref_temperature*length*E->data.scalet*1e6*365.25*86400;
+        v[PD_POWER_DENSITY_SCALE]=E->data.k0*E->data.ref_temperature/(length*length);
+        for(e=1;e<=E->lmesh.nel;e++)for(a=0;a<PD_NQ;a++)
+            diagnostics.q[e*PD_NQ+a]/=dt*diagnostics.volume[e];
+        diagnostics.valid=1;
+        if(E->parallel.me==0) {
+            fprintf(E->fp,"PICES_DIAGNOSTICS step=%d stage=accepted_step scope=global energy=frozen_capacity_T source=accepted_step_average",diagnostics.step);
+            for(a=0;a<PD_NVALUES;a++)fprintf(E->fp," %s=%.17g",pices_diagnostic_names[a],v[a]);
+            fprintf(E->fp,"\n");
+        }
+    }
+
     fprintf(E->fp,"PICES_STEP step=%d rank=%d time=%.17g dt=%.17g substeps=%d particles=%d cfl=%.17g Tmin=%.17g Tmax=%.17g mismatch=%.17g subgrid_max=%.17g remap_energy=%.17g heat_energy=%.17g derivative=heat_stage_only\n",E->monitor.solution_cycles,E->parallel.me,(double)E->monitor.elapsed_time,dt,ns,np,cfl,reduce(E,tmin,MPI_MIN),reduce(E,tmax,MPI_MAX),reduce(E,mismatch,MPI_MAX),reduce(E,submax,MPI_MAX),advected-before,heated-advected);
     fflush(E->fp);
     free(g);free(old);free(dg);free(mapped);free(rhs);free(previous);free(sub);

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "scope": "PICES EBA diagnostics; no transport or empty-composition policy changes",
+  "snapshot": {
+    "stage": "accepted full thermal step, after TA; before subsequent Stokes update",
+    "validity": "No accepted snapshot at initialization/restart: pices_diagnostics_valid=0 and heat-source profile fields omitted until next accepted step",
+    "text": "PICES_DIAGNOSTICS on rank 0",
+    "npz": "pices_ prefixed scalars with exactly the same snapshot values"
+  },
+  "profiles": {
+    "qinternal,qvisc,qadi,qadi_base,qphase": "Element-volume averages, time-weighted over accepted heat substeps; trial/rejected updates not counted",
+    "qassim": "Accepted TA-only projected temperature increment weighted by the same frozen effective capacity as PICES_TA, divided by element volume and full dt",
+    "qadi_base": "Same as qadi in this EBA path",
+    "qphase": "Sink-positive pressure-driven phase term; temperature-dependent latent contribution is in effective capacity",
+    "qtotal": "qinternal + qvisc - qadi - qphase + qassim; excludes diffusion, boundary reaction, remap and reconciliation",
+    "units": "Existing nondimensional source-density units; multiply by pices_source_scale_W_m3 for W/m^3"
+  },
+  "energy": {
+    "definition": "Integral of frozen effective heat capacity times nondimensional grid temperature. Not a thermodynamic enthalpy claim.",
+    "balance": "energy_after - energy_before = remap + capacity_rebase + internal_input - adiabatic_sink + viscous_input - phase_sink + boundary_reaction + ta_storage + reconciliation + closure_residual",
+    "capacity_rebase": "Independently measured change caused by rebuilding capacity at fixed grid temperature; not physical external heating",
+    "boundary_reaction": "Heat-stage constrained-node FE reaction, positive into domain; not an instantaneous CBF flux",
+    "units": "Nondimensional integrated quantities; multiply by energy_scale_J for J",
+    "heat_residual": "heat_storage - internal_input + adiabatic_sink - viscous_input + phase_sink - boundary_reaction"
+  },
+  "statistics": {
+    "scope": "MPI-global",
+    "particle_temperature": "Kelvin min/max and particle-count-weighted mean; not volume weighted",
+    "particle_count": "Sum of owned particles over all ranks",
+    "grid_temperature": "Kelvin min/max of final grid temperature"
+  },
+  "other_profiles": "Grid temperature/material fields and Stokes mechanical snapshot retain existing definitions and may have different stages from accepted heat sources."
+}

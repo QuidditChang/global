@@ -1,0 +1,34 @@
+{
+  "status": "PASS",
+  "byte_identical_files": 47,
+  "unused_index0_differences": [
+    13
+  ],
+  "tests": {
+    "cold": {
+      "closure_residual_nd": -1.457167719820518e-16,
+      "heat_residual_nd": 4.163336342344337e-17,
+      "capacity_rebase_nd": 0.0,
+      "phase_sink_nd": -0.0,
+      "viscous_input_nd": 0.0,
+      "particle_count_global": 24576.0
+    },
+    "phase": {
+      "closure_residual_nd": -3.8163916471489756e-16,
+      "heat_residual_nd": 5.898059818321144e-17,
+      "capacity_rebase_nd": 5.6778510512112135e-05,
+      "phase_sink_nd": 6.648447277589465e-11,
+      "viscous_input_nd": 1.9344788492604143e-19,
+      "particle_count_global": 24576.0
+    },
+    "coupled": {
+      "closure_residual_nd": 5.735365964977274e-16,
+      "heat_residual_nd": 1.5864927102073045e-18,
+      "capacity_rebase_nd": 0.0,
+      "phase_sink_nd": -0.0,
+      "viscous_input_nd": 2.459073366542799e-09,
+      "particle_count_global": 393216.0
+    }
+  },
+  "physical_state_comparison": "All physical checkpoint entries identical; only unused comp_el[0] padding differs on rank13."
+}

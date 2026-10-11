@@ -10,6 +10,8 @@ static void p1_test_velocity(struct All_variables *E)
     for(n=1;n<=E->lmesh.nno;n++) {
         E->sphere.cap[1].V[1][n]=E->sphere.cap[1].V[3][n]=0;
         E->sphere.cap[1].V[2][n]=omega*E->sx[1][3][n]*sin(E->sx[1][1][n]);
+        if(mode && !strcmp(mode,"p4_phase"))
+            E->sphere.cap[1].V[3][n]=.01*sin(M_PI*(E->sx[1][3][n]-E->sphere.ri)/(E->sphere.ro-E->sphere.ri));
         if(mode && (!strcmp(mode,"rotation_x") || !strcmp(mode,"rotation_y"))) {
             double th=E->sx[1][1][n],ph=E->sx[1][2][n],r=E->sx[1][3][n];
             int xaxis=!strcmp(mode,"rotation_x");
@@ -73,6 +75,10 @@ static void p1_test_initial(struct All_variables *E)
 static void p1_test_snapshot(struct All_variables *E)
 {
     FILE *f; char path[128]; int n,p,a,nodes[9];double w[9];
+    if(getenv("PICES_TEST_DIAGNOSTICS")) {
+        void output_profiles(struct All_variables *,int);
+        output_profiles(E,E->monitor.solution_cycles);
+    }
     if(getenv("PICES_TEST_IDS") && E->monitor.solution_cycles!=0 && E->monitor.solution_cycles!=E->advection.max_timesteps && !E->control.restart) return;
     snprintf(path,sizeof(path),"nodes.%d.%d.txt",E->parallel.me,E->monitor.solution_cycles);
     f=fopen(path,"w");
