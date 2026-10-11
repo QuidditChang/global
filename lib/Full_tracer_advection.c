@@ -3468,6 +3468,44 @@ void pdebug(struct All_variables *E, int i)
     return;
 }
 
+/* Failure-only geometry snapshot. Do not call the radial helper here: it
+ * can terminate before printing an out-of-range value. Never relocate or
+ * change coordinates/tolerances while collecting this evidence. */
+static void pices_weight_geometry(struct All_variables *E,int cap,int p,int e,
+                                  const char *candidate)
+{
+    int a,w,n1,n5;double u,v,s[4],sr[3],r1,r5,rad;
+    if(e<1 || e>E->lmesh.nel) {
+        fprintf(stderr,"PICES_WEIGHT_HOST rank=%d candidate=%s host=%d valid=0\n",E->parallel.me,candidate,e);
+        return;
+    }
+    rad=E->trace.basicq[cap][2][p];
+    spherical_to_uv(E,cap,E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],&u,&v);
+    n1=E->ien[cap][e].node[1];n5=E->ien[cap][e].node[5];
+    r1=E->sx[cap][3][n1];r5=E->sx[cap][3][n5];
+    sr[1]=(r5-rad)/(r5-r1);sr[2]=(rad-r1)/(r5-r1);
+    fprintf(stderr,"PICES_WEIGHT_HOST rank=%d candidate=%s host=%d valid=1 uv=%.17g,%.17g radial_bounds=%.17g,%.17g radial_shape=%.17g,%.17g radial_sum=%.17g\n",
+        E->parallel.me,candidate,e,u,v,r1,r5,sr[1],sr[2],sr[1]+sr[2]);
+    for(w=1;w<=2;w++) {
+        double raw[6],sum=0;
+        get_2dshape(E,cap,e,u,v,w,s);
+        for(a=0;a<6;a++){raw[a]=s[a%3+1]*sr[a/3+1];sum+=raw[a];}
+        fprintf(stderr,"PICES_WEIGHT_SHAPE rank=%d candidate=%s host=%d wedge=%d tangential=%.17g,%.17g,%.17g tangential_sum=%.17g raw=%.17g,%.17g,%.17g,%.17g,%.17g,%.17g raw_sum=%.17g\n",
+            E->parallel.me,candidate,e,w,s[1],s[2],s[3],s[1]+s[2]+s[3],
+            raw[0],raw[1],raw[2],raw[3],raw[4],raw[5],sum);
+        for(a=1;a<=3;a++)fprintf(stderr,
+            "PICES_WEIGHT_COEF rank=%d candidate=%s host=%d wedge=%d basis=%d abc=%.17g,%.17g,%.17g\n",
+            E->parallel.me,candidate,e,w,a,E->trace.shape_coefs[cap][w][3*a-2][e],
+            E->trace.shape_coefs[cap][w][3*a-1][e],E->trace.shape_coefs[cap][w][3*a][e]);
+    }
+    for(a=1;a<=8;a++) {
+        int n=E->ien[cap][e].node[a];
+        fprintf(stderr,"PICES_WEIGHT_NODE rank=%d candidate=%s host=%d corner=%d node=%d spherical=%.17g,%.17g,%.17g xyz=%.17g,%.17g,%.17g uv=%.17g,%.17g\n",
+            E->parallel.me,candidate,e,a,n,E->sx[cap][1][n],E->sx[cap][2][n],E->sx[cap][3][n],
+            E->x[cap][1][n],E->x[cap][2][n],E->x[cap][3][n],E->trace.UV[cap][1][n],E->trace.UV[cap][2][n]);
+    }
+}
+
 /* PICES uses the same gnomonic wedge and radial basis as tracer velocity.
  * Return eight local node weights (two are zero), with a strict host check.
  * One relocation is allowed before a fatal geometry error. */
@@ -3475,7 +3513,7 @@ void tracer_temperature_weights(struct All_variables *E, int cap, int p,
                                 int *nodes, double *weights)
 {
     static const int map[2][6]={{1,2,3,5,6,7},{1,3,4,5,7,8}};
-    int attempt,w,a,e=E->trace.ielement[cap][p],ok;
+    int attempt,w,a,e=E->trace.ielement[cap][p],initial_host=e,ok;
     double u,v,s[4],sr[3],sum;
     for(attempt=0;attempt<2;attempt++) {
         if(e>0 && e<=E->lmesh.nel) {
@@ -3505,6 +3543,13 @@ void tracer_temperature_weights(struct All_variables *E, int cap, int p,
                 E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p],
                 E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
     }
-    fprintf(stderr,"PICES_WEIGHT rank=%d particle=%d host=%d\n",E->parallel.me,p,e);
+    fprintf(stderr,"PICES_WEIGHT rank=%d step=%d particle=%d cap=%d host_before=%d host=%d time=%.17g dt=%.17g spherical=%.17g,%.17g,%.17g xyz=%.17g,%.17g,%.17g\n",
+        E->parallel.me,E->monitor.solution_cycles,p,E->sphere.capid[cap],initial_host,e,
+        (double)E->monitor.elapsed_time,(double)E->advection.timestep,
+        E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],
+        E->trace.basicq[cap][3][p],E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p]);
+    pices_weight_geometry(E,cap,p,initial_host,"initial");
+    if(e!=initial_host)pices_weight_geometry(E,cap,p,e,"relocated");
+    fflush(stderr);
     pices_fail(E,"invalid particle interpolation weights after relocation");
 }

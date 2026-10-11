@@ -1,0 +1,28 @@
+{
+  "status": "DIAGNOSTIC_READY_HPC_PENDING",
+  "failure": {
+    "rank": 148,
+    "step": 74,
+    "particle": 228659,
+    "host": 9493
+  },
+  "change": "Failure-only coordinates, initial/final host, raw tangential/radial weights, shape coefficients and eight vertices. No numerical path/tolerance changes.",
+  "checks": {
+    "full_standalone_build": "PASS",
+    "controlled_failure_snapshot": "PASS",
+    "state_unchanged_by_snapshot": "PASS",
+    "successful_weight_and_relocation_code_unchanged": "PASS",
+    "LSF_syntax": "PASS"
+  },
+  "candidates": [
+    "Locator/interpolator tolerance mismatch",
+    "Boundary test-point perturbation selects an element different from original-coordinate interpolation",
+    "Radial or migrated-host mismatch"
+  ],
+  "HPC": {
+    "restart_step": 50,
+    "stop_step": 80,
+    "output_suffix": "_TA_diag50_weightdiag",
+    "source_checkpoint": "Original 2239974 production checkpoint at step 50"
+  }
+}
