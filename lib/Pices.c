@@ -389,51 +389,77 @@ static double energy(struct All_variables *E,const double *field)
         s+=E->pices.emass[e*8+a-1]*field[E->ien[1][e].node[a]];
     return reduce(E,s,MPI_SUM);
 }
-/* Apply the actual accepted-step grid increment to persistent Tp exactly
- * once. P(Q(deltaT))-deltaT is a diagnostic, never fed back as another TA. */
-static void pices_assimilate(struct All_variables *E,double *g,double dt)
+/* Convex interpolation of the nodal reaction operator, not of a grid
+ * temperature increment. For constant alpha this is exactly the same
+ * exponential relaxation applied to Tp. No particle temperature clipping. */
+static double ta_particle_relax(const int *nodes,const double *w,
+                                const double *alpha,const double *target,
+                                double old)
 {
-    int n,p,nodes[9],nn=E->lmesh.nno;double w[9],maximum=0,error=0;
-    double *before=array(E,nn+1),*mapped=array(E,nn+1),*increment=array(E,E->trace.ntracers[1]+1);
-    double *save=E->T[1],time=E->monitor.elapsed_time,stored;
-    memcpy(before,g,(nn+1)*sizeof(double));
-    assemble(E,g); /* freeze capacity before imposed TA for its own ledger */
-    E->T[1]=g;E->monitor.elapsed_time=time+dt;
-    memset(E->assim_delta_T[1],0,(nn+1)*sizeof(double));
-    lith_age_conform_tbc(E);
-    lith_age_temperature_bound_adj(E,E->mesh.levmax);
-    assimilate_lith_conform_bcs(E);
-    temperatures_conform_bcs(E);
-    for(n=1;n<=nn;n++) {
-        E->assim_delta_T[1][n]=g[n]-before[n];
-        maximum=fmax(maximum,fabs(E->assim_delta_T[1][n]));
-        if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0)pices_fail(E,"invalid TA grid temperature");
+    int a;double fraction=0,source=0;
+    for(a=1;a<=8;a++) {
+        double f=w[a]*alpha[nodes[a]];
+        fraction+=f;source+=f*target[nodes[a]];
     }
-    stored=energy(E,E->assim_delta_T[1]);
-    for(p=1;p<=E->trace.ntracers[1];p++) {
-        double tp_before=E->trace.extraq[1][E->pices.slot][p];
-        tracer_temperature_weights(E,1,p,nodes,w);
-        increment[p]=interp(nodes,w,E->assim_delta_T[1]);
-        E->trace.extraq[1][E->pices.slot][p]+=increment[p];
-        if(!isfinite(E->trace.extraq[1][E->pices.slot][p]) || E->data.Ttop+E->trace.extraq[1][E->pices.slot][p]*E->data.ref_temperature<0) {
-            double after=E->trace.extraq[1][E->pices.slot][p];
-            fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d element=%d before_nd=%.17g increment_nd=%.17g after_nd=%.17g after_K=%.17g grid_before_nd=%.17g grid_after_nd=%.17g dt=%.17g\n",
-                E->parallel.me,E->monitor.solution_cycles,p,E->trace.ielement[1][p],
-                tp_before,increment[p],after,E->data.Ttop+after*E->data.ref_temperature,
-                interp(nodes,w,before),interp(nodes,w,g),dt);
-            fflush(stderr);
-            pices_fail(E,"invalid TA particle temperature");
-        }
-    }
-    project(E,increment,mapped,0);
-    for(n=1;n<=nn;n++)error=fmax(error,fabs(mapped[n]-E->assim_delta_T[1][n]));
-    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g delta_max=%.17g mapping_error=%.17g storage=%.17g\n",
-        E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,reduce(E,maximum,MPI_MAX),reduce(E,error,MPI_MAX),stored);
-    E->monitor.elapsed_time=time;E->T[1]=save;
-    free(before);free(mapped);free(increment);
+    return (1.0-fraction)*old+source;
 }
 
-/* Check the shared ratio reconstruction before using it in thermal physics. */
+static void pices_assimilate(struct All_variables *E,double *g,double dt)
+{
+    int n,p,nodes[9],nn=E->lmesh.nno;double w[9],maximum=0,active=0;
+    double *before=array(E,nn+1),*projected=array(E,nn+1);
+    double *alpha=array(E,nn+1),*target=array(E,nn+1);
+    double *save=E->T[1],time=E->monitor.elapsed_time,stored=0,reconciliation=0;
+    memcpy(before,g,(nn+1)*sizeof(double));
+    assemble(E,g); /* same frozen heat capacity for both diagnostic ledgers */
+    E->T[1]=g;E->monitor.elapsed_time=time+dt;
+    lith_age_conform_tbc(E);
+    lith_age_temperature_bound_adj(E,E->mesh.levmax);
+    temperatures_conform_bcs(E);
+    memset(E->assim_delta_T[1],0,(nn+1)*sizeof(double));
+    for(n=1;n<=nn;n++) {
+        lith_age_relaxation_node(E,1,n,&alpha[n],&target[n]);
+        if(!isfinite(alpha[n]) || alpha[n]<0 || alpha[n]>1 ||
+           !isfinite(target[n]) || E->data.Ttop+target[n]*E->data.ref_temperature<0)
+            pices_fail(E,"invalid particle TA target/fraction");
+        active=fmax(active,alpha[n]);
+    }
+    active=reduce(E,active,MPI_MAX);
+    if(active>0) {
+        /* Separate the pre-existing particle/grid reconciliation from TA.
+         * TA storage below includes only the projection change caused by TA.
+         * Absolute bounded projection is required on both sides of TA. */
+        project(E,E->trace.extraq[1][E->pices.slot],projected,1);
+        for(n=1;n<=nn;n++)E->assim_delta_T[1][n]=projected[n]-before[n];
+        reconciliation=energy(E,E->assim_delta_T[1]);
+        for(p=1;p<=E->trace.ntracers[1];p++) {
+            double old=E->trace.extraq[1][E->pices.slot][p],after;
+            tracer_temperature_weights(E,1,p,nodes,w);
+            after=ta_particle_relax(nodes,w,alpha,target,old);
+            if(!isfinite(after) || E->data.Ttop+after*E->data.ref_temperature<0) {
+                fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d before_nd=%.17g after_nd=%.17g after_K=%.17g operator=particle_relaxation_v1\n",
+                    E->parallel.me,E->monitor.solution_cycles,p,old,after,E->data.Ttop+after*E->data.ref_temperature);
+                pices_fail(E,"invalid TA particle temperature");
+            }
+            E->trace.extraq[1][E->pices.slot][p]=after;
+        }
+        /* Use one identical projection boundary/initial state for both maps. */
+        project(E,E->trace.extraq[1][E->pices.slot],g,1);
+        for(n=1;n<=nn;n++) {
+            E->assim_delta_T[1][n]=g[n]-projected[n];
+            maximum=fmax(maximum,fabs(E->assim_delta_T[1][n]));
+            if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0)
+                pices_fail(E,"invalid TA grid temperature");
+        }
+        stored=energy(E,E->assim_delta_T[1]);
+    }
+    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=particle_relaxation_v1 delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
+        E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,
+        reduce(E,maximum,MPI_MAX),stored,reconciliation,stored+reconciliation);
+    E->monitor.elapsed_time=time;E->T[1]=save;
+    free(before);free(projected);free(alpha);free(target);
+}
+
 static void composition_check(struct All_variables *E)
 {
     int e,i,p,total,primordial=0,global_primordial;

@@ -34,11 +34,9 @@
 #include "parallel_related.h"
 #include "parsing.h"
 #include "lith_age.h"
-#include "thermal_preage.h"
 
 float find_age_in_MY();
 void lith_age_update_tbc(struct All_variables *E);
-void temperatures_conform_bcs(struct All_variables *E);
 
 static float effective_plate_age_nd(const struct All_variables *E,
                                     float age_nd)
@@ -143,9 +141,6 @@ void lith_age_input(struct All_variables *E)
   input_float("lith_age_asml_tau_Ma",&(E->control.lith_age_asml_tau_Ma),"1.0",m);
   input_float("lith_age_asml_exp",&(E->control.lith_age_asml_exp),"3.0",m);
   input_float("mantle_temp",&(E->control.lith_age_mantle_temp),"1.0",m);
-  input_boolean("thermal_preage",&(E->control.thermal_preage),"off",m);
-  input_double("thermal_preage_Ma",&(E->control.thermal_preage_Ma),"1000.0",m);
-  input_double("thermal_preage_max_dt_Ma",&(E->control.thermal_preage_max_dt_Ma),"5.0",m);
   input_float("bottom_tbl_thickness",&(E->control.bottom_tbl_thickness),"0.0",m);
   input_float("bottom_tbl_diffusivity_ratio",&(E->control.bottom_tbl_diffusivity_ratio),"1.0",m);
 
@@ -291,7 +286,7 @@ void lith_age_construct_tic(struct All_variables *E)
      local Katsura background.  H_TBL is the height where about 1 percent
      of the CMB anomaly remains, so sqrt(kappa*t)=H_TBL/(2*1.8214).
      It is not a cutoff; erfc() decays naturally above that height. */
-  if(!E->control.thermal_preage && E->control.bottom_tbl_thickness > 0.0) {
+  if(E->control.bottom_tbl_thickness > 0.0) {
     if(E->control.bottom_tbl_thickness > E->sphere.ro-E->sphere.ri ||
        E->control.bottom_tbl_diffusivity_ratio <= 0.0) {
       fprintf(stderr,
@@ -334,21 +329,6 @@ void lith_age_construct_tic(struct All_variables *E)
 	  }
   }
 
-  if(E->control.thermal_preage) thermal_preage_run(E);
-  lith_age_apply_initial_shallow(E);
-  return;
-}
-
-
-void lith_age_apply_initial_shallow(struct All_variables *E)
-{
-  int i,j,k,m,node,nodeg;
-  int nox=E->lmesh.nox,noy=E->lmesh.noy,noz=E->lmesh.noz,gnox=E->mesh.nox;
-  double r1,temp,temp1,temp2,temp3,temp4,dist,dist2;
-  double background_surface_k=E->data.Ttop
-      + E->refstate.temperature_surface*E->data.ref_temperature;
-  double surface_hsc_delta=(background_surface_k-E->data.Ttop)/E->data.ref_temperature;
-  float age1,assim_depth,asm_depth,flag_depth2;
   /* Preserve the existing shallow HSC, initial-slab, mask and BC overlay. */
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=noy;i++)
@@ -750,28 +730,35 @@ static double lith_age_relaxation_fraction(struct All_variables *E,
                   / E->control.lith_age_asml_tau_Ma);
 }
 
+/* Shared nodal TA operator for Eulerian and particle transport. Targets,
+ * support and the accepted-step exponential fraction have one definition. */
+void lith_age_relaxation_node(struct All_variables *E,int cap,int node,
+                             double *alpha,double *target)
+{
+    int k=(node-1)%E->lmesh.noz+1;
+    int column=(node-1)/E->lmesh.noz;
+    int i=column%E->lmesh.nox+1,j=column/E->lmesh.nox+1;
+    int global_k=E->lmesh.nzs+k-1;
+    int nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
+    double depth=E->sphere.ro-E->sx[cap][3][node];
+    double h=lith_age_asml_thickness(E,nodeg);
+    *alpha=0;*target=0;
+    if(global_k==1 || global_k==E->mesh.noz || depth>=h)return;
+    *alpha=lith_age_relaxation_fraction(E,depth,h);
+    *target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
+}
+
 static void assimilate_lith_relaxed(struct All_variables *E)
 {
-    int cap,i,j,k,node,nodeg,global_k;
-    double depth,h,alpha,old,target;
+    int cap,node;double alpha,target,old;
     for(cap=1;cap<=E->sphere.caps_per_proc;cap++)
-        for(j=1;j<=E->lmesh.noy;j++)
-            for(i=1;i<=E->lmesh.nox;i++) {
-                nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
-                h=lith_age_asml_thickness(E,nodeg);
-                for(k=1;k<=E->lmesh.noz;k++) {
-                    global_k=E->lmesh.nzs+k-1;
-                    if(global_k==1 || global_k==E->mesh.noz) continue;
-                    node=k+(i-1)*E->lmesh.noz+(j-1)*E->lmesh.nox*E->lmesh.noz;
-                    depth=E->sphere.ro-E->sx[cap][3][node];
-                    if(depth>=h) continue;
-                    alpha=lith_age_relaxation_fraction(E,depth,h);
-                    target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
-                    old=E->T[cap][node];
-                    E->T[cap][node]=old+alpha*(target-old);
-                    E->assim_delta_T[cap][node]+=E->T[cap][node]-old;
-                }
-            }
+        for(node=1;node<=E->lmesh.nno;node++) {
+            lith_age_relaxation_node(E,cap,node,&alpha,&target);
+            if(alpha==0)continue;
+            old=E->T[cap][node];
+            E->T[cap][node]=old+alpha*(target-old);
+            E->assim_delta_T[cap][node]+=E->T[cap][node]-old;
+        }
 }
 
 void assimilate_lith_conform_bcs(struct All_variables *E)

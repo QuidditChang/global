@@ -1,0 +1,31 @@
+{
+  "status": "PASS",
+  "branch": "cmbhf_EBA_PICES",
+  "validated_physics_source": "8b9de249c171aaf33cf2aa5af4bc730fda9bc4b0",
+  "removed": [
+    "thermal_preage",
+    "original-commit compatibility bypass",
+    "legacy TB and trench reconstruction",
+    "verbose weight geometry dump"
+  ],
+  "checkpoint_schema": 5,
+  "checkpoint_added_state": [
+    "TA TB arrays",
+    "frozen flag_depth2 geometry"
+  ],
+  "tests": {
+    "full_build": "PASS",
+    "actual_step74_geometry": "PASS",
+    "particle_TA": "PASS",
+    "cold_bounded_consistent_CBF": "PASS",
+    "24rank_restart_without_initial_checkpoint_or_log": "PASS",
+    "byte_identical_checkpoint_and_state_files": 48
+  },
+  "production": {
+    "restart": false,
+    "start_age_Ma": 249.9,
+    "steps": 30000,
+    "format": "ascii"
+  },
+  "limitation": "Clean packaging and schema 5 tested locally; full-resolution HPC validation was of the retained physics in 8b9de249."
+}

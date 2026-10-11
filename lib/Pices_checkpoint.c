@@ -47,7 +47,7 @@ int pices_checkpoint_coupled(struct All_variables *E) {
         E->control.qvis_mode || E->advection.fixed_timestep<=0;
 }
 static int schema(struct All_variables *E) {
- return pices_checkpoint_coupled(E)?4:(E->composition.on?3:(E->pices.p4?2:1));
+ return E->pices.p4?5:pices_checkpoint_coupled(E)?4:(E->composition.on?3:(E->pices.p4?2:1));
 }
 /* Identity of the current forcing brackets, independent of relocation. Future
  * forcing coverage belongs to the run's input manifest, not this checkpoint. */
@@ -78,6 +78,8 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ {const char geometry[]="shared_particle_geometry_v1";pices_sha_add(&s,geometry,sizeof(geometry));}
+ if(E->pices.p4) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
  if(E->pices.consistent_projection){const char method[]="bounded_consistent_v1";pices_sha_add(&s,method,sizeof(method));}
  pices_sha_add(&s,E->viscosity.N0,sizeof(E->viscosity.N0[0])*E->viscosity.num_mat);
  pices_sha_add(&s,E->viscosity.E,sizeof(E->viscosity.E[0])*E->viscosity.num_mat);
@@ -199,6 +201,15 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
      fwrite(E->VI[E->mesh.levmax][1]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)
    pices_fail(E,"accepted viscosity write failed");
  }
+ /* Schema 5 stores the accepted TA boundary state and frozen trench geometry.
+  * These are history-dependent state, not reconstructible from restart age. */
+ if(E->pices.p4) {
+  for(d=1;d<=3;d++)
+   if(fwrite(E->sphere.cap[1].TB[d]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)
+    pices_fail(E,"TA boundary state write failed");
+  if(E->control.lith_age && fwrite(E->flag_depth2+1,sizeof(float),E->mesh.nox*E->mesh.noy,f)!=(size_t)(E->mesh.nox*E->mesh.noy))
+   pices_fail(E,"trench geometry write failed");
+ }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -221,7 +232,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=(E->pices.p4?(3L*E->lmesh.nno+(E->control.lith_age?E->mesh.nox*E->mesh.noy:0))*sizeof(float):0)+(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -241,49 +252,12 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
-/* Explicit diagnostic compatibility with the pre-diagnostic ASCII build.
- * Audited delta: logging and opt-in initialization (disabled for this restart).
- * Never suppress any difference other than these exact 40 commit characters.
- * Re-audit this exception when changing restart/heat/TA semantics. */
-static int compatible_metadata(const char *actual,const char *expected,const char *authorized) {
- const char *key="\"solver_commit\":\"";
- const char *a=strstr(actual,key),*e=strstr(expected,key);
- const char *reviewed="22399749866f452b3c06960e3d00eea5333a37f0";
- size_t prefix;
- if(!strcmp(actual,expected))return 1;
- if(!authorized || strcmp(authorized,reviewed) || !a || !e)return 0;
- a+=strlen(key);e+=strlen(key);prefix=(size_t)(a-actual);
- if(prefix!=(size_t)(e-expected) || strlen(a)<41 || strlen(e)<41 ||
-    a[40]!='"' || e[40]!='"' || strncmp(a,reviewed,40))return 0;
- if(strncmp(actual,expected,prefix) || strcmp(a+40,e+40))return 0;
- return 2;
-}
-
+/* Fresh-production checkpoints require the same solver and exact metadata. */
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
- pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);metadata(E,path,state,expected);
- int compatibility=compatible_metadata(actual,expected,
-     E->control.thermal_preage ? NULL : getenv("PICES_RESTART_COMPAT_COMMIT"));
- if(compatibility==2 && E->parallel.me==0)
-  fprintf(stderr,"PICES_CHECKPOINT compatible_source=22399749866f452b3c06960e3d00eea5333a37f0 running_commit=%s all_other_metadata=exact\n",PICES_SOLVER_COMMIT);
- if(!compatibility) {
-  size_t offset=0;
-  const char *key="\"solver_commit\":\"",*a=strstr(actual,key),*e=strstr(expected,key);
-  const char *authorization=getenv("PICES_RESTART_COMPAT_COMMIT");
-  /* Diagnose differences after the commit too; do not alter either buffer. */
-  while(actual[offset] && expected[offset]) {
-   if(a && e && actual+offset==a+strlen(key) && expected+offset==e+strlen(key)
-      && strlen(actual+offset)>=41 && strlen(expected+offset)>=41
-      && actual[offset+40]=='"' && expected[offset+40]=='"') {offset+=40;continue;}
-   if(actual[offset]!=expected[offset])break;
-   offset++;
-  }
-  fprintf(stderr,"PICES_CHECKPOINT_MISMATCH rank=%d authorization=%s thermal_preage=%d noncommit_offset=%lu all_other_metadata=%s expected=%.160s actual=%.160s\n",
-      E->parallel.me,authorization?authorization:"unset",E->control.thermal_preage,(unsigned long)offset,
-      !actual[offset] && !expected[offset]?"exact":"different",expected+offset,actual+offset);
-  if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT expected=%s actual=%s\n",expected,actual);
-  pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
- }
+ pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");
+ readtext(E,meta,actual);metadata(E,path,state,expected);
+ if(strcmp(actual,expected))pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
 }
 
 /* U is the Stokes iterate; nodal V can differ after rigid-rotation removal.
@@ -318,6 +292,18 @@ void pices_checkpoint_restore_state(struct All_variables *E,const char *path) {
    pices_fail(E,"accepted viscosity read failed");
   for(n=1;n<=8*E->lmesh.nel;n++)if(!isfinite(eta[n]) || eta[n]<=0)pices_fail(E,"invalid restored integration viscosity");
   for(n=1;n<=E->lmesh.nno;n++)if(!isfinite(vi[n]) || vi[n]<=0)pices_fail(E,"invalid restored nodal viscosity");
+ }
+ if(E->pices.p4) {
+  for(d=1;d<=3;d++) {
+   if(fread(E->sphere.cap[1].TB[d]+1,sizeof(float),E->lmesh.nno,f)!=(size_t)E->lmesh.nno)
+    pices_fail(E,"TA boundary state read failed");
+   for(n=1;n<=E->lmesh.nno;n++)if(!isfinite(E->sphere.cap[1].TB[d][n]))pices_fail(E,"invalid TA boundary state");
+  }
+  if(E->control.lith_age) {
+   int count=E->mesh.nox*E->mesh.noy;
+   if(fread(E->flag_depth2+1,sizeof(float),count,f)!=(size_t)count)pices_fail(E,"trench geometry read failed");
+   for(n=1;n<=count;n++)if(!isfinite(E->flag_depth2[n]))pices_fail(E,"invalid trench geometry");
+  }
  }
  if(fclose(f))pices_fail(E,"velocity close failed");
 }

@@ -28,7 +28,7 @@ def boundary(root,step,side,expected_state="pices"):
     return total
 
 def verify_p4(root,local=False,final_step=4,split_step=2):
-    root=Path(root);max_balance=0.;max_delta=0.;max_mapping=0.;compared=0
+    root=Path(root);max_balance=0.;max_delta=0.;max_mapping=None;compared=0
     for name,first,last in [('continuous',1,final_step),('split',1,split_step),('restart',split_step+1,final_step)]:
         d=root/name;cfg=config(d/'case.cfg')
         for k,v in dict(pices_p4='on',lith_age='1',lith_age_asml='1',lith_age_time='1',temperature_bound_adj='0',output_q_surf_CBF='on',output_q_botm_CBF='on',CBF_use_advection='off').items():require(cfg.get(k)==v,'P4 cfg '+k)
@@ -37,10 +37,18 @@ def verify_p4(root,local=False,final_step=4,split_step=2):
             require([int(x['step']) for x in ta]==list(range(first,last+1)),'TA exactly once per accepted step, never at restart')
             for row in ta:
                 require(row['calls']=='1','TA call count')
-                vals=[float(row[k]) for k in ['time','dt','delta_max','mapping_error','storage']]
-                require(all(map(math.isfinite,vals)) and vals[2]>0 and vals[3]>=0,'TA active finite ledger')
+                vals=[float(row[k]) for k in ['time','dt','delta_max','storage']]
+                require(all(map(math.isfinite,vals)) and vals[2]>0,'TA active finite ledger')
+                if row.get('operator')=='particle_relaxation_v1':
+                    reconciliation=float(row['reconciliation_storage']);total=float(row['total_grid_storage'])
+                    require(math.isfinite(reconciliation) and math.isfinite(total),'TA reconciliation finite')
+                    require(math.isclose(total,vals[3]+reconciliation,rel_tol=1e-12,abs_tol=1e-14),'TA ledger separation')
+                else:
+                    mapping=float(row['mapping_error'])
+                    require(math.isfinite(mapping) and mapping>=0,'legacy TA mapping finite')
+                    max_mapping=max(max_mapping or 0.,mapping)
                 require(math.isclose(vals[0],int(row['step'])*vals[1],rel_tol=max(2e-7,final_step*6e-8)),'TA accepted end time')
-                max_delta=max(max_delta,vals[2]);max_mapping=max(max_mapping,vals[3])
+                max_delta=max(max_delta,vals[2])
         log=(d/'DATA/0/log').read_text().splitlines()
         heat={int(fields(l)['step']):fields(l) for l in log if l.startswith('PICES_EBA ')}
         steps={int(fields(l)['step']):fields(l) for l in log if l.startswith('PICES_STEP ')}

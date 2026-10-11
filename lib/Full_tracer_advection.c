@@ -880,6 +880,60 @@ static void full_put_lost_tracers(struct All_variables *E,
 /*         6        7               6            8                           */
 
 
+/* PICES geometry policy: one predicate for host columns and interpolation.
+ * Dimensionless barycentric tolerance, not a displacement in radians. Only
+ * the 1e-10 face band is snapped; points farther outside are rejected. This
+ * includes the production step-74 face residual (-1.235e-11), while avoiding
+ * the legacy locator's 1e-6-radian perturbation and velocity's 1e-4 extrapolation.
+ */
+static int pices_simplex(double *s, int n)
+{
+    const double tol=1e-10;
+    double sum=0;
+    int a;
+    for(a=1;a<=n;a++) {
+        if(!isfinite(s[a]) || s[a]<-tol || s[a]>1+tol) return 0;
+        sum+=s[a];
+    }
+    if(!isfinite(sum) || fabs(sum-1)>n*tol) return 0;
+    sum=0;
+    for(a=1;a<=n;a++) { if(s[a]<0) s[a]=0; sum+=s[a]; }
+    for(a=1;a<=n;a++) s[a]/=sum;
+    return 1;
+}
+
+static int pices_column_shape(struct All_variables *E,int cap,int e,
+                              double theta,double phi,double *s)
+{
+    double u,v;
+    int wedge;
+    if(e<1 || e>E->lmesh.nel) return 0;
+    spherical_to_uv(E,cap,theta,phi,&u,&v);
+    for(wedge=1;wedge<=2;wedge++) {
+        get_2dshape(E,cap,e,u,v,wedge,s);
+        if(pices_simplex(s,3)) return wedge;
+    }
+    return 0;
+}
+
+static int pices_element_weights(struct All_variables *E,int cap,int e,
+                                 double theta,double phi,double rad,
+                                 int *nodes,double *weights)
+{
+    static const int map[2][6]={{1,2,3,5,6,7},{1,3,4,5,7,8}};
+    double s[4],sr[3],lo,hi;
+    int a,w=pices_column_shape(E,cap,e,theta,phi,s);
+    if(!w) return 0;
+    lo=E->sx[cap][3][E->ien[cap][e].node[1]];
+    hi=E->sx[cap][3][E->ien[cap][e].node[5]];
+    if(!isfinite(lo) || !isfinite(hi) || !(hi>lo)) return 0;
+    sr[1]=(hi-rad)/(hi-lo);sr[2]=(rad-lo)/(hi-lo);
+    if(!pices_simplex(sr,2)) return 0;
+    for(a=1;a<=8;a++) { nodes[a]=E->ien[cap][e].node[a];weights[a]=0; }
+    for(a=0;a<6;a++) weights[map[w-1][a]]=s[a%3+1]*sr[a/3+1];
+    return 1;
+}
+
 void full_get_velocity(struct All_variables *E,
                        int j, int nelem,
                        double theta, double phi, double rad,
@@ -907,6 +961,19 @@ void full_get_velocity(struct All_variables *E,
     void sphere_to_cart();
     void velo_from_element_d();
 
+
+    if(E->pices.enabled) {
+        int nodes[9],a,k;
+        double weights[9];
+        if(!pices_element_weights(E,j,nelem,theta,phi,rad,nodes,weights))
+            pices_fail(E,"invalid shared particle velocity weights");
+        velo_from_element_d(E,VV,j,nelem,sphere_key);
+        for(k=1;k<=3;k++) {
+            velocity_vector[k]=0;
+            for(a=1;a<=8;a++) velocity_vector[k]+=weights[a]*VV[k][a];
+        }
+        return;
+    }
 
     /* find u and v using spherical coordinates */
 
@@ -2129,6 +2196,11 @@ static int icheck_element_column(struct All_variables *E,
 
 
     E->trace.istat_elements_checked++;
+    if(E->pices.enabled) {
+        double shape[4],theta=atan2(hypot(x,y),z),phi=atan2(y,x);
+        return pices_column_shape(E,j,nel,theta,phi,shape)!=0;
+    }
+
 
     /* surface coords of element nodes */
 
@@ -2544,7 +2616,8 @@ int full_iget_element(struct All_variables *E,
     if (E->trace.regtoel[j][0][iregel]==0)
         {
             iel=E->trace.regtoel[j][1][iregel];
-            goto foundit;
+            if(!E->pices.enabled || icheck_element_column(E,j,iel,x,y,z,rad))
+                goto foundit;
         }
 
     /* first check previous element */
@@ -3468,43 +3541,32 @@ void pdebug(struct All_variables *E, int i)
     return;
 }
 
+/* Failure-only geometry snapshot. Do not call the radial helper here: it
+ * can terminate before printing an out-of-range value. Never relocate or
+ * change coordinates/tolerances while collecting this evidence. */
 /* PICES uses the same gnomonic wedge and radial basis as tracer velocity.
  * Return eight local node weights (two are zero), with a strict host check.
  * One relocation is allowed before a fatal geometry error. */
 void tracer_temperature_weights(struct All_variables *E, int cap, int p,
                                 int *nodes, double *weights)
 {
-    static const int map[2][6]={{1,2,3,5,6,7},{1,3,4,5,7,8}};
-    int attempt,w,a,e=E->trace.ielement[cap][p],ok;
-    double u,v,s[4],sr[3],sum;
+    int attempt,e=E->trace.ielement[cap][p],initial_host=e;
     for(attempt=0;attempt<2;attempt++) {
-        if(e>0 && e<=E->lmesh.nel) {
-            spherical_to_uv(E,cap,E->trace.basicq[cap][0][p],
-                            E->trace.basicq[cap][1][p],&u,&v);
-            for(w=0;w<2;w++) {
-                get_2dshape(E,cap,e,u,v,w+1,s);
-                if(s[1]<-1e-12 || s[2]<-1e-12 || s[3]<-1e-12) continue;
-                get_radial_shape(E,cap,e,E->trace.basicq[cap][2][p],sr);
-                ok=1; sum=0;
-                for(a=1;a<=8;a++) { nodes[a]=E->ien[cap][e].node[a]; weights[a]=0; }
-                for(a=0;a<6;a++) {
-                    double x=s[a%3+1]*sr[a/3+1];
-                    if(!isfinite(x) || x < -1e-12 || x>1+1e-12) ok=0;
-                    if(x<0 && x>=-1e-12) x=0;
-                    weights[map[w][a]]=x; sum+=x;
-                }
-                if(ok && isfinite(sum) && fabs(sum-1)<1e-10) {
-                    for(a=1;a<=8;a++) weights[a]/=sum;
-                    E->trace.ielement[cap][p]=e;
-                    return;
-                }
-            }
+        if(pices_element_weights(E,cap,e,E->trace.basicq[cap][0][p],
+              E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],nodes,weights)) {
+            E->trace.ielement[cap][p]=e;
+            return;
         }
         if(attempt==0)
             e=E->trace.iget_element(E,cap,p,-99,E->trace.basicq[cap][3][p],
                 E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p],
                 E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
     }
-    fprintf(stderr,"PICES_WEIGHT rank=%d particle=%d host=%d\n",E->parallel.me,p,e);
+    fprintf(stderr,"PICES_WEIGHT rank=%d step=%d particle=%d cap=%d host_before=%d host=%d time=%.17g dt=%.17g spherical=%.17g,%.17g,%.17g xyz=%.17g,%.17g,%.17g\n",
+        E->parallel.me,E->monitor.solution_cycles,p,E->sphere.capid[cap],initial_host,e,
+        (double)E->monitor.elapsed_time,(double)E->advection.timestep,
+        E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],
+        E->trace.basicq[cap][3][p],E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p]);
+    fflush(stderr);
     pices_fail(E,"invalid particle interpolation weights after relocation");
 }
