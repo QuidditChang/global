@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "production_fixture": "rank148 step74 wedge2, minimum raw tangential -1.2347456390671141e-11",
+  "geometry": "shared_particle_geometry_v1",
+  "barycentric_tolerance": 1e-10,
+  "scope": [
+    "PICES local column lookup including regular-grid fast path",
+    "PICES velocity interpolation",
+    "PICES temperature interpolation"
+  ],
+  "unchanged": [
+    "TA target and tau",
+    "non-PICES tracer interpolation",
+    "MPI cap ownership"
+  ],
+  "tests": {
+    "fixture_and_outside_rejection": "PASS",
+    "full_build": "PASS",
+    "cold_lumped_TA_CBF": "PASS",
+    "bounded_consistent_TA_CBF": "PASS",
+    "restart_24_ranks_byte_identical_files": 48,
+    "original_223997_checkpoint_exact_validation": "PASS"
+  },
+  "HPC_gate": "restart original step50; reach step80 without PICES_WEIGHT/PICES_ERROR; not yet production validated"
+}

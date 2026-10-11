@@ -78,6 +78,7 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_ta) {
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ if(!legacy_ta) {const char geometry[]="shared_particle_geometry_v1";pices_sha_add(&s,geometry,sizeof(geometry));}
  if(E->pices.p4 && !legacy_ta) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
  if(E->pices.consistent_projection){const char method[]="bounded_consistent_v1";pices_sha_add(&s,method,sizeof(method));}
  pices_sha_add(&s,E->viscosity.N0,sizeof(E->viscosity.N0[0])*E->viscosity.num_mat);
