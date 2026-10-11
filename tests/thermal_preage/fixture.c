@@ -180,7 +180,9 @@ void preage_test_final(struct All_variables *E)
     fclose(f);fflush(E->fp);
     /* Exercise the production field writer without Stokes/time marching,
        as the separate Pyre initialization-only app will do on the cluster. */
-    if(getenv("PREAGE_TEST_WRITE_OUTPUT"))
+    if(getenv("PREAGE_TEST_WRITE_OUTPUT")) {
         (E->problem_output)(E, E->monitor.solution_cycles);
+        output_profiles(E, E->monitor.solution_cycles);
+    }
     if(E->parallel.me==0)fprintf(stderr,"PREAGE_TEST_DONE\n");
 }

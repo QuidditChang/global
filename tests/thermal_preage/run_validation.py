@@ -30,7 +30,7 @@ def parameters():
             result[key] = value
     result.update({
         'nodex': 5, 'nodey': 5, 'nodez': 17, 'mgunitx': 4, 'mgunity': 4, 'mgunitz': 16,
-        'datadir': 'DATA', 'datafile': 'preage_test', 'minstep': 0, 'maxstep': 0,
+        'datadir': 'DATA/%RANK', 'datafile': 'preage_test', 'minstep': 0, 'maxstep': 0,
         'maxtotstep': 0, 'CBF_frequency': 0, 'output_q_surf_CBF': 'off',
         'output_q_botm_CBF': 'off', 'write_q_files': 0, 'energy_solver': 'pices',
         'pices_eba': 'on', 'pices_p4': 'on', 'pices_checkpoint': 'off',
@@ -144,10 +144,11 @@ def inspect(directory, ranks, enabled):
         deep = new[:, 6] < .95
         assert np.max(abs(new[deep, 7] - last[deep, 7])) < 1e-14, 'shallow overlay changed deep solution'
     logs = '\n'.join(path.read_text() for path in (directory / 'DATA').rglob('*')
-                     if path.is_file() and (path.name == 'log' or path.suffix == '.log'))
+                     if path.is_file() and not path.name.startswith('._')
+                     and (path.name == 'log' or path.suffix == '.log'))
     ends = [dict(re.findall(r'(\w+)=([^\s]+)', line)) for line in logs.splitlines()
             if line.startswith('THERMAL_PREAGE_END ')]
-    assert len(ends) >= 1, 'pre-age completion log missing'
+    assert len(ends) == ranks, 'per-rank pre-age completion log missing'
     assert all(abs(float(x['age_Ma']) - float(meta['duration_Ma'])) < 1e-7 for x in ends)
     assert all(abs(float(x['balance'])) < 2e-8 for x in ends), 'frozen-capacity heat ledger failed'
     progress = [dict(re.findall(r'(\w+)=([^\s]+)', line)) for line in logs.splitlines()
@@ -341,7 +342,8 @@ def main():
 
     ascii_run = run('ascii_initial_fields', {'thermal_preage': 'on',
         'thermal_preage_max_dt_Ma': 125, 'output_format': 'ascii',
-        'output_optional': 'comp_nd,k,kC'}, env={'PREAGE_TEST_WRITE_OUTPUT': '1'})
+        'output_optional': 'comp_nd,k,kC', 'profile_optional': 'temperature,density_total,k,kC'},
+        env={'PREAGE_TEST_WRITE_OUTPUT': '1'})
     assert distance(field(root / 'constant_dt_125', 'final', 12), field(ascii_run, 'final', 12)) == 0
     for rank, nodes in enumerate(data(ascii_run, 'final', 12)):
         files = list((ascii_run / 'DATA').rglob(f'preage_test.velo.{rank}.0'))
@@ -351,6 +353,11 @@ def main():
         # Writer uses %.6e in dimensional kelvin, not full solver precision.
         assert np.allclose(values[:, 3], expected, rtol=6e-7, atol=1e-6)
     results['ascii_initial_fields']['ascii_temperature_verified'] = True
+    with np.load(ascii_run / 'DATA/0/profiles_hist_0.npz') as profile:
+        assert int(profile['step']) == 0
+        assert np.isfinite(profile['temperature_stats']).all()
+        assert len(profile['temperature_depth_km']) == 17
+    results['ascii_initial_fields']['initial_npz_verified'] = True
 
     for name, changes in (
         ('negative_duration', {'thermal_preage_Ma': -1}),
