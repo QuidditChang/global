@@ -241,6 +241,38 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
+/* Schema 4 accidentally hashes deep internal partition TB scratch values.
+ * Fresh initialization copied them from T at step zero; restart never did.
+ * Recover only those inactive values from the verified initial checkpoint.
+ * The complete original metadata comparison must still succeed afterwards. */
+static void restore_initial_interface_tb(struct All_variables *E) {
+ char path[512];FILE *f;double *initial;int saved,n,d,count=0,total;
+ if(snprintf(path,sizeof(path),"%s.chkpt.%d.0",E->control.old_P_file,E->parallel.me)>=(int)sizeof(path))
+  pices_fail(E,"initial checkpoint path too long");
+ saved=E->monitor.solution_cycles_init;E->monitor.solution_cycles_init=0;
+ pices_checkpoint_preflight(E,path);
+ E->monitor.solution_cycles_init=saved;
+ initial=malloc((E->lmesh.nno+1)*sizeof(double));
+ if(!initial)pices_fail(E,"initial TB recovery allocation failed");
+ f=fopen(path,"rb");
+ /* 8 int header values, 3 floats, then four zero sentinel ints. */
+ if(!f || fseek(f,44L+16L,SEEK_SET) ||
+    fread(initial,sizeof(double),E->lmesh.nno+1,f)!=(size_t)(E->lmesh.nno+1))
+  pices_fail(E,"initial checkpoint temperature read failed");
+ if(fclose(f))pices_fail(E,"initial checkpoint close failed");
+ for(n=1;n<=E->lmesh.nno;n++) {
+  int k=(n-1)%E->lmesh.noz+1,global_k=E->lmesh.nzs+k-1;
+  if((k!=1 && k!=E->lmesh.noz) || global_k==1 || global_k==E->mesh.noz)continue;
+  if(E->sphere.ro-E->sx[1][3][n]<=E->control.lith_age_depth)continue;
+  if(E->node[1][n] & (TBX|TBY|TBZ|FBX|FBY|FBZ))continue;
+  if(!isfinite(initial[n]))pices_fail(E,"invalid initial interface temperature");
+  for(d=1;d<=3;d++)E->sphere.cap[1].TB[d][n]=(float)initial[n];
+  count++;
+ }
+ free(initial);MPI_Allreduce(&count,&total,1,MPI_INT,MPI_SUM,E->parallel.world);
+ if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT recovered_inactive_interface_TB=%d from_verified_step=0\n",total);
+}
+
 /* Explicit diagnostic compatibility with the pre-diagnostic ASCII build.
  * Audited delta from 2239974: diagnostic logging and commit comparison only.
  * Never suppress any difference other than these exact 40 commit characters.
@@ -264,6 +296,18 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);metadata(E,path,state,expected);
  int compatibility=compatible_metadata(actual,expected,
      getenv("PICES_RESTART_COMPAT_COMMIT"));
+ {
+  int bad=!compatibility,any_bad;
+  const char *authorization=getenv("PICES_RESTART_COMPAT_COMMIT");
+  MPI_Allreduce(&bad,&any_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+  if(any_bad && authorization && !strcmp(authorization,"22399749866f452b3c06960e3d00eea5333a37f0")
+     && E->parallel.nprocz>1 && E->pices.p4 && E->control.lith_age_asml
+     && !E->control.temperature_bound_adj && E->monitor.solution_cycles_init>0) {
+   restore_initial_interface_tb(E);
+   metadata(E,path,state,expected);
+   compatibility=compatible_metadata(actual,expected,authorization);
+  }
+ }
  if(compatibility==2 && E->parallel.me==0)
   fprintf(stderr,"PICES_CHECKPOINT compatible_source=22399749866f452b3c06960e3d00eea5333a37f0 running_commit=%s all_other_metadata=exact\n",PICES_SOLVER_COMMIT);
  if(!compatibility) {
