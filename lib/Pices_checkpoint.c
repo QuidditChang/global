@@ -67,7 +67,7 @@ static void forcing_hash(struct All_variables *E,PicesSHA *s) {
   }
  }
 }
-static void fingerprint(struct All_variables *E,char out[65]) {
+static void fingerprint(struct All_variables *E,char out[65],int legacy_ta) {
  PicesSHA s;int d;double params[]={E->data.Ttop,E->data.ref_temperature,E->control.Atemp,
  E->control.accuracy,E->control.tole_comp,E->advection.fixed_timestep,
  E->control.reference_conductivity,E->control.kd_upper_prefactor,E->control.kd_lower_prefactor,
@@ -78,6 +78,7 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ if(E->pices.p4 && !legacy_ta) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
  if(E->pices.consistent_projection){const char method[]="bounded_consistent_v1";pices_sha_add(&s,method,sizeof(method));}
  pices_sha_add(&s,E->viscosity.N0,sizeof(E->viscosity.N0[0])*E->viscosity.num_mat);
  pices_sha_add(&s,E->viscosity.E,sizeof(E->viscosity.E[0])*E->viscosity.num_mat);
@@ -146,9 +147,9 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  }
  pices_sha_end(&s,out);
 }
-static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
+static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE],int legacy_ta) {
  char sha[65],physics[65],vsha[65];int n;
- hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics);
+ hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics,legacy_ta);
  n=snprintf(out,META_SIZE,
  "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":%d,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
  "\"step\":%d,\n\"time\":%.17g,\n\"dt\":%.17g,\n\"total_timesteps\":%d,\n"
@@ -200,7 +201,7 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
    pices_fail(E,"accepted viscosity write failed");
  }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
- metadata(E,temp,vt,text);writetext(E,mt,text);
+ metadata(E,temp,vt,text,0);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
  if(rename(temp,final) || rename(mt,mf) || rename(vt,vf))pices_fail(E,"checkpoint publish rename failed");
  MPI_Barrier(E->parallel.world);manifest(E,mf,text);writetext(E,ct,text);
@@ -311,7 +312,8 @@ static void restore_legacy_trench_geometry(struct All_variables *E) {
 }
 
 /* Explicit diagnostic compatibility with the pre-diagnostic ASCII build.
- * Audited delta from 2239974: diagnostic logging and commit comparison only.
+ * The caller validates old metadata with its original operator identity;
+ * any explicit TA operator transition is logged and new outputs fingerprint it.
  * Never suppress any difference other than these exact 40 commit characters.
  * Re-audit this exception when changing restart/heat/TA semantics. */
 static int compatible_metadata(const char *actual,const char *expected,const char *authorized) {
@@ -330,7 +332,14 @@ static int compatible_metadata(const char *actual,const char *expected,const cha
 
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
- pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);metadata(E,path,state,expected);
+ pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);
+ /* A deliberate operator upgrade from the reviewed production checkpoint:
+  * validate every old field under its original fingerprint, but always
+  * publish the new operator identity on subsequent checkpoints. */
+ const char *authorized=getenv("PICES_RESTART_COMPAT_COMMIT");
+ int legacy_ta=authorized && !strcmp(authorized,"22399749866f452b3c06960e3d00eea5333a37f0") &&
+     strstr(actual,"\"solver_commit\":\"22399749866f452b3c06960e3d00eea5333a37f0\"")!=NULL;
+ metadata(E,path,state,expected,legacy_ta);
  int compatibility=compatible_metadata(actual,expected,
      getenv("PICES_RESTART_COMPAT_COMMIT"));
  {
@@ -341,17 +350,19 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
      && E->parallel.nprocz>1 && E->pices.p4 && E->control.lith_age_asml
      && !E->control.temperature_bound_adj && E->monitor.solution_cycles_init>0) {
    restore_initial_interface_tb(E);
-   metadata(E,path,state,expected);
+   metadata(E,path,state,expected,legacy_ta);
    compatibility=compatible_metadata(actual,expected,authorization);
    bad=!compatibility;
    MPI_Allreduce(&bad,&any_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
    if(any_bad && E->trace.reclassify_flavors && E->data.timedir>=0) {
     restore_legacy_trench_geometry(E);
-    metadata(E,path,state,expected);
+    metadata(E,path,state,expected,legacy_ta);
     compatibility=compatible_metadata(actual,expected,authorization);
    }
   }
  }
+ if(compatibility && legacy_ta && E->parallel.me==0)
+  fprintf(stderr,"PICES_CHECKPOINT operator_transition=legacy_increment_to_particle_relaxation_v1 old_physics_validated=exact\n");
  if(compatibility==2 && E->parallel.me==0)
   fprintf(stderr,"PICES_CHECKPOINT compatible_source=22399749866f452b3c06960e3d00eea5333a37f0 running_commit=%s all_other_metadata=exact\n",PICES_SOLVER_COMMIT);
  if(!compatibility) {

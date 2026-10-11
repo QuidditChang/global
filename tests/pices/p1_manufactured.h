@@ -56,6 +56,9 @@ static void p1_test_initial(struct All_variables *E)
         for(a=1;a<=8;a++)t+=w[a]*E->T[1][nodes[a]];
         E->trace.extraq[1][E->pices.slot][p]=getenv("PICES_TEST_IDS") ? .25+(E->parallel.me*E->trace.ntracers[1]+p)*1e-6 : t;
     }
+    /* Sharp unresolved particle field for TA boundedness/reconciliation. */
+    if(mode && !strcmp(mode,"p4_cold"))for(p=1;p<=E->trace.ntracers[1];p++)
+        E->trace.extraq[1][E->pices.slot][p]=((p%2?50.0:1100.0)-E->data.Ttop)/E->data.ref_temperature;
     if(mode && !strcmp(mode,"empty")) { E->trace.ntracers[1]=0; E->trace.ilast_tracer_count=0; }
     /* Local FE matrices for independent symmetry/PSD and analytic tests. */
     snprintf(path,sizeof(path),"matrix.%d.txt",E->parallel.me);f=fopen(path,"w");

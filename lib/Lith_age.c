@@ -730,28 +730,35 @@ static double lith_age_relaxation_fraction(struct All_variables *E,
                   / E->control.lith_age_asml_tau_Ma);
 }
 
+/* Shared nodal TA operator for Eulerian and particle transport. Targets,
+ * support and the accepted-step exponential fraction have one definition. */
+void lith_age_relaxation_node(struct All_variables *E,int cap,int node,
+                             double *alpha,double *target)
+{
+    int k=(node-1)%E->lmesh.noz+1;
+    int column=(node-1)/E->lmesh.noz;
+    int i=column%E->lmesh.nox+1,j=column/E->lmesh.nox+1;
+    int global_k=E->lmesh.nzs+k-1;
+    int nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
+    double depth=E->sphere.ro-E->sx[cap][3][node];
+    double h=lith_age_asml_thickness(E,nodeg);
+    *alpha=0;*target=0;
+    if(global_k==1 || global_k==E->mesh.noz || depth>=h)return;
+    *alpha=lith_age_relaxation_fraction(E,depth,h);
+    *target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
+}
+
 static void assimilate_lith_relaxed(struct All_variables *E)
 {
-    int cap,i,j,k,node,nodeg,global_k;
-    double depth,h,alpha,old,target;
+    int cap,node;double alpha,target,old;
     for(cap=1;cap<=E->sphere.caps_per_proc;cap++)
-        for(j=1;j<=E->lmesh.noy;j++)
-            for(i=1;i<=E->lmesh.nox;i++) {
-                nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
-                h=lith_age_asml_thickness(E,nodeg);
-                for(k=1;k<=E->lmesh.noz;k++) {
-                    global_k=E->lmesh.nzs+k-1;
-                    if(global_k==1 || global_k==E->mesh.noz) continue;
-                    node=k+(i-1)*E->lmesh.noz+(j-1)*E->lmesh.nox*E->lmesh.noz;
-                    depth=E->sphere.ro-E->sx[cap][3][node];
-                    if(depth>=h) continue;
-                    alpha=lith_age_relaxation_fraction(E,depth,h);
-                    target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
-                    old=E->T[cap][node];
-                    E->T[cap][node]=old+alpha*(target-old);
-                    E->assim_delta_T[cap][node]+=E->T[cap][node]-old;
-                }
-            }
+        for(node=1;node<=E->lmesh.nno;node++) {
+            lith_age_relaxation_node(E,cap,node,&alpha,&target);
+            if(alpha==0)continue;
+            old=E->T[cap][node];
+            E->T[cap][node]=old+alpha*(target-old);
+            E->assim_delta_T[cap][node]+=E->T[cap][node]-old;
+        }
 }
 
 void assimilate_lith_conform_bcs(struct All_variables *E)

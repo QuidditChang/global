@@ -1,0 +1,53 @@
+{
+  "status": "LOCAL_PASS_HPC_PENDING",
+  "TA_target": "unchanged Tref minus surface HSC anomaly",
+  "tau_Ma": 0.1,
+  "shape": 3.0,
+  "depth": 0.04,
+  "plate_age_cap_Ma": 70,
+  "source_branch": "cmbhf_EBA_PICES_diag50",
+  "operator": "particle_relaxation_v1",
+  "checkpoint": "New operator identity hashed; explicit original 2239974 migration validates original physics and logs transition.",
+  "tests": {
+    "pices-particle-ta-p4": {
+      "multisubstep_TA_and_CBF": {
+        "status": "PASS",
+        "particle_reaction_error": 2.220446049250313e-16,
+        "TA_storage_error": 5.551115123125783e-17,
+        "total_storage_error": 1.1102230246251565e-16,
+        "CBF_before_after_TA_equal": true,
+        "relative_CBF_boundary_residual": 1.061944999559984e-16
+      }
+    },
+    "pices-particle-ta-p4-consistent": {
+      "multisubstep_TA_and_CBF": {
+        "status": "PASS",
+        "particle_reaction_error": 2.220446049250313e-16,
+        "TA_storage_error": 3.469446951953614e-17,
+        "total_storage_error": 3.469446951953614e-17,
+        "CBF_before_after_TA_equal": true,
+        "relative_CBF_boundary_residual": 1.0619235020278185e-16
+      }
+    },
+    "pices-particle-ta-p4-cold": {
+      "multisubstep_TA_and_CBF": {
+        "status": "PASS",
+        "particle_reaction_error": 1.1102230246251565e-16,
+        "TA_storage_error": 8.326672684688674e-17,
+        "total_storage_error": 1.942890293094024e-16,
+        "CBF_before_after_TA_equal": true,
+        "relative_CBF_boundary_residual": 1.0622387820807741e-16
+      }
+    },
+    "pices-particle-ta-regression": {
+      "status": "PASS",
+      "ranks": 24,
+      "checkpoint_step": 1,
+      "end_step": 3,
+      "byte_identical_files": 48,
+      "TA_active": true
+    }
+  },
+  "legacy_checkpoint_migration": "PASS",
+  "HPC": "restart step 50 through 80, output suffix _TAfix; production not released"
+}

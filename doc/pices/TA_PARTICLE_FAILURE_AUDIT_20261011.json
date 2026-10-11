@@ -1,0 +1,71 @@
+{
+  "status": "AUDIT_COMPLETE_FIX_NOT_IMPLEMENTED",
+  "production_failure": {
+    "rank": 17,
+    "step": 63,
+    "particle_local_index": 400890,
+    "values": {
+      "before_nd": -0.08550159560609186,
+      "increment_nd": -0.0041995723933248375,
+      "after_nd": -0.0897011679994167,
+      "grid_before_nd": 0.04722767939151846,
+      "grid_after_nd": 0.04302810699819363
+    },
+    "kelvin": {
+      "before_nd": 9.294574939287713,
+      "after_nd": -4.983971198016775,
+      "grid_before_nd": 460.57410993116275,
+      "grid_after_nd": 446.2955637938584
+    },
+    "increment_K": -14.278546137304447,
+    "particle_grid_gap_before_K": -451.27953499187504,
+    "particle_grid_gap_after_K": -451.27953499187515
+  },
+  "findings": [
+    "TA adds Q(delta_grid) to Tp and exactly preserves Tp-Q(Tgrid) at fixed particle positions. This does not itself create the existing gap, but cannot damp it.",
+    "Bounded consistent projection constrains only the absolute nodal projection; signed updates are unbounded and particle positivity is checked only after updating.",
+    "Heat-stage subgrid relaxation and subtraction exist; their presence does not prove a maximum principle for the combined update.",
+    "Existing logs do not establish the trajectory/stage origin of this individual particle gap; local particle indices are not persistent migration IDs.",
+    "Reference implementation has comments describing similar over-nudging but uses a different boundary/assimilation formulation; its workaround cannot be transplanted unchanged."
+  ],
+  "log_samples": [
+    {
+      "step": 1.0,
+      "Tmin": -0.0002544109192459285,
+      "mismatch": 0.01702926186909807,
+      "cfl": 0.23999999819913967,
+      "subgrid_max": 0.00011607524065826269
+    },
+    {
+      "step": 10.0,
+      "Tmin": -0.0027568884034835732,
+      "mismatch": 0.09837685700938681,
+      "cfl": 0.23999998730327932,
+      "subgrid_max": 0.0008116793692125125
+    },
+    {
+      "step": 30.0,
+      "Tmin": -0.06575064525922578,
+      "mismatch": 0.1062240894026612,
+      "cfl": 0.2399999831270341,
+      "subgrid_max": 0.0005771097331196655
+    },
+    {
+      "step": 50.0,
+      "Tmin": -0.07447242172073201,
+      "mismatch": 0.13490739345027702,
+      "cfl": 0.23999999076599746,
+      "subgrid_max": 0.0005623664462714749
+    },
+    {
+      "step": 62.0,
+      "Tmin": -0.08179571954944707,
+      "mismatch": 0.142040812760512,
+      "cfl": 0.23999998213490292,
+      "subgrid_max": 0.0005711886851066537
+    }
+  ],
+  "max_TA_mapping_error_through_62": 1.5148510414814131e-09,
+  "recommended_direction": "Apply the same TA target and rate as a bounded relaxation of particle temperature; reconcile nodal state and TA energy ledger from the accepted particle update. Test variable rate/support boundaries, sharp profiles, repeated steps, and restart. Do not clip negative Kelvin or change Stokes.",
+  "remaining": "Isolate advection/projection, heat, subgrid and TA contributions to the gap, using particle coordinates and per-stage extrema; validate proposed operator before production."
+}
