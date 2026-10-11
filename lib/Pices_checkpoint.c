@@ -273,6 +273,43 @@ static void restore_initial_interface_tb(struct All_variables *E) {
  if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT recovered_inactive_interface_TB=%d from_verified_step=0\n",total);
 }
 
+/* Legacy trench geometry is frozen at the first accepted step in each
+ * integer-age bracket. It was not serialized. Reconstruct that exact event
+ * from the source run's full-precision accepted-step log, then require the
+ * original physics fingerprint to match. Never replay tracer classification. */
+static void restore_legacy_trench_geometry(struct All_variables *E) {
+ extern float find_age_in_MY(struct All_variables *);
+ char path[512],line[2048];FILE *f;
+ double saved=E->monitor.elapsed_time,event=-1,time,last=0;
+ int visit=E->trench_visit_age,bracket=(int)find_age_in_MY(E),step,rank,seen=0;
+ if(E->parallel.me==0) {
+  if(snprintf(path,sizeof(path),"%s.log",E->control.old_P_file)>=(int)sizeof(path))
+   pices_fail(E,"legacy geometry log path too long");
+  f=fopen(path,"r");
+  if(!f)pices_fail(E,"legacy geometry recovery needs source DATA/0/global.log");
+  while(fgets(line,sizeof(line),f)) {
+   if(sscanf(line,"PICES_STEP step=%d rank=%d time=%lf",&step,&rank,&time)!=3)continue;
+   if(rank!=0 || step!=seen+1 || !isfinite(time) || time<=last)
+    pices_fail(E,"legacy geometry recovery needs consecutive accepted-step log");
+   seen=step;last=time;E->monitor.elapsed_time=time;
+   if(event<0 && (int)find_age_in_MY(E)==bracket)event=time;
+   if(step==E->monitor.solution_cycles_init)break;
+  }
+  if(ferror(f) || fclose(f))pices_fail(E,"legacy geometry log read failed");
+  E->monitor.elapsed_time=saved;
+  if(seen!=E->monitor.solution_cycles_init || (float)last!=(float)saved || event<0)
+   pices_fail(E,"legacy geometry log does not cover checkpoint age/step");
+ }
+ MPI_Bcast(&event,1,MPI_DOUBLE,0,E->parallel.world);
+ E->monitor.elapsed_time=event;E->trench_visit_age=bracket+1;
+ (E->solver.lith_age_read_files)(E,0);
+ E->monitor.elapsed_time=saved;E->trench_visit_age=visit;
+ /* Refresh interpolated plate ages without replacing the frozen geometry. */
+ (E->solver.lith_age_read_files)(E,0);
+ if(E->parallel.me==0)fprintf(stderr,
+  "PICES_CHECKPOINT recovered_legacy_trench_geometry event_time=%.17g bracket=%d\n",event,bracket);
+}
+
 /* Explicit diagnostic compatibility with the pre-diagnostic ASCII build.
  * Audited delta from 2239974: diagnostic logging and commit comparison only.
  * Never suppress any difference other than these exact 40 commit characters.
@@ -306,6 +343,13 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
    restore_initial_interface_tb(E);
    metadata(E,path,state,expected);
    compatibility=compatible_metadata(actual,expected,authorization);
+   bad=!compatibility;
+   MPI_Allreduce(&bad,&any_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+   if(any_bad && E->trace.reclassify_flavors && E->data.timedir>=0) {
+    restore_legacy_trench_geometry(E);
+    metadata(E,path,state,expected);
+    compatibility=compatible_metadata(actual,expected,authorization);
+   }
   }
  }
  if(compatibility==2 && E->parallel.me==0)
