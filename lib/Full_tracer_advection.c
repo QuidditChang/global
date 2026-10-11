@@ -3570,3 +3570,81 @@ void tracer_temperature_weights(struct All_variables *E, int cap, int p,
     fflush(stderr);
     pices_fail(E,"invalid particle interpolation weights after relocation");
 }
+
+
+/* Opt-in read-only coverage experiment. No relocation, RNG, particle slots,
+ * or fallback changes. basicq[6:9] travels with each particle and retains
+ * its step-start position through predictor/corrector migration. */
+void pices_coverage_probe(struct All_variables *E, int *counts, int moved, int empty)
+{
+    const char *opt=getenv("PICES_COVERAGE_PROBE");
+    int rank,target,first,selected,p,a,e,n,nodes[9],near[27],nc=0;
+    double w[9],lo[3]={1e30,1e30,1e30},hi[3]={-1e30,-1e30,-1e30};
+    FILE *out=E->trace.fpt;
+    if(!opt || sscanf(opt,"%d:%d:%d",&rank,&target,&first)!=3)return;
+    selected=E->parallel.me==rank && target>=1 && target<=E->lmesh.nel;
+    if(selected) {
+        int iz=(target-1)%E->lmesh.elz;
+        int ix=((target-1)/E->lmesh.elz)%E->lmesh.elx;
+        int iy=(target-1)/(E->lmesh.elz*E->lmesh.elx);
+        for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)for(int dz=-1;dz<=1;dz++) {
+            if(ix+dx<0 || ix+dx>=E->lmesh.elx || iy+dy<0 || iy+dy>=E->lmesh.ely || iz+dz<0 || iz+dz>=E->lmesh.elz)continue;
+            e=target+dz+dx*E->lmesh.elz+dy*E->lmesh.elz*E->lmesh.elx;near[nc++]=e;
+            fprintf(out,"PICES_COVERAGE step=%d moved=%d element=%d count=%d\n",E->monitor.solution_cycles,moved,e,counts[e]);
+            for(a=1;a<=8;a++)for(int d=0;d<3;d++) {
+                double x=E->x[1][d+1][E->ien[1][e].node[a]];
+                if(x<lo[d])lo[d]=x;if(x>hi[d])hi[d]=x;
+            }
+        }
+        if(!moved || E->monitor.solution_cycles>=first) {
+            for(p=1;p<=E->trace.ntracers[1];p++) {
+                double old[3],now[3],sph[3],r,dist=0;
+                int in=1,was=1,oldhost=0,newhost=0,matches=0,oldmatches=0,stored=E->trace.ielement[1][p];
+                for(int d=0;d<3;d++) {
+                    now[d]=E->trace.basicq[1][3+d][p];old[d]=moved?E->trace.basicq[1][6+d][p]:now[d];
+                    if(now[d]<lo[d] || now[d]>hi[d])in=0;
+                    if(old[d]<lo[d] || old[d]>hi[d])was=0;
+                    dist+=(now[d]-old[d])*(now[d]-old[d]);
+                }
+                if(!in && !was)continue;
+                r=sqrt(old[0]*old[0]+old[1]*old[1]+old[2]*old[2]);
+                sph[0]=atan2(hypot(old[0],old[1]),old[2]);sph[1]=atan2(old[1],old[0]);if(sph[1]<0)sph[1]+=2*M_PI;sph[2]=r;
+                for(int k=0;k<nc;k++) {
+                    if(pices_element_weights(E,1,near[k],sph[0],sph[1],sph[2],nodes,w)){oldhost=near[k];oldmatches++;}
+                    if(pices_element_weights(E,1,near[k],E->trace.basicq[1][0][p],E->trace.basicq[1][1][p],E->trace.basicq[1][2][p],nodes,w)){newhost=near[k];matches++;}
+                }
+                /* Multiple accepted hosts on a shared face are reported, not resolved. */
+                int valid=stored>=1 && stored<=E->lmesh.nel && pices_element_weights(E,1,stored,E->trace.basicq[1][0][p],E->trace.basicq[1][1][p],E->trace.basicq[1][2][p],nodes,w);
+                fprintf(out,"PICES_PATH step=%d local_index=%d old_host=%d old_matches=%d stored_host=%d brute_host=%d matches=%d stored_valid=%d old_xyz=%.17g,%.17g,%.17g xyz=%.17g,%.17g,%.17g displacement_nd=%.17g dt=%.17g start_velocity=%.17g,%.17g,%.17g\n",
+                    E->monitor.solution_cycles,p,oldhost,oldmatches,stored,newhost,matches,valid,old[0],old[1],old[2],now[0],now[1],now[2],sqrt(dist),(double)E->advection.timestep,
+                    moved?E->trace.basicq[1][9][p]:0,moved?E->trace.basicq[1][10][p]:0,moved?E->trace.basicq[1][11][p]:0);
+            }
+            for(a=1;a<=8;a++) {
+                n=E->ien[1][target].node[a];
+                fprintf(out,"PICES_COVERAGE_NODE step=%d node=%d xyz=%.17g,%.17g,%.17g velocity=%.17g,%.17g,%.17g\n",E->monitor.solution_cycles,n,
+                    E->x[1][1][n],E->x[1][2][n],E->x[1][3][n],E->sphere.cap[1].V[1][n],E->sphere.cap[1].V[2][n],E->sphere.cap[1].V[3][n]);
+            }
+        }
+        fflush(out);
+    }
+    /* All ranks participate, including remote contributions to shared nodes.
+     * Validate the stored host without the mutating temperature wrapper. */
+    if(empty || !moved) {
+        double *sum=calloc(E->lmesh.nno+1,sizeof(double)),*hits=calloc(E->lmesh.nno+1,sizeof(double));
+        double *field[NCS];int bad=0,allbad;
+        if(!sum || !hits)pices_fail(E,"coverage probe allocation failed");
+        for(p=1;p<=E->trace.ntracers[1];p++) {
+            e=E->trace.ielement[1][p];
+            if(e<1 || e>E->lmesh.nel || !pices_element_weights(E,1,e,E->trace.basicq[1][0][p],E->trace.basicq[1][1][p],E->trace.basicq[1][2][p],nodes,w)){bad++;continue;}
+            for(a=1;a<=8;a++){sum[nodes[a]]+=w[a];if(w[a]>0)hits[nodes[a]]++;}
+        }
+        field[1]=sum;E->exchange_node_d(E,field,E->mesh.levmax);
+        field[1]=hits;E->exchange_node_d(E,field,E->mesh.levmax);
+        MPI_Allreduce(&bad,&allbad,1,MPI_INT,MPI_SUM,E->parallel.world);
+        if(selected)for(a=1;a<=8;a++) {
+            n=E->ien[1][target].node[a];
+            fprintf(out,"PICES_SUPPORT step=%d element=%d node=%d weight_sum=%.17g positive_contributions=%.17g global_invalid_weights=%d\n",E->monitor.solution_cycles,target,n,sum[n],hits[n],allbad);
+        }
+        fflush(out);free(sum);free(hits);
+    }
+}

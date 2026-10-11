@@ -535,6 +535,19 @@ static void report_empty_elements(struct All_variables *E)
     local[1]=E->trace.ntracers[1];local[2]=bad_hosts;local[3]=count_mismatch;local[4]=empty;
     MPI_Allreduce(local,global,5,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
     global_empty=global[4]>0;
+    if(getenv("PICES_COVERAGE_PROBE")) {
+        extern void pices_coverage_probe(struct All_variables *,int *,int,int);
+        if(!coverage_before_valid) {
+            long long bins[6]={0},allbins[6];
+            for(e=1;e<=E->lmesh.nel;e++) {
+                int c=direct[e],b=c==0?0:c<5?1:c<10?2:c<27?3:c==27?4:5;
+                bins[b]++;
+            }
+            MPI_Allreduce(bins,allbins,6,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
+            if(E->parallel.me==0)fprintf(E->fp,"PICES_INITIAL_COVERAGE zero=%lld n1_4=%lld n5_9=%lld n10_26=%lld n27=%lld n28_plus=%lld\n",allbins[0],allbins[1],allbins[2],allbins[3],allbins[4],allbins[5]);
+        }
+        pices_coverage_probe(E,direct,coverage_before_valid,global_empty);
+    }
     if(E->parallel.me==0) {
         fprintf(E->fp,"PICES_PARTICLE_BALANCE step=%d before_valid=%d before=%lld after=%lld delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld empty_elements=%lld\n",
             E->monitor.solution_cycles,coverage_before_valid,global[0],global[1],global[1]-global[0],global[2],global[3],global[4]);

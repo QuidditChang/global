@@ -25,6 +25,7 @@ struct All_variables {
  struct {int ntracers[2],ielement[2][3],nflavors,ntracer_flavor[2][2][3];} trace;
  double x[2][4][13],sx[2][4][13];
 };
+void pices_coverage_probe(struct All_variables *E,int *c,int moved,int empty){}
 static struct All_variables saved;
 static void MPI_Allreduce(const void *a,void *b,int n,int t,int op,int world){memcpy(b,a,n*sizeof(long long));}
 static void MPI_Barrier(int world){}

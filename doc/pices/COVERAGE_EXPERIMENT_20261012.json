@@ -1,0 +1,25 @@
+{
+  "purpose": "Read-only diagnosis of rank161 cap6 element27151 becoming empty at step97",
+  "activation": "PICES_COVERAGE_PROBE=161:27151:90 exported identically to all MPI ranks",
+  "physics_changes": "none; original random initialization, movement, composition and empty abort retained",
+  "experiment": "PICES_coverage, fresh step0 to at most100, 384 solver ranks, 400 slots, medium, 4h",
+  "outputs": {
+    "rank0_global_log": "PICES_INITIAL_COVERAGE global occupancy histogram",
+    "DATA/161/global.tracer_log.161": "PICES_COVERAGE every step for 3x3x3 local neighborhood; PICES_PATH at initialization and steps>=90; PICES_COVERAGE_NODE geometry and nodal spherical velocity; PICES_SUPPORT at initialization and first empty event",
+    "PICES_PATH": "Start/end Cartesian coordinates and start Cartesian velocity travel together in existing basicq slots; local_index is NOT a persistent particle ID. Brute-force enumeration uses the existing nonmutating weight predicate over the target neighborhood, not the fast locator. Zero matches means outside this neighborhood, multiple matches may denote a shared boundary.",
+    "PICES_SUPPORT": "Raw shape-weight sum and strictly positive contribution count after MPI node exchange; global invalid stored-host weight count. No temperature projection or relocation is performed."
+  },
+  "units": "Coordinates, displacement, velocity and dt are solver nondimensional units",
+  "limitations": [
+    "Focused trajectory output is local to selected rank; it is not a global persistent-ID tracer",
+    "The neighborhood enumeration shares interpolation geometry; it checks fast host selection, not an independently derived shape basis",
+    "No continuation beyond the first empty-element abort; empty-cell duration remains unmeasured"
+  ],
+  "validation": {
+    "compile": "modified C files compiled O2 and linked against solver objects",
+    "unit": "check_empty_diagnostic.py passes true-empty and stale-counter cases with read-only memcmp",
+    "mpi": "24 ranks, prescribed rotation, 4 steps, probe on/off",
+    "result": "accepted-step physical diagnostics identical on all ranks; 120 pices.state files byte-identical; eight target node weights positive after MPI exchange; no invalid stored weights",
+    "not_completed": "full Stokes on/off run stopped during initial iteration; production-scale step97 awaits HPC"
+  }
+}
