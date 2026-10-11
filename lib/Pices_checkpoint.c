@@ -1,11 +1,14 @@
 /* P2: legacy payload + strict canonical JSON sidecar + collective manifest.
- * Same executable/partition/physics only. Unknown/missing metadata fails closed.
+ * Same partition/physics; cross-commit restart requires an audited opt-in.
+ * Unknown/missing metadata fails closed.
  * Publication: temporary payload -> temporary metadata -> all-rank rename ->
  * per-rank completion manifest with the same digest of all rank metadata. */
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -238,10 +241,35 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
+/* Explicit diagnostic compatibility with the pre-diagnostic ASCII build.
+ * Audited delta: logging and opt-in initialization (disabled for this restart).
+ * Never suppress any difference other than these exact 40 commit characters.
+ * Re-audit this exception when changing restart/heat/TA semantics. */
+static int compatible_metadata(const char *actual,const char *expected,const char *authorized) {
+ const char *key="\"solver_commit\":\"";
+ const char *a=strstr(actual,key),*e=strstr(expected,key);
+ const char *reviewed="22399749866f452b3c06960e3d00eea5333a37f0";
+ size_t prefix;
+ if(!strcmp(actual,expected))return 1;
+ if(!authorized || strcmp(authorized,reviewed) || !a || !e)return 0;
+ a+=strlen(key);e+=strlen(key);prefix=(size_t)(a-actual);
+ if(prefix!=(size_t)(e-expected) || strlen(a)<41 || strlen(e)<41 ||
+    a[40]!='"' || e[40]!='"' || strncmp(a,reviewed,40))return 0;
+ if(strncmp(actual,expected,prefix) || strcmp(a+40,e+40))return 0;
+ return 2;
+}
+
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
  pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");readtext(E,meta,actual);metadata(E,path,state,expected);
- if(strcmp(actual,expected)) {
+ int compatibility=compatible_metadata(actual,expected,
+     E->control.thermal_preage ? NULL : getenv("PICES_RESTART_COMPAT_COMMIT"));
+ if(compatibility==2 && E->parallel.me==0)
+  fprintf(stderr,"PICES_CHECKPOINT compatible_source=22399749866f452b3c06960e3d00eea5333a37f0 running_commit=%s all_other_metadata=exact\n",PICES_SOLVER_COMMIT);
+ if(!compatibility) {
+  size_t offset=0;
+  while(actual[offset] && expected[offset] && actual[offset]==expected[offset])offset++;
+  fprintf(stderr,"PICES_CHECKPOINT_MISMATCH rank=%d offset=%lu expected=%.120s actual=%.120s\n",E->parallel.me,(unsigned long)offset,expected+offset,actual+offset);
   if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT expected=%s actual=%s\n",expected,actual);
   pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
  }
