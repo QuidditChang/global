@@ -268,8 +268,19 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
   fprintf(stderr,"PICES_CHECKPOINT compatible_source=22399749866f452b3c06960e3d00eea5333a37f0 running_commit=%s all_other_metadata=exact\n",PICES_SOLVER_COMMIT);
  if(!compatibility) {
   size_t offset=0;
-  while(actual[offset] && expected[offset] && actual[offset]==expected[offset])offset++;
-  fprintf(stderr,"PICES_CHECKPOINT_MISMATCH rank=%d offset=%lu expected=%.120s actual=%.120s\n",E->parallel.me,(unsigned long)offset,expected+offset,actual+offset);
+  const char *key="\"solver_commit\":\"",*a=strstr(actual,key),*e=strstr(expected,key);
+  const char *authorization=getenv("PICES_RESTART_COMPAT_COMMIT");
+  /* Diagnose differences after the commit too; do not alter either buffer. */
+  while(actual[offset] && expected[offset]) {
+   if(a && e && actual+offset==a+strlen(key) && expected+offset==e+strlen(key)
+      && strlen(actual+offset)>=41 && strlen(expected+offset)>=41
+      && actual[offset+40]=='"' && expected[offset+40]=='"') {offset+=40;continue;}
+   if(actual[offset]!=expected[offset])break;
+   offset++;
+  }
+  fprintf(stderr,"PICES_CHECKPOINT_MISMATCH rank=%d authorization=%s thermal_preage=%d noncommit_offset=%lu all_other_metadata=%s expected=%.160s actual=%.160s\n",
+      E->parallel.me,authorization?authorization:"unset",E->control.thermal_preage,(unsigned long)offset,
+      !actual[offset] && !expected[offset]?"exact":"different",expected+offset,actual+offset);
   if(E->parallel.me==0)fprintf(stderr,"PICES_CHECKPOINT expected=%s actual=%s\n",expected,actual);
   pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
  }
