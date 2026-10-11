@@ -411,10 +411,19 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     }
     stored=energy(E,E->assim_delta_T[1]);
     for(p=1;p<=E->trace.ntracers[1];p++) {
+        double tp_before=E->trace.extraq[1][E->pices.slot][p];
         tracer_temperature_weights(E,1,p,nodes,w);
         increment[p]=interp(nodes,w,E->assim_delta_T[1]);
         E->trace.extraq[1][E->pices.slot][p]+=increment[p];
-        if(!isfinite(E->trace.extraq[1][E->pices.slot][p]) || E->data.Ttop+E->trace.extraq[1][E->pices.slot][p]*E->data.ref_temperature<0)pices_fail(E,"invalid TA particle temperature");
+        if(!isfinite(E->trace.extraq[1][E->pices.slot][p]) || E->data.Ttop+E->trace.extraq[1][E->pices.slot][p]*E->data.ref_temperature<0) {
+            double after=E->trace.extraq[1][E->pices.slot][p];
+            fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d element=%d before_nd=%.17g increment_nd=%.17g after_nd=%.17g after_K=%.17g grid_before_nd=%.17g grid_after_nd=%.17g dt=%.17g\n",
+                E->parallel.me,E->monitor.solution_cycles,p,E->trace.ielement[1][p],
+                tp_before,increment[p],after,E->data.Ttop+after*E->data.ref_temperature,
+                interp(nodes,w,before),interp(nodes,w,g),dt);
+            fflush(stderr);
+            pices_fail(E,"invalid TA particle temperature");
+        }
     }
     project(E,increment,mapped,0);
     for(n=1;n<=nn;n++)error=fmax(error,fabs(mapped[n]-E->assim_delta_T[1][n]));
