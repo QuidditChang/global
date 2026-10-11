@@ -31,6 +31,7 @@
 
 #include "global_defs.h"
 #include "pices.h"
+#include "thermal_preage.h"
 #include "pices_benchmark.h"
 #include "lith_age.h"
 #include "parsing.h"
@@ -190,6 +191,8 @@ void convection_initial_temperature(struct All_variables *E)
   void report();
 
   report(E,"Initialize temperature field");
+
+  if(E->control.thermal_preage) thermal_preage_validate(E);
 
   if (E->convection.tic_method == -1) {
       /* read temperature from file */

@@ -552,6 +552,9 @@ struct CONTROL {
     float lith_age_depth;
     float max_plate_age_Ma;              /* HSC effective-age cap in Ma */
     float lith_age_mantle_temp;
+    int thermal_preage;                 /* opt-in fixed-composition conductive initialization */
+    double thermal_preage_Ma;           /* separate thermal age; never the geological clock */
+    double thermal_preage_max_dt_Ma;    /* backward-Euler accuracy control */
     float bottom_tbl_thickness;          /* H_TBL / Earth radius; 0 disables */
     float bottom_tbl_diffusivity_ratio;  /* kappa_bottom / kappa0 */
 
