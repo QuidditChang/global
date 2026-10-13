@@ -43,6 +43,11 @@ void pices_fail(struct All_variables *E, const char *why)
     MPI_Abort(E->parallel.world, 72);
     abort();
 }
+int pices_temperature_valid(struct All_variables *E,double t)
+{
+    double kelvin=E->data.Ttop+E->data.ref_temperature*t;
+    return isfinite(t) && isfinite(kelvin) && kelvin>=-1e-9;
+}
 static double *array(struct All_variables *E, size_t n)
 {
     double *p=(double *)calloc(n,sizeof(double));
@@ -338,7 +343,7 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
         change=0;
         for(n=1;n<=nn;n++) {
             g[n]=fixed(E,n)?old[n]:old[n]+ds*rhs[n]/E->pices.mass[n];
-            if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0)change=DBL_MAX;
+            if(!pices_temperature_valid(E,g[n]))change=DBL_MAX;
         }
         change=reduce(E,change,MPI_MAX);
         if(change==0) {
@@ -452,7 +457,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     for(n=1;n<=nn;n++) {
         lith_age_relaxation_node(E,1,n,&alpha[n],&target[n]);
         if(!isfinite(alpha[n]) || alpha[n]<0 || alpha[n]>1 ||
-           !isfinite(target[n]) || E->data.Ttop+target[n]*E->data.ref_temperature<0)
+           !pices_temperature_valid(E,target[n]))
             pices_fail(E,"invalid particle TA target/fraction");
         active=fmax(active,alpha[n]);
     }
@@ -468,7 +473,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
             double old=E->trace.extraq[1][E->pices.slot][p],after;
             tracer_temperature_weights(E,1,p,nodes,w);
             after=ta_particle_relax(nodes,w,alpha,target,old);
-            if(!isfinite(after) || E->data.Ttop+after*E->data.ref_temperature<0) {
+            if(!pices_temperature_valid(E,after)) {
                 fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d before_nd=%.17g after_nd=%.17g after_K=%.17g operator=particle_relaxation_v1\n",
                     E->parallel.me,E->monitor.solution_cycles,p,old,after,E->data.Ttop+after*E->data.ref_temperature);
                 pices_fail(E,"invalid TA particle temperature");
@@ -480,7 +485,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
         for(n=1;n<=nn;n++) {
             E->assim_delta_T[1][n]=g[n]-projected[n];
             maximum=fmax(maximum,fabs(E->assim_delta_T[1][n]));
-            if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0)
+            if(!pices_temperature_valid(E,g[n]))
                 pices_fail(E,"invalid TA grid temperature");
         }
         stored=energy(E,E->assim_delta_T[1]);
@@ -515,81 +520,61 @@ static void capture_particle_coverage(struct All_variables *E)
     coverage_before_particles=E->trace.ntracers[1];coverage_before_valid=1;
 }
 
+/* Counters describe this process lifetime, not checkpoint-persisted history. */
 static void report_empty_elements(struct All_variables *E)
 {
-    int e,i,p,a,n,empty=0,global_empty,shown=0,bad_hosts=0,count_mismatch=0;
+    static int *streak,last_step=-1,peak;
+    static long long fallback_total;
+    int e,p,i,step=E->monitor.solution_cycles,longest=0;
+    long long local[5]={0},global[5];
+    double volume=0,domain=0,global_volume,global_domain,global_longest;
     int *direct=calloc(E->lmesh.nel+1,sizeof(int));
-    long long local[5],global[5];
-    if(!direct)pices_fail(E,"coverage diagnostic allocation failed");
+    if(!streak)streak=calloc(E->lmesh.nel+1,sizeof(int));
+    if(!direct || !streak)pices_fail(E,"coverage monitor allocation failed");
     for(p=1;p<=E->trace.ntracers[1];p++) {
         e=E->trace.ielement[1][p];
-        if(e>0 && e<=E->lmesh.nel)direct[e]++;else bad_hosts++;
+        if(e<1 || e>E->lmesh.nel)local[2]++;else direct[e]++;
     }
     for(e=1;e<=E->lmesh.nel;e++) {
-        int count=0;
+        int count=0;double v=E->eco[1][e].area;
         for(i=0;i<E->trace.nflavors;i++)count+=E->trace.ntracer_flavor[1][i][e];
-        if(!count)empty++;
-        if(count!=direct[e])count_mismatch++;
+        if(count!=direct[e])local[3]++;
+        if(!isfinite(v) || v<=0)pices_fail(E,"invalid coverage element volume");
+        domain+=v;
+        if(!direct[e]) {local[4]++;volume+=v;}
+        if(step!=last_step) {
+            if(!direct[e]) {
+                if(streak[e]==0) {
+                    double x=0,y=0,z=0,rad=0;
+                    for(int a=1;a<=8;a++){int n=E->ien[1][e].node[a];x+=E->x[1][1][n];y+=E->x[1][2][n];z+=E->x[1][3][n];rad+=E->sx[1][3][n];}
+                    fprintf(E->trace.fpt,"PICES_EMPTY_EVENT step=%d element=%d event=begin lon_deg=%.17g lat_deg=%.17g depth_km=%.17g\n",step,e,atan2(y,x)*180/M_PI,atan2(z,hypot(x,y))*180/M_PI,(E->sphere.ro-rad/8)*E->data.radius_km);
+                }
+                streak[e]++;
+            } else if(streak[e]) {
+                fprintf(E->trace.fpt,"PICES_EMPTY_EVENT step=%d element=%d event=recovered empty_steps=%d count=%d\n",step,e,streak[e],direct[e]);streak[e]=0;
+            }
+        }
+        if(streak[e]>longest)longest=streak[e];
     }
     local[0]=coverage_before_valid?coverage_before_particles:E->trace.ntracers[1];
-    local[1]=E->trace.ntracers[1];local[2]=bad_hosts;local[3]=count_mismatch;local[4]=empty;
+    local[1]=E->trace.ntracers[1];
     MPI_Allreduce(local,global,5,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
-    global_empty=global[4]>0;
-    if(getenv("PICES_COVERAGE_PROBE")) {
-        extern void pices_coverage_probe(struct All_variables *,int *,int,int);
-        if(!coverage_before_valid) {
-            long long bins[6]={0},allbins[6];
-            for(e=1;e<=E->lmesh.nel;e++) {
-                int c=direct[e],b=c==0?0:c<5?1:c<10?2:c<27?3:c==27?4:5;
-                bins[b]++;
-            }
-            MPI_Allreduce(bins,allbins,6,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
-            if(E->parallel.me==0)fprintf(E->fp,"PICES_INITIAL_COVERAGE zero=%lld n1_4=%lld n5_9=%lld n10_26=%lld n27=%lld n28_plus=%lld\n",allbins[0],allbins[1],allbins[2],allbins[3],allbins[4],allbins[5]);
-        }
-        pices_coverage_probe(E,direct,coverage_before_valid,global_empty);
-    }
+    if(global[0]!=global[1] || global[2] || global[3])pices_fail(E,"particle conservation/host/count failure");
+    global_volume=reduce(E,volume,MPI_SUM);global_domain=reduce(E,domain,MPI_SUM);
+    global_longest=reduce(E,longest,MPI_MAX);if(global_longest>peak)peak=(int)global_longest;
+    if(step!=last_step)fallback_total+=global[4];
     if(E->parallel.me==0) {
-        fprintf(E->fp,"PICES_PARTICLE_BALANCE step=%d before_valid=%d before=%lld after=%lld delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld empty_elements=%lld\n",
-            E->monitor.solution_cycles,coverage_before_valid,global[0],global[1],global[1]-global[0],global[2],global[3],global[4]);
+        fprintf(E->fp,"PICES_PARTICLE_BALANCE step=%d before_valid=%d before=%lld after=%lld delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld empty_elements=%lld\n",step,coverage_before_valid,global[0],global[1],global[1]-global[0],global[2],global[3],global[4]);
+        fprintf(E->fp,"PICES_EMPTY_MONITOR step=%d empty=%lld volume_nd=%.17g volume_fraction=%.17g longest_current=%d longest_since_start=%d fallback_element_steps=%lld policy=retain_previous_composition\n",step,global[4],global_volume,global_volume/global_domain,(int)global_longest,peak,fallback_total);
         fflush(E->fp);
     }
-    if(global_empty) {
-        for(e=1;e<=E->lmesh.nel && shown<8;e++) {
-            int count=0,ix,iy,iz,neighbors[6];double x=0,y=0,z=0,rad=0;
-            for(i=0;i<E->trace.nflavors;i++)count+=E->trace.ntracer_flavor[1][i][e];
-            if(count)continue;
-            shown++;iz=(e-1)%E->lmesh.elz;ix=((e-1)/E->lmesh.elz)%E->lmesh.elx;
-            iy=(e-1)/(E->lmesh.elz*E->lmesh.elx);
-            for(a=1;a<=8;a++) {n=E->ien[1][e].node[a];x+=E->x[1][1][n];y+=E->x[1][2][n];z+=E->x[1][3][n];rad+=E->sx[1][3][n];}
-            fprintf(stderr,"PICES_EMPTY rank=%d step=%d cap=%d element=%d local_ijk=%d,%d,%d lon_deg=%.17g lat_deg=%.17g depth_km=%.17g before=%d after_direct=%d after_flavor=%d rank_particles_before=%d rank_particles_after=%d time=%.17g dt=%.17g\n",
-                E->parallel.me,E->monitor.solution_cycles,E->sphere.capid[1],e,ix+1,iy+1,iz+1,
-                atan2(y,x)*180/M_PI,atan2(z,hypot(x,y))*180/M_PI,(E->sphere.ro-rad/8)*E->data.radius_km,
-                coverage_before_valid?coverage_before[e]:-1,direct[e],count,
-                coverage_before_valid?coverage_before_particles:-1,E->trace.ntracers[1],
-                (double)E->monitor.elapsed_time,(double)E->advection.timestep);
-            neighbors[0]=ix?e-E->lmesh.elz:0;
-            neighbors[1]=ix+1<E->lmesh.elx?e+E->lmesh.elz:0;
-            neighbors[2]=iy?e-E->lmesh.elz*E->lmesh.elx:0;
-            neighbors[3]=iy+1<E->lmesh.ely?e+E->lmesh.elz*E->lmesh.elx:0;
-            neighbors[4]=iz?e-1:0;neighbors[5]=iz+1<E->lmesh.elz?e+1:0;
-            for(i=0;i<6;i++) {int neighbor=neighbors[i];
-                fprintf(stderr,"PICES_EMPTY_NEIGHBOR rank=%d element=%d face=%d neighbor=%d before=%d after=%d remote_or_domain_boundary=%d\n",
-                    E->parallel.me,e,i,neighbor,neighbor&&coverage_before_valid?coverage_before[neighbor]:-1,
-                    neighbor?direct[neighbor]:-1,!neighbor);
-            }
-            for(a=1;a<=8;a++) {int incident=0,other,b;n=E->ien[1][e].node[a];
-                for(other=1;other<=E->lmesh.nel;other++)for(b=1;b<=8;b++)
-                    if(E->ien[1][other].node[b]==n){incident+=direct[other];break;}
-                fprintf(stderr,"PICES_EMPTY_NODE rank=%d element=%d corner=%d node=%d theta=%.17g phi=%.17g radius=%.17g local_incident_particles=%d\n",
-                    E->parallel.me,e,a,n,E->sx[1][1][n],E->sx[1][2][n],E->sx[1][3][n],incident);
-            }
-        }
-        fprintf(stderr,"PICES_EMPTY_SUMMARY rank=%d local_empty=%d reported=%d global_empty=%lld global_particle_delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld\n",
-            E->parallel.me,empty,shown,global[4],global[1]-global[0],global[2],global[3]);
-        fflush(stderr);MPI_Barrier(E->parallel.world);
-        free(direct);pices_fail(E,"empty composition element");
+    if(E->parallel.me==161 && E->lmesh.nel>=27151)
+        fprintf(E->trace.fpt,"PICES_EMPTY_TARGET step=%d element=27151 count=%d streak=%d\n",step,direct[27151],streak[27151]);
+    if(getenv("PICES_COVERAGE_PROBE")) {
+        extern void pices_coverage_probe(struct All_variables *,int *,int,int);
+        pices_coverage_probe(E,direct,coverage_before_valid,global[4]>0);
     }
-    free(direct);coverage_before_valid=0;
+    fflush(E->trace.fpt);last_step=step;free(direct);coverage_before_valid=0;
 }
 
 static void composition_check(struct All_variables *E)
@@ -603,11 +588,11 @@ static void composition_check(struct All_variables *E)
     for(e=1;e<=E->lmesh.nel;e++) {
         total=0;
         for(i=0;i<E->trace.nflavors;i++)total+=E->trace.ntracer_flavor[1][i][e];
-        if(total==0)pices_fail(E,"empty composition element");
+        /* Ratio method retains the last valid composition when empty. */
         for(i=0;i<E->composition.ncomp;i++) {
             double c=E->composition.comp_el[1][i][e];
             if(!isfinite(c) || c<0 || c>1)pices_fail(E,"invalid composition fraction");
-            error=fmax(error,fabs(c-E->trace.ntracer_flavor[1][i+1][e]/(double)total));
+            if(total>0)error=fmax(error,fabs(c-E->trace.ntracer_flavor[1][i+1][e]/(double)total));
         }
         if(E->control.kC_primordial_flavor>0 && E->control.kC_primordial_flavor<=E->composition.ncomp) {
             double c=E->composition.comp_el[1][E->control.kC_primordial_flavor-1][e];
@@ -745,7 +730,7 @@ void pices_advance(struct All_variables *E)
         for(n=1;n<=nn;n++) {
             if(!fixed(E,n)) g[n]=old[n]+ds*rhs[n]/E->pices.mass[n];
             dg[n]=g[n]-old[n];
-            if(!isfinite(g[n]) || E->data.Ttop+g[n]*E->data.ref_temperature<0) pices_fail(E,"invalid grid temperature");
+            if(!pices_temperature_valid(E,g[n])) pices_fail(E,"invalid grid temperature");
         }
         }
         for(n=1;n<=nn;n++)dg[n]=g[n]-old[n];
@@ -764,7 +749,7 @@ void pices_advance(struct All_variables *E)
             double *tp=&E->trace.extraq[1][E->pices.slot][p];
             tracer_temperature_weights(E,1,p,nodes,w);
             *tp+=sub[p]+interp(nodes,w,mapped);
-            if(!isfinite(*tp) || E->data.Ttop+*tp*E->data.ref_temperature<0) pices_fail(E,"invalid particle temperature");
+            if(!pices_temperature_valid(E,*tp)) pices_fail(E,"invalid particle temperature");
         }
     }
     if(E->pices.eba) {
@@ -836,10 +821,10 @@ void pices_restore(struct All_variables *E)
         double tp=E->trace.extraq[1][E->pices.slot][p];
         E->trace.ielement[1][p]=-99;
         tracer_temperature_weights(E,1,p,nodes,w);
-        if(!isfinite(tp) || E->data.Ttop+tp*E->data.ref_temperature<0) pices_fail(E,"invalid restored Tp");
+        if(!pices_temperature_valid(E,tp)) pices_fail(E,"invalid restored Tp");
     }
     for(n=1;n<=E->lmesh.nno;n++)
-        if(!isfinite(E->T[1][n]) || E->data.Ttop+E->T[1][n]*E->data.ref_temperature<0) pices_fail(E,"invalid restored T");
+        if(!pices_temperature_valid(E,E->T[1][n])) pices_fail(E,"invalid restored T");
     if(E->pices.p4 && E->control.lith_age) {
         lith_age_conform_tbc(E);
         lith_age_temperature_bound_adj(E,E->mesh.levmax);

@@ -1,0 +1,35 @@
+{
+  "purpose": "300-step fresh-start validation allowing empty composition elements with valid nodal particle support",
+  "changes": [
+    "retain original ratio-method previous composition on empty elements; validate retained fractions",
+    "fail on PICES particle discard paths, changed global count, invalid hosts or inconsistent flavor counts",
+    "consistent projection permits unsupported fixed-temperature nodes, but rejects unsupported free nodes after MPI reduction",
+    "Kelvin validity rejects nonfinite values and values below -1e-9 K, without clipping or imposing [0,1] nondimensional bounds"
+  ],
+  "monitor": {
+    "PICES_EMPTY_MONITOR": "global count, nondimensional volume and domain fraction, current and lifetime longest streak, cumulative empty element observations; post-advection before thermal stage",
+    "PICES_EMPTY_EVENT": "per-rank tracer log: onset location and recovery duration",
+    "PICES_EMPTY_TARGET": "rank161 element27151 count and streak every step",
+    "counters": "diagnostic process-lifetime counters; not stored in checkpoints; repeated same-step observation not counted twice"
+  },
+  "validation": {
+    "unit": "empty persistence/recovery and repeated observation; stale counts and particle loss; uncovered Dirichlet/free node projection; invalid temperature",
+    "MPI": "24 ranks, 4 prescribed-rotation steps; both normal and artificially emptied element100; original ratio-method retention asserted by test driver; global393216 particles conserved; closure<1e-12",
+    "build": "full O2 standalone build; no HPC production-size run yet"
+  },
+  "experiment": {
+    "suffix": "PICES_empty300",
+    "steps": 300,
+    "restart": false,
+    "queue": "medium",
+    "slots": 400,
+    "solver_ranks": 384,
+    "walltime_hours": 8,
+    "postprocessing": "same online pipeline as production"
+  },
+  "limits": [
+    "Temporary composition freezing is a fallback, not restored local Lagrangian history",
+    "300 successful steps do not establish long-term production reliability",
+    "No particle insertion or initialization changes"
+  ]
+}

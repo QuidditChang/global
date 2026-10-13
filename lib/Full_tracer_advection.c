@@ -739,6 +739,7 @@ void full_lost_souls(struct All_variables *E)
         iel=(E->trace.iget_element)(E,j,E->trace.ntracers[j],-99,x,y,z,theta,phi,rad);
 
         if (iel<1) {
+            if(E->pices.enabled)pices_fail(E,"received particle host lookup failed");
             fprintf(E->trace.fpt,"Error(lost souls) - element not here?\n");
             fprintf(E->trace.fpt,"x,y,z-theta,phi,rad: %f %f %f - %f %f %f\n",x,y,z,theta,phi,rad);
             fflush(E->trace.fpt);
@@ -815,6 +816,7 @@ static void full_put_lost_tracers(struct All_variables *E,
 
         /* should not be here */
         if (icheck!=1) {
+            if(E->pices.enabled)pices_fail(E,"particle destination cap lookup failed");
             fprintf(E->trace.fpt,"Error(lost souls)-should not be here\n");
             fprintf(E->trace.fpt,"x: %f y: %f z: %f rad: %f\n",x,y,z,rad);
             icheck=full_icheck_cap(E,0,x,y,z,rad);

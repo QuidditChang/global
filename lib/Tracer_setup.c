@@ -611,6 +611,7 @@ static void find_tracers(struct All_variables *E)
                 if (E->trace.itracer_warnings) exit(10);
 
 
+                if(E->pices.enabled)pices_fail(E,"particle host lookup failed before discard");
                 eject_tracer(E,j,it);
                 it--;
             }
@@ -761,6 +762,7 @@ static void count_flavors(struct All_variables *E, int reclassify)
         /* Fill arrays */
         for (kk=1; kk<=numtracers; kk++) {
             e = E->trace.ielement[j][kk];
+            if(E->pices.enabled && (e<1 || e>E->lmesh.nel))pices_fail(E,"invalid particle host before flavor count");
             if(E->pices.enabled && (!isfinite(E->trace.extraq[j][0][kk]) ||
                E->trace.extraq[j][0][kk]<0 || E->trace.extraq[j][0][kk]>=E->trace.nflavors ||
                floor(E->trace.extraq[j][0][kk])!=E->trace.extraq[j][0][kk]))
@@ -1514,6 +1516,7 @@ static void check_sum(struct All_variables *E)
     iold_number = E->trace.ilast_tracer_count;
 
     if (number != iold_number) {
+        if(E->pices.enabled)pices_fail(E,"particle count changed during migration");
         fprintf(E->trace.fpt,"ERROR(check_sum)-break in conservation %d %d\n",
                 number,iold_number);
         fflush(E->trace.fpt);

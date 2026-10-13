@@ -14,6 +14,7 @@ const struct Pices_diagnostics *pices_diagnostics(struct All_variables *);
 extern const char *pices_diagnostic_names[PD_NVALUES];
 double pices_profile_source(struct All_variables *,int,int);
 
+int pices_temperature_valid(struct All_variables *,double);
 void pices_consistent_project(struct All_variables *, const double *, double *, int);
 void pices_parameters(struct All_variables *);
 void pices_validate(struct All_variables *);

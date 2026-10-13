@@ -22,7 +22,7 @@ static double dot(struct PICMatrix *A,const double *x,const double *y) {
  int n;double s=0;for(n=1;n<=A->nn;n++)s+=x[n]*y[n]/A->copies[n];return global(A->E,s,MPI_SUM);
 }
 void pices_consistent_project(struct All_variables *E,const double *values,double *out,int boundary) {
- struct PICMatrix A;int n,p,a,cg=0,pg=0,empty=0,*covered;double lo=DBL_MAX,hi=-DBL_MAX,scale=0,tol,error=0,rz=0;
+ struct PICMatrix A;int n,p,a,cg=0,pg=0,empty=0,zero_boundary=0,*covered;double lo=DBL_MAX,hi=-DBL_MAX,scale=0,tol,error=0,rz=0;
  double *b,*r,*z,*direction,*work;double active=0;
  A.E=E;A.nn=E->lmesh.nno;A.np=E->trace.ntracers[1];
  A.nodes=malloc((size_t)A.np*8*sizeof(int));if(!A.nodes)pices_fail(E,"projection index allocation failed");
@@ -32,7 +32,7 @@ void pices_consistent_project(struct All_variables *E,const double *values,doubl
  for(n=1;n<=A.nn;n++)A.copies[n]=1;share(E,A.copies);
  for(p=0;p<A.np;p++) {
   int nodes[9],e=E->trace.ielement[1][p+1];double w[9],v=values[p+1];
-  if(!isfinite(v) || (boundary && E->data.Ttop+E->data.ref_temperature*v<0))pices_fail(E,"invalid projection particle value");
+  if(!isfinite(v) || (boundary && !pices_temperature_valid(E,v)))pices_fail(E,"invalid projection particle value");
   if(e<1 || e>E->lmesh.nel)pices_fail(E,"invalid projection host element");covered[e]++;
   tracer_temperature_weights(E,1,p+1,nodes,w);lo=fmin(lo,v);hi=fmax(hi,v);scale=fmax(scale,fabs(v));
   for(a=0;a<8;a++) {n=nodes[a+1];A.nodes[p*8+a]=n;A.weights[p*8+a]=w[a+1];
@@ -41,9 +41,18 @@ void pices_consistent_project(struct All_variables *E,const double *values,doubl
  for(n=1;n<=E->lmesh.nel;n++)if(!covered[n])empty++;
  share(E,b);share(E,A.rows);share(E,A.diag);
  for(n=1;n<=A.nn;n++) {
-  if(!(A.diag[n]>0) || !(A.rows[n]>0) || !isfinite(A.diag[n]))pices_fail(E,"consistent projection requires covered nodes");
+  if(!isfinite(A.diag[n]) || !isfinite(A.rows[n]) || !isfinite(b[n]) || A.diag[n]<0 || A.rows[n]<0)pices_fail(E,"nonfinite/negative projection weights");
+  if(!(A.diag[n]>0) || !(A.rows[n]>0)) {
+   if(!fixed_node(E,n)) {
+    fprintf(stderr,"PICES_UNCOVERED rank=%d step=%d node=%d theta=%.17g phi=%.17g radius=%.17g\n",E->parallel.me,E->monitor.solution_cycles,n,E->sx[1][1][n],E->sx[1][2][n],E->sx[1][3][n]);
+    pices_fail(E,"zero particle coverage at free node");
+   }
+   /* Isolated Dirichlet node: no matrix row, zero residual and increment.
+    * Unit denominators only avoid 0/0; they do not add particle support. */
+   A.rows[n]=A.diag[n]=1;zero_boundary++;
+  }
   out[n]=boundary?E->T[1][n]:0;
-  if(boundary) {if(!isfinite(out[n]) || E->data.Ttop+E->data.ref_temperature*out[n]<0)pices_fail(E,"invalid previous grid temperature");lo=fmin(lo,out[n]);hi=fmax(hi,out[n]);scale=fmax(scale,fabs(out[n]));}
+  if(boundary) {if(!pices_temperature_valid(E,out[n]))pices_fail(E,"invalid previous grid temperature");lo=fmin(lo,out[n]);hi=fmax(hi,out[n]);scale=fmax(scale,fabs(out[n]));}
  }
  lo=global(E,lo,MPI_MIN);hi=global(E,hi,MPI_MAX);scale=global(E,scale,MPI_MAX);tol=fmax(1e-14,1e-12*scale);
  apply(&A,out,work);
@@ -83,6 +92,6 @@ void pices_consistent_project(struct All_variables *E,const double *values,doubl
  }
  active=global(E,active,MPI_SUM);
  if(E->parallel.me==0)fprintf(E->fp,"PICES_PROJECTION step=%d method=bounded_consistent_v1 kind=%s cg=%d qp=%d residual=%.17g tolerance=%.17g lower=%.17g upper=%.17g active=%.0f\n",E->monitor.solution_cycles,boundary?"absolute":"signed",cg,pg,error,tol,lo,hi,active);
- if(boundary)fprintf(E->fp,"PICES_COVERAGE step=%d empty_elements=%d zero_boundary_nodes=0\n",E->monitor.solution_cycles,empty);
+ if(boundary)fprintf(E->fp,"PICES_COVERAGE step=%d empty_elements=%d zero_boundary_nodes=%d\n",E->monitor.solution_cycles,empty,zero_boundary);
  free(A.nodes);free(A.weights);free(A.copies);free(A.rows);free(A.diag);free(b);free(r);free(z);free(direction);free(work);free(covered);
 }
