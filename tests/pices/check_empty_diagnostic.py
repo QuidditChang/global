@@ -27,6 +27,7 @@ struct All_variables {
  struct {FILE *fpt;int ntracers[2],ielement[2][3],nflavors,ntracer_flavor[2][2][3];} trace;
  double x[2][4][13],sx[2][4][13];
 };
+void empty_audit(struct All_variables *E,const int *c){}
 void pices_coverage_probe(struct All_variables *E,int *c,int moved,int empty){}
 static struct All_variables saved;
 static double reduce(struct All_variables *E,double v,int op){return v;}

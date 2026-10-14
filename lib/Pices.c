@@ -502,6 +502,57 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     free(before);free(projected);free(alpha);free(target);
 }
 
+/* Opt-in sparse audit, at the post-advection composition stage. Sharing a
+ * diagnostic node mask includes neighbors across MPI/cap seams without
+ * modifying any physical field. Geometry is written once, compositions every
+ * observed step, including the first occupied step after an empty episode. */
+static void empty_audit(struct All_variables *E,const int *count)
+{
+    static FILE *out;
+    static unsigned char *seen,*was_empty;
+    static int last=-1;
+    int e,a,d,step=E->monitor.solution_cycles;
+    double *mask,active=0;
+    if(!getenv("PICES_EMPTY_AUDIT") || step==last)return;
+    if(!out) {
+        char path[128];
+        snprintf(path,sizeof(path),"PICES_Audit/rank_%06d.jsonl",E->parallel.me);
+        out=fopen(path,"w");
+        seen=calloc(E->lmesh.nel+1,1);was_empty=calloc(E->lmesh.nel+1,1);
+        if(!out || !seen || !was_empty)pices_fail(E,"cannot initialize sparse empty audit");
+        fprintf(out,"{\"type\":\"meta\",\"schema\":1,\"rank\":%d,\"stage\":\"post_advection_composition\",\"coordinates\":\"cartesian_radius_nd\",\"composition\":\"flavors_0_through_ncomp\",\"ri\":%.17g,\"ro\":%.17g,\"radius_km\":%.17g}\n",E->parallel.me,E->sphere.ri,E->sphere.ro,E->data.radius_km);
+    }
+    for(e=1;e<=E->lmesh.nel;e++)if(!count[e] || was_empty[e])active++;
+    active=reduce(E,active,MPI_SUM);
+    fprintf(out,"{\"type\":\"frame\",\"step\":%d,\"time_Ma\":%.17g}\n",step,(double)E->monitor.elapsed_time*E->data.scalet);
+    if(active>0) {
+        mask=calloc(E->lmesh.nno+1,sizeof(double));
+        if(!mask)pices_fail(E,"sparse audit mask allocation failed");
+        for(e=1;e<=E->lmesh.nel;e++)if(!count[e] || was_empty[e])
+            for(a=1;a<=8;a++)mask[E->ien[1][e].node[a]]=1;
+        exchange(E,mask);
+        for(e=1;e<=E->lmesh.nel;e++) {
+            int selected=0;double sum=0;
+            for(a=1;a<=8;a++)if(mask[E->ien[1][e].node[a]]>0)selected=1;
+            if(!selected)continue;
+            if(!seen[e]) {
+                fprintf(out,"{\"type\":\"mesh\",\"element\":%d,\"volume_nd\":%.17g,\"xyz\":[",e,E->eco[1][e].area);
+                for(a=1;a<=8;a++)for(d=1;d<=3;d++)
+                    fprintf(out,"%s%.17g",a==1 && d==1?"":",",E->x[1][d][E->ien[1][e].node[a]]);
+                fprintf(out,"]}\n");seen[e]=1;
+            }
+            for(a=0;a<E->composition.ncomp;a++)sum+=E->composition.comp_el[1][a][e];
+            fprintf(out,"{\"type\":\"cell\",\"step\":%d,\"element\":%d,\"count\":%d,\"c\":[%.17g",step,e,count[e],1-sum);
+            for(a=0;a<E->composition.ncomp;a++)fprintf(out,",%.17g",E->composition.comp_el[1][a][e]);
+            fprintf(out,"]}\n");
+        }
+        free(mask);
+    }
+    for(e=1;e<=E->lmesh.nel;e++)was_empty[e]=!count[e];
+    if(fflush(out) || ferror(out))pices_fail(E,"sparse empty audit write failed");
+    last=step;
+}
+
 /* Read-only coverage snapshots around movement. Never relocate, replenish,
  * or change composition while diagnosing an empty element. */
 static int *coverage_before;
@@ -574,6 +625,7 @@ static void report_empty_elements(struct All_variables *E)
         extern void pices_coverage_probe(struct All_variables *,int *,int,int);
         pices_coverage_probe(E,direct,coverage_before_valid,global[4]>0);
     }
+    empty_audit(E,direct);
     fflush(E->trace.fpt);last_step=step;free(direct);coverage_before_valid=0;
 }
 

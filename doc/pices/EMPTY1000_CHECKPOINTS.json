@@ -1,0 +1,29 @@
+{
+  "experiment": "PICES_empty1000",
+  "fresh_start": true,
+  "steps": 1000,
+  "physics_change": false,
+  "runtime_switch": "PICES_EMPTY_AUDIT=1; requires PICES_Audit directory; process-lifetime fresh-run evidence only",
+  "sampling": {
+    "every_step": "global empty count/volume/lifetime; sparse actual compositions for empty cells and their complete face neighborhood; first recovery sample; global particle balance and accepted thermal/energy diagnostics",
+    "every_50_steps": "existing checkpoints and profiles; NPZ shared scalars compared with global.log",
+    "geometry": "8 Cartesian vertices per observed cell, written once; shared-node diagnostic mask includes MPI and cap seams; offline face matching at 1e-10 radius units",
+    "temperature": "existing free-node support and Kelvin guards retained; fixed-temperature zero support allowed as before"
+  },
+  "interpretation": {
+    "composition_tv": "0.5 * sum(abs(c_old-c_new)) including background; recovery sample may contain very few particles and carries sampling noise",
+    "neighbor_contrast": "interface/heterogeneity proxy, NOT an exact error estimate",
+    "duration": "Ma as well as step counts; still-empty episodes are right censored",
+    "release_review": "All hard checks pass; no progressively expanding persistent connected empty regions; no persistent empty regions with consequential composition lag at interfaces. Review final 300 steps against earlier windows, not just the last snapshot. Passing 1000 steps supports monitored production, not proof for 30000.",
+    "replenishment_review": "Persistent/growing clusters with composition contrasts or repeated recovery jumps support a controlled particle replenishment comparison; solver/temperature failures must first be diagnosed, not automatically patched by adding particles.",
+    "ambiguous": "Do not invent universal TV/empty-count thresholds or automatically approve. If physical impact remains ambiguous, compare higher-particle control before release."
+  },
+  "validation": {
+    "build": "complete O2 standalone solver build",
+    "MPI": "24 ranks, 4 prescribed-motion steps, intentionally empty element; all 6 face neighbors found including rank and cap seam; 336 on/off physical snapshots byte-identical",
+    "unit": "face matching across rounding bins, missing halo, composition TV; coverage/conservation failure checks; unsupported free-node and temperature guards",
+    "HPC": "1000-step production-size run pending",
+    "NPZ": "150 archived real-run scalar comparisons pass (6 profiles x 25 fields)"
+  },
+  "download": "empty1000_audit.tar.gz; generated after online postprocessor exits, including sparse fields, root log/profiles, config/provenance and status; if walltime kills launcher bundle manually"
+}
