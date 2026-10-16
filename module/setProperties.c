@@ -116,6 +116,11 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     E->pices.slot=-1;
     getIntProperty(properties, "pices_test_no_diffusion", E->pices.no_diffusion, fp);
     getIntProperty(properties, "pices_p4", E->pices.p4, fp);
+    getIntProperty(properties, "pices_ta_before_heat", E->pices.ta_before_heat, fp);
+    if(E->pices.ta_before_heat && (!E->pices.enabled || !E->pices.p4)) {
+        PyErr_SetString(PyExc_ValueError, "pre-heat TA requires PICES and pices_p4");
+        return NULL;
+    }
     getIntProperty(properties, "pices_eba", E->pices.eba, fp);
     getIntProperty(properties, "pices_checkpoint", E->pices.checkpoint, fp);
     getIntProperty(properties, "pices_max_substeps", E->pices.max_substeps, fp);

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-16",
+  "fix": "Production Pyre setter now transfers pices_ta_before_heat to E->pices.ta_before_heat and writes it to generated cfg; invalid mode combinations rejected",
+  "validation": [
+    "Compiled actual setter and property getter templates against local Python 3 compatibility shims; off/on, flag output and invalid combinations passed",
+    "Order checker rejects original failed-to-enable HPC run",
+    "Order checker accepts before_heat and rejects after_heat fixtures"
+  ],
+  "limitation": "Local Python 3 shim test is not a full HPC Python 2/Pyre execution. HPC rebuild and generated cfg/log verification remain mandatory.",
+  "experiment": "lumped_preTA300_r2",
+  "steps": 300,
+  "unchanged": [
+    "TA target",
+    "TA relaxation time",
+    "lumped projection",
+    "no particle replenishment"
+  ],
+  "evidence_gate": "check_ta_order.py requires generated flag=1, one before_heat TA per step, and TA before first heat-stage record; nonzero LSF exit on failure"
+}
