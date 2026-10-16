@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-16",
+  "source_base": "b1aa5ef9c1dadab9e6c9b3f61f30d60465ae72d1",
+  "changes": [
+    "Opt-in particle TA before diffusion; default after-heat retained",
+    "Lumped in-place projection preserves Dirichlet temperatures before clearing output",
+    "Stage minima with Kelvin, position, rank and local index",
+    "Checkpoint physics fingerprint includes operator order"
+  ],
+  "unchanged": [
+    "TA target and relaxation time",
+    "Particle motion",
+    "No empty-cell filling"
+  ],
+  "experiment": "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped_preTA300",
+  "steps": 300,
+  "ranks": 384,
+  "lsf_slots": 400,
+  "walltime_hours": 8,
+  "cfg_changes_from_lumped1000": {
+    "datadir_old": [
+      "/scratch/2026-10-13/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped1000/Restart",
+      "/scratch/2026-10-16/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped_preTA300/Restart"
+    ],
+    "pices_ta_before_heat": [
+      null,
+      "on"
+    ],
+    "steps": [
+      "1000",
+      "300"
+    ],
+    "datadir": [
+      "/scratch/2026-10-13/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped1000/DATA/%RANK",
+      "/scratch/2026-10-16/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped_preTA300/DATA/%RANK"
+    ],
+    "name": [
+      "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped1000",
+      "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped_preTA300"
+    ]
+  },
+  "local_validation": {
+    "continuous": {
+      "closure_max": 2.0492988070928454e-15,
+      "fixed_boundary_samples": 1944,
+      "last_step": 4,
+      "particle_count": 393216
+    },
+    "restart": {
+      "closure_max": 2.0492988070928454e-15,
+      "fixed_boundary_samples": 1944,
+      "last_step": 4,
+      "particle_count": 393216
+    },
+    "restart_particle_states_byte_identical": 24
+  },
+  "build": "Full O2 MPI build passed",
+  "particle_ta_unit_tests": 3,
+  "standalone_driver_exit": 8,
+  "standalone_exit_note": "Historical driver exit; accepted only with all expected completed steps and verified results",
+  "limitations": [
+    "Small prescribed-velocity validation; production-scale HPC comparison pending",
+    "Paper-like lumped projection and pre-diffusion order; DA remains convex particle relaxation",
+    "300 steps is an early diagnostic gate, not long-run production acceptance"
+  ],
+  "next_gate": "Audit temperature stage/location trends, coverage, particles and energy; extend to 1000 only if early behavior is acceptable."
+}

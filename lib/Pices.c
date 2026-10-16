@@ -81,9 +81,12 @@ void pices_parameters(struct All_variables *E)
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
     input_double("pices_max_timestep_Ma",&E->pices.max_timestep_Ma,"0.1",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
+    input_boolean("pices_ta_before_heat",&E->pices.ta_before_heat,"off",E->parallel.me);
     input_boolean("pices_p4",&E->pices.p4,"off",E->parallel.me);
     input_boolean("pices_eba",&E->pices.eba,"off",E->parallel.me);
     input_boolean("pices_checkpoint",&E->pices.checkpoint,"off",E->parallel.me);
+    if(E->pices.ta_before_heat && (!E->pices.enabled || !E->pices.p4))
+        pices_fail(E,"pre-heat TA requires PICES and pices_p4");
     if(E->pices.enabled) {
         input_boolean("restart",&restart,"off",E->parallel.me);
         input_boolean("post_processing",&post,"off",E->parallel.me);
@@ -390,6 +393,14 @@ static void project(struct All_variables *E,const double *values,double *out,int
     int p,a,n,nodes[9],e; double w[9];
     if(E->pices.consistent_projection){pices_consistent_project(E,values,out,boundary);return;}
     double *den=array(E,E->lmesh.nno+1);
+    /* TA may project in-place onto E->T: preserve prescribed values before
+     * clearing the accumulation buffer. */
+    double *boundary_values=E->T[1],*saved_boundary=NULL;
+    if(boundary && out==boundary_values) {
+        saved_boundary=array(E,E->lmesh.nno+1);
+        memcpy(saved_boundary,boundary_values,(E->lmesh.nno+1)*sizeof(double));
+        boundary_values=saved_boundary;
+    }
     int *covered=(int *)calloc(E->lmesh.nel+1,sizeof(int));
     int empty=0,zero=0;
     if(!covered) pices_fail(E,"allocation failed");
@@ -411,10 +422,10 @@ static void project(struct All_variables *E,const double *values,double *out,int
             }
             out[n]=0;
         } else out[n]/=den[n];
-        if(boundary && fixed(E,n)) out[n]=E->T[1][n];
+        if(boundary && fixed(E,n)) out[n]=boundary_values[n];
     }
     if(boundary) fprintf(E->fp,"PICES_COVERAGE step=%d empty_elements=%d zero_boundary_nodes=%d\n",E->monitor.solution_cycles,empty,zero);
-    free(den); free(covered);
+    free(saved_boundary); free(den); free(covered);
 }
 
 static double energy(struct All_variables *E,const double *field)
@@ -465,7 +476,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     if(active>0) {
         /* Separate the pre-existing particle/grid reconciliation from TA.
          * TA storage below includes only the projection change caused by TA.
-         * Absolute bounded projection is required on both sides of TA. */
+         * Use the configured absolute projection on both sides of TA. */
         project(E,E->trace.extraq[1][E->pices.slot],projected,1);
         for(n=1;n<=nn;n++)E->assim_delta_T[1][n]=projected[n]-before[n];
         reconciliation=energy(E,E->assim_delta_T[1]);
@@ -490,8 +501,9 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
         }
         stored=energy(E,E->assim_delta_T[1]);
     }
-    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=particle_relaxation_v1 delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
+    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=particle_relaxation_v1 stage=%s delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
         E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,
+        E->pices.ta_before_heat?"before_heat":"after_heat",
         reduce(E,maximum,MPI_MAX),stored,reconciliation,stored+reconciliation);
     diagnostics.values[PD_TASTORE]=stored;
     diagnostics.values[PD_RECON]=reconciliation;
@@ -719,6 +731,34 @@ void pices_limit_timestep(struct All_variables *E)
         E->monitor.solution_cycles,candidate,(double)E->advection.timestep,particle,age,knot);
 }
 
+/* Read-only operator-stage minima. Locations use the owning rank and local
+ * index; no persistent particle ID is implied. K units match profile output. */
+static void stage_minima(struct All_variables *E,const double *g,const char *stage,int substep)
+{
+    struct {double value;int rank;} local,global;
+    int kind,i,index=0,nn=E->lmesh.nno;
+    double loc[4];
+    if(!E->pices.ta_before_heat)return;
+    for(kind=0;kind<2;kind++) {
+        local.value=DBL_MAX;local.rank=E->parallel.me;
+        for(i=1;i<=(kind?E->trace.ntracers[1]:nn);i++) {
+            double v=kind?E->trace.extraq[1][E->pices.slot][i]:g[i];
+            if(v<local.value){local.value=v;index=i;}
+        }
+        MPI_Allreduce(&local,&global,1,MPI_DOUBLE_INT,MPI_MINLOC,E->parallel.world);
+        if(E->parallel.me==global.rank) {
+            loc[0]=index;
+            for(i=0;i<3;i++)loc[i+1]=kind?E->trace.basicq[1][i][index]:E->sx[1][i+1][index];
+        }
+        MPI_Bcast(loc,4,MPI_DOUBLE,global.rank,E->parallel.world);
+        if(E->parallel.me==0)fprintf(E->fp,
+            "PICES_STAGE step=%d stage=%s substep=%d field=%s Tmin_K=%.17g rank=%d index=%.0f lon_deg=%.17g lat_deg=%.17g depth_km=%.17g\n",
+            E->monitor.solution_cycles,stage,substep,kind?"particle":"grid",
+            E->data.Ttop+E->data.ref_temperature*global.value,global.rank,loc[0],
+            loc[2]*180/M_PI,90-loc[1]*180/M_PI,(E->sphere.ro-loc[3])*E->data.radius_km);
+    }
+}
+
 void pices_advance(struct All_variables *E)
 {
     int n,e,a,b,p,s,ns,nodes[9];
@@ -769,6 +809,11 @@ void pices_advance(struct All_variables *E)
     temperatures_conform_bcs(E);
     project(E,E->trace.extraq[1][E->pices.slot],g,1);
     advected=energy(E,g);remaining=dt;
+    stage_minima(E,g,"after_remap",-1);
+    if(E->pices.p4 && E->pices.ta_before_heat && E->control.lith_age) {
+        pices_assimilate(E,g,dt);
+        stage_minima(E,g,"after_ta_before_heat",-1);
+    }
     if(E->pices.p4) {E->pices.cbf_valid=0;memset(E->pices.heat_residual,0,(E->lmesh.nel+1)*8*sizeof(double));}
     for(s=0;E->pices.eba ? remaining>0 : s<ns;s++) {
         if(s>=E->pices.max_substeps)pices_fail(E,"heat substep limit exceeded");
@@ -785,6 +830,7 @@ void pices_advance(struct All_variables *E)
             if(!pices_temperature_valid(E,g[n])) pices_fail(E,"invalid grid temperature");
         }
         }
+        stage_minima(E,g,"heat_before_particle",s);
         for(n=1;n<=nn;n++)dg[n]=g[n]-old[n];
         for(p=1;p<=np;p++) {
             double factor,tau,kappa;
@@ -803,6 +849,7 @@ void pices_advance(struct All_variables *E)
             *tp+=sub[p]+interp(nodes,w,mapped);
             if(!pices_temperature_valid(E,*tp)) pices_fail(E,"invalid particle temperature");
         }
+        stage_minima(E,g,"after_particle_heat",s);
     }
     if(E->pices.eba) {
         ns=s;for(a=0;a<7;a++)ledger[a]=reduce(E,ledger[a],MPI_SUM);
@@ -813,7 +860,7 @@ void pices_advance(struct All_variables *E)
     heated=E->pices.eba?advected+ledger[0]:energy(E,g);
     if(E->pices.p4) {
         E->pices.cbf_valid=1;
-        if(E->control.lith_age)pices_assimilate(E,g,dt);
+        if(E->control.lith_age && !E->pices.ta_before_heat)pices_assimilate(E,g,dt);
     }
     project(E,E->trace.extraq[1][E->pices.slot],mapped,0);
     for(n=1;n<=nn;n++) {

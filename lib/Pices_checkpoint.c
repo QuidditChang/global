@@ -80,6 +80,7 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
  {const char geometry[]="shared_particle_geometry_v1";pices_sha_add(&s,geometry,sizeof(geometry));}
  if(E->pices.p4) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
+ if(E->pices.ta_before_heat){const char order[]="particle_ta_before_heat_v1";pices_sha_add(&s,order,sizeof(order));}
  if(E->pices.consistent_projection){const char method[]="bounded_consistent_v1";pices_sha_add(&s,method,sizeof(method));}
  pices_sha_add(&s,E->viscosity.N0,sizeof(E->viscosity.N0[0])*E->viscosity.num_mat);
  pices_sha_add(&s,E->viscosity.E,sizeof(E->viscosity.E[0])*E->viscosity.num_mat);
