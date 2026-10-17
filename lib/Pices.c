@@ -12,6 +12,7 @@
 #include "temperature_audit.h"
 #include "phase_change.h"
 #include "lith_age.h"
+#include "pices_coverage_stats.h"
 void thermal_heat_sources(struct All_variables *, int, double *, double *, double *);
 
 void temperatures_conform_bcs(struct All_variables *);
@@ -584,6 +585,33 @@ static void capture_particle_coverage(struct All_variables *E)
 }
 
 /* Counters describe this process lifetime, not checkpoint-persisted history. */
+/* Optional global histogram and one-step transition census, not a sampler.
+ * Restart seeds the previous counts from the restored state; no state edits. */
+static void coverage_statistics(struct All_variables *E,const int *count)
+{
+    static int *previous,last=-1;
+    int e,i,step=E->monitor.solution_cycles,valid;
+    long long local[PICES_COVERAGE_STATS_SIZE]={0},global[PICES_COVERAGE_STATS_SIZE];
+    if(!getenv("PICES_COVERAGE_STATS") || step==last)return;
+    valid=previous && step==last+1;
+    if(!previous)previous=calloc(E->lmesh.nel+1,sizeof(int));
+    if(!previous)pices_fail(E,"coverage statistics allocation failed");
+    for(e=1;e<=E->lmesh.nel;e++) {
+        pices_coverage_count(local,count[e],previous[e],valid);
+        previous[e]=count[e];
+    }
+    MPI_Allreduce(local,global,PICES_COVERAGE_STATS_SIZE,MPI_LONG_LONG_INT,MPI_SUM,E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"PICES_COVERAGE_STATS step=%d stage=post_advection_composition transition_valid=%d bins=0,1,2,3,4,5,6,7,8,9plus histogram=",step,valid);
+        for(i=0;i<10;i++)fprintf(E->fp,"%s%lld",i?",":"",global[i]);
+        fprintf(E->fp," transitions=");
+        for(i=0;i<100;i++)fprintf(E->fp,"%s%lld",i?",":"",global[10+i]);
+        for(i=0;i<3;i++)fprintf(E->fp," low%d=%lld add%d=%lld",2<<i,global[110+2*i],2<<i,global[111+2*i]);
+        fprintf(E->fp,"\n");
+    }
+    last=step;
+}
+
 static void report_empty_elements(struct All_variables *E)
 {
     static int *streak,last_step=-1,peak;
@@ -637,6 +665,7 @@ static void report_empty_elements(struct All_variables *E)
         extern void pices_coverage_probe(struct All_variables *,int *,int,int);
         pices_coverage_probe(E,direct,coverage_before_valid,global[4]>0);
     }
+    coverage_statistics(E,direct);
     empty_audit(E,direct);
     fflush(E->trace.fpt);last_step=step;free(direct);coverage_before_valid=0;
 }

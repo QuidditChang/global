@@ -55,7 +55,7 @@ def topology(mesh,meta,targets):
 def fields(line):
     return dict(re.findall(r'(\w+)=([^\s]+)',line))
 
-def audit(root,steps,ranks,profile_every=50):
+def audit(root,steps,ranks,profile_every=50,start_step=0):
     meta={};mesh={};frames={};cells=defaultdict(dict);issues=[]
     for rank in range(ranks):
         path=root/'PICES_Audit'/('rank_%06d.jsonl'%rank)
@@ -77,7 +77,7 @@ def audit(root,steps,ranks,profile_every=50):
                     if not c or any(not math.isfinite(x) or x < -1e-12 or x>1+1e-12 for x in c) or abs(sum(c)-1)>1e-10:
                         issues.append('invalid composition rank=%d step=%d'%(rank,row['step']))
                     cells[row['step']][rank,row['element']]=row
-        if observed!=set(range(steps+1)):issues.append('incomplete frames rank=%d'%rank)
+        if observed!=set(range(start_step,steps+1)):issues.append('incomplete frames rank=%d'%rank)
         if rank==0:frames=times
         elif times!=frames:issues.append('inconsistent clocks rank=%d'%rank)
     if len(meta)!=ranks:issues.append('incomplete metadata')
@@ -86,7 +86,7 @@ def audit(root,steps,ranks,profile_every=50):
     adjacency,missing=topology(mesh,meta,targets)
     if missing:issues.append('unmatched/ambiguous interior faces')
     episodes=[];active={};series=[];max_neighbor=0.;max_cluster=0
-    for step in range(steps+1):
+    for step in range(start_step,steps+1):
         rows=cells[step];empty={k for k,v in rows.items() if v['count']==0}
         for k in set(active)-empty:
             ep=active.pop(k);ep['end']=step;ep['censored']=False
@@ -97,7 +97,7 @@ def audit(root,steps,ranks,profile_every=50):
         for k in empty:
             if k not in active:
                 xyz=mesh[k]['xyz'];center=[sum(xyz[d::3])/8 for d in range(3)];r=math.sqrt(sum(x*x for x in center))
-                active[k]=dict(rank=k[0],element=k[1],start=step,start_time_Ma=frames.get(step,0),held=rows[k]['c'],max_neighbor_tv=0.,
+                active[k]=dict(rank=k[0],element=k[1],start=step,left_censored=(start_step>0 and step==start_step),start_time_Ma=frames.get(step,0),held=rows[k]['c'],max_neighbor_tv=0.,
                     lon_deg=math.degrees(math.atan2(center[1],center[0])),lat_deg=math.degrees(math.atan2(center[2],math.hypot(*center[:2]))),
                     depth_km=(meta[k[0]]['ro']-r)*meta[k[0]]['radius_km'])
             ep=active[k]
@@ -129,10 +129,10 @@ def audit(root,steps,ranks,profile_every=50):
                 f=fields(line);balance[int(f['step'])]=f
             elif line.startswith('PICES_DIAGNOSTICS '):
                 f=fields(line);diag[int(f['step'])]=f
-    if set(monitor)!=set(range(steps+1)):issues.append('incomplete empty monitor')
-    if set(balance)!=set(range(steps+1)):issues.append('incomplete particle balances')
-    if set(diag)!=set(range(1,steps+1)):issues.append('incomplete accepted-step diagnostics')
-    baseline=balance.get(0,{}).get('after')
+    if set(monitor)!=set(range(start_step,steps+1)):issues.append('incomplete empty monitor')
+    if set(balance)!=set(range(start_step,steps+1)):issues.append('incomplete particle balances')
+    if set(diag)!=set(range(start_step+1,steps+1)):issues.append('incomplete accepted-step diagnostics')
+    baseline=balance.get(start_step,{}).get('after')
     for row in series:
         f=monitor.get(row['step'],{})
         row['volume_fraction']=float(f['volume_fraction']) if f else None
@@ -154,7 +154,7 @@ def audit(root,steps,ranks,profile_every=50):
             if not math.isfinite(t) or t < -1e-9:issues.append('nonphysical temperature step=%d'%s)
     import numpy as np
     profile_checks=0
-    for step in range(profile_every,steps+1,profile_every):
+    for step in range((start_step//profile_every+1)*profile_every,steps+1,profile_every):
         path=root/'DATA/0'/('profiles_hist_%d.npz'%step)
         if not path.exists():issues.append('missing profile step=%d'%step);continue
         with np.load(path,allow_pickle=False) as z:
@@ -165,7 +165,7 @@ def audit(root,steps,ranks,profile_every=50):
                 if key.startswith('pices_') and name in diag.get(step,{}):
                     if float(z[key])!=float(diag[step][name]):issues.append('NPZ/log mismatch step=%d field=%s'%(step,name))
                     profile_checks+=1
-            if profile_checks < 25*(step//profile_every):issues.append('missing profile diagnostic fields step=%d'%step)
+            if profile_checks < 25*(step//profile_every-start_step//profile_every):issues.append('missing profile diagnostic fields step=%d'%step)
     for name in ('solver.finished.json','result.json'):
         p=root/'PostProc/Online'/name
         if not p.exists():issues.append('missing '+name);continue
@@ -180,8 +180,8 @@ def audit(root,steps,ranks,profile_every=50):
         unmatched_faces=missing,series=series,episodes=episodes)
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--steps',type=int,default=1000);p.add_argument('--ranks',type=int,default=384);p.add_argument('--profile-every',type=int,default=50);a=p.parse_args()
-    result=audit(a.root,a.steps,a.ranks,a.profile_every);out=a.root/'empty_audit.json';out.write_text(json.dumps(result,indent=2)+'\n')
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--steps',type=int,default=1000);p.add_argument('--ranks',type=int,default=384);p.add_argument('--profile-every',type=int,default=50);p.add_argument('--start-step',type=int,default=0);a=p.parse_args()
+    result=audit(a.root,a.steps,a.ranks,a.profile_every,a.start_step);out=a.root/'empty_audit.json';out.write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps({k:v for k,v in result.items() if k not in ('series','episodes','unmatched_faces')},indent=2));print(out)
     return 0 if not result['issues'] else 1
 if __name__=='__main__':raise SystemExit(main())

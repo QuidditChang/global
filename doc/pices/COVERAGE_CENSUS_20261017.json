@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-17",
+  "purpose": "Read-only full-domain population census before designing local particle coverage control",
+  "experiment": "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_coverage300_500",
+  "restart_root": "/scratch/2026-10-17/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_lumped_preTA300_r2",
+  "start_step": 300,
+  "end_step": 500,
+  "additional_steps": 200,
+  "initial_particles_per_element": 27,
+  "physics_changed": false,
+  "census": {
+    "bins": "0,1,2,3,4,5,6,7,8,>=9",
+    "transitions": "10x10 previous/current counts, each accepted step; first restart snapshot seeds counts only",
+    "thresholds": [
+      2,
+      4,
+      8
+    ],
+    "interpretation": "Cell-step conditional next-step empty probability. Deficits are hypothetical snapshot requirements, not simulated insertions or accumulated particle demand.",
+    "cost": "One local int per element, 116 global int64 counters per sample; no per-particle allocation or new per-cell time-series dump"
+  },
+  "checkpoint_compatibility": "Only explicitly authorized source bb334f35892f88b3c9a9fc5265f70b2e621049bf; all noncommit metadata and all payload checks preserved",
+  "local_verification": {
+    "payloads_identical": 48,
+    "cross_commit": true,
+    "histograms_independent_steps": [
+      2,
+      3,
+      4
+    ],
+    "cells": 6144
+  },
+  "other_checks": [
+    "Full O2 MPI compilation",
+    "Actual census helper arithmetic against independent random reference",
+    "Unauthorized source and altered noncommit metadata rejected",
+    "LSF bash syntax",
+    "Only run identity, stopping step and restart controls differ in cfg"
+  ],
+  "standalone_driver_exit": 8,
+  "standalone_exit_note": "Historical standalone completion code; verified final step and payloads independently",
+  "production_resources": {
+    "queue": "medium",
+    "slots": 400,
+    "solver_ranks": 384,
+    "nodes": 10,
+    "walltime_hours": 8
+  },
+  "outputs": [
+    "coverage_stats.json",
+    "empty_audit.json",
+    "ta_order_check.txt",
+    "coverage300_500_audit.tar.gz"
+  ],
+  "limitations": [
+    "HPC checkpoint availability is checked by LSF; no direct HPC access here",
+    "Restart does not recover pre-300 low-count histories; existing empty episodes are marked left-censored",
+    "No actual insertion/removal performed; threshold selection remains an audit decision"
+  ]
+}

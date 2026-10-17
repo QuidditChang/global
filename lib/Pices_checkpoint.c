@@ -253,12 +253,29 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
-/* Fresh-production checkpoints require the same solver and exact metadata. */
+/* Only the audited diagnostic predecessor may cross commits, explicitly.
+ * All bytes other than solver_commit (including physics and payload hashes)
+ * must remain identical. Never rewrite the saved checkpoint. */
+static int coverage_restart_compatible(const char *actual,char *expected)
+{
+ const char *source="bb334f35892f88b3c9a9fc5265f70b2e621049bf";
+ const char *permit=getenv("PICES_RESTART_SOURCE_COMMIT");
+ const char *tag="\"solver_commit\":\"";
+ const char *a=strstr(actual,tag);char *b=strstr(expected,tag);
+ if(!permit || strcmp(permit,source) || !a || !b)return 0;
+ a+=strlen(tag);b+=strlen(tag);
+ if(strncmp(a,source,40) || a[40]!='"' || strlen(b)<41 || b[40]!='"')return 0;
+ memcpy(b,source,40);
+ return !strcmp(actual,expected);
+}
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
  pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");
  readtext(E,meta,actual);metadata(E,path,state,expected);
- if(strcmp(actual,expected))pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
+ if(strcmp(actual,expected)) {
+  if(!coverage_restart_compatible(actual,expected))pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
+  if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=bb334f35892f88b3c9a9fc5265f70b2e621049bf running_commit=%s all_other_metadata=exact reason=coverage_diagnostics_only\n",PICES_SOLVER_COMMIT);
+ }
 }
 
 /* U is the Stokes iterate; nodal V can differ after rigid-rotation removal.
