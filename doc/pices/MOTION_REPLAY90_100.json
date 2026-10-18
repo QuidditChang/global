@@ -1,0 +1,70 @@
+{
+  "experiment": "PICES_motion_replay90_100",
+  "source_commit": "92f6fa44b52fec25fe283fa76c8be08d90b99499",
+  "source_run": "/scratch/2026-10-18/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_motion300",
+  "checkpoint": 90,
+  "velocity_steps": [
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100
+  ],
+  "subdivisions": [
+    1,
+    2,
+    4
+  ],
+  "mpi_ranks": 384,
+  "lsf_slots": 400,
+  "nodes": 10,
+  "queue": "medium",
+  "walltime_hours": 4,
+  "stokes_heat_TA_evolution": false,
+  "particle_add_delete": false,
+  "production_binary_modified": false,
+  "baseline_gate": [
+    "source normalized pid cfg preserved",
+    "all checkpoint metadata/physics/payload checks remain active",
+    "1-substep endpoint error <=1e-12 nondimensional, same recorded hosts",
+    "exact global occupancy histograms and <=4-particle cell map"
+  ],
+  "evidence_bundle": "motion_replay90_100_audit.tar.gz",
+  "known_limits": [
+    "Frozen prescribed velocity sequence, not fully coupled evolution",
+    "Fixed set of original sparse IDs, not all particle endpoints",
+    "Original MPI decomposition retained; no decomposition sensitivity claim"
+  ],
+  "validation": {
+    "isolated_full_O2_build": "PASS",
+    "real_MPI_three_steps": {
+      "status": "PASS",
+      "steps": 3,
+      "particles": 24576,
+      "subdivisions": [
+        1,
+        2,
+        4
+      ],
+      "cross_rank_endpoints": [
+        63,
+        63,
+        63
+      ],
+      "max_endpoint_difference_to_four": [
+        1.660004259925334e-08,
+        4.675228171543343e-09
+      ]
+    },
+    "first_step_matches_single_replay": "byte-identical all three factors, all 24 ranks",
+    "audit_negative_cases": "altered source position and low-cell map rejected",
+    "preflight_tests": 4,
+    "runtime_template_physics_comparison": "PASS",
+    "LSF_syntax": "PASS"
+  }
+}
