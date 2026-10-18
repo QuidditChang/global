@@ -29,7 +29,7 @@
   "particle_add_delete": false,
   "production_binary_modified": false,
   "baseline_gate": [
-    "source normalized pid cfg preserved",
+    "Source input precision restored after checking against the Pyre %g display; Pyre mesh-unit derivation reproduced",
     "all checkpoint metadata/physics/payload checks remain active",
     "1-substep endpoint error <=1e-12 nondimensional, same recorded hosts",
     "exact global occupancy histograms and <=4-particle cell map"
@@ -38,7 +38,8 @@
   "known_limits": [
     "Frozen prescribed velocity sequence, not fully coupled evolution",
     "Fixed set of original sparse IDs, not all particle endpoints",
-    "Original MPI decomposition retained; no decomposition sensitivity claim"
+    "Original MPI decomposition retained; no decomposition sensitivity claim",
+    "Local MPI regression uses a small fixture; full production checkpoint payloads remain on HPC and still require the strict restart plus 1x baseline gates."
   ],
   "validation": {
     "isolated_full_O2_build": "PASS",
@@ -63,10 +64,10 @@
     },
     "first_step_matches_single_replay": "byte-identical all three factors, all 24 ranks",
     "audit_negative_cases": "altered source position and low-cell map rejected",
-    "preflight_tests": 6,
+    "preflight_tests": 10,
     "runtime_template_physics_comparison": "PASS",
     "LSF_syntax": "PASS",
-    "pyre_runtime_bridge": "24-rank regression: reproduced unset-conductivity startup rejection, converted cfg restarted, all 24 endpoint files byte-identical"
+    "pyre_runtime_bridge": "24-rank MPI: reproduced missing-mgunit accepted-velocity-length rejection; corrected restart passed with all 24 endpoint files byte-identical to baseline"
   },
   "runtime_conversion": {
     "remove_unset_only": [
@@ -74,6 +75,20 @@
       "reference_conductivity=-1"
     ],
     "reason": "Preserve Pyre unset semantics in standalone reader; derived ks/k0 and explicit-value validation unchanged",
-    "manifest_field": "standalone_unset_parameters"
+    "manifest_field": "standalone_unset_parameters",
+    "derive_mg_units": "(node_axis-1)/(nproc_axis*2**(levels-1)), exactly integral; existing conflicting values rejected",
+    "production_mg_units": [
+      8,
+      8,
+      8
+    ],
+    "production_local_mesh": [
+      33,
+      33,
+      33
+    ],
+    "restore_precision": "Original explicit numeric inputs replace pid values only when consistent with float/double %g display; unexplained differences rejected",
+    "preflight": "All checkpoint local_mesh and binary headers checked against configured mesh; sidecar state lengths checked before MPI",
+    "production_state_bytes": 4285104
   }
 }

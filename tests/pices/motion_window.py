@@ -35,6 +35,52 @@ def standalone_runtime(text):
    removed.append(key)
  return text,removed
 
+def restore_input_precision(text,original):
+ """pid*.cfg is a %g display, not a lossless serialization (getProperty.h).
+ Restore explicit numeric input only when its float/double C display agrees.
+ Retain Pyre's expanded defaults and normalized booleans. Reject unexplained
+ numeric differences rather than silently replacing transformed physics.
+ """
+ restored=[]
+ for key,value in parameters(original).items():
+  shown=parameters(text).get(key)
+  if shown is None:continue
+  try:
+   actual=[float(x.strip()) for x in value.split(',')]
+   rounded=[float(x.strip()) for x in shown.split(',')]
+  except ValueError:continue
+  if actual==rounded:continue
+  if len(actual)!=len(rounded):raise ValueError('runtime vector length differs: '+key)
+  for a,b in zip(actual,rounded):
+   if not math.isfinite(a) or not math.isfinite(b):raise ValueError('nonfinite runtime input: '+key)
+   f=struct.unpack('=f',struct.pack('=f',a))[0]
+   if b not in (a,float(format(a,'.6g')),float(format(f,'.6g'))):
+    raise ValueError('runtime differs from original beyond %g rounding: '+key)
+  text=replace(text,key,value);restored.append(key)
+ return text,restored
+
+def standalone_mesh(text):
+ """Mirror module/setProperties.c Mesher_set_properties, not C defaults=1."""
+ p=parameters(text);levels=int(p['levels'])
+ if levels<1:raise ValueError('invalid multigrid levels')
+ units={};local=[]
+ for axis in 'xyz':
+  nodes=int(p['node'+axis]);ranks=int(p['nproc'+axis]);denom=ranks*2**(levels-1)
+  if ranks<1 or nodes<2 or (nodes-1)%denom:raise ValueError('nonintegral multigrid mesh: '+axis)
+  key='mgunit'+axis;units[key]=(nodes-1)//denom;local.append((nodes-1)//ranks+1)
+  if key in p and int(p[key])!=units[key]:raise ValueError('inconsistent '+key)
+  text=replace(text,key,units[key]) if key in p else text+'\n'+key+'='+str(units[key])+'\n'
+ return text,units,local
+
+def checkpoint_state_bytes(p,local):
+ # Schema layout in Pices_checkpoint.c; fail before MPI if cfg cannot read it.
+ def enabled(key,default='0'):return p.get(key,default).lower() in ('1','on','true','yes')
+ n=math.prod(local);e=math.prod(v-1 for v in local);surface=int(p['nodex'])*int(p['nodey'])
+ p4=enabled('pices_p4');coupled=int(p.get('rheol','3'))==7 or enabled('file_vbcs') or int(p.get('qvis_mode','0'))!=0 or float(p.get('fixed_timestep','0'))<=0
+ composition=enabled('tracer') and (enabled('chemical_buoyancy','1') or enabled('CDEPV'))
+ return (12*n+(4*(3*n+(surface if enabled('lith_age') else 0))+4+64*e if p4 else 0)
+         +(4*(8*e+n) if coupled else 0)+(8+(4*surface if enabled('tracer_reclassify_flavors') else 0) if composition else 0))
+
 def prepare(source,root,template,build,first=91,last=100,ranks=384):
  if root.exists():raise ValueError('refusing to reuse '+str(root))
  source=source.resolve();root=root.resolve();build=build.resolve()
@@ -55,7 +101,10 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  allowed={'steps','walltime','name','datadir','datadir_old','restart','solution_cycles_init','refstate_file','coor_file'}
  differences={k:(t.get(k),original.get(k)) for k in t.keys()|original.keys() if t.get(k)!=original.get(k) and k not in allowed}
  if differences:raise ValueError('template changed physics: '+str(differences))
+ text,restored_parameters=restore_input_precision(text,(source/'input.cfg').read_text())
  text,unset_parameters=standalone_runtime(text)
+ text,mg_units,expected_mesh=standalone_mesh(text)
+ state_bytes=checkpoint_state_bytes(parameters(text),expected_mesh)
  if int(p['nproc_surf'])*int(p['nprocx'])*int(p['nprocy'])*int(p['nprocz'])!=ranks:raise ValueError('rank layout mismatch')
  clocks={};local_mesh=None
  for rank in range(ranks):
@@ -65,6 +114,10 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
   meta=json.loads(Path(str(stem)+'.pices.json').read_text())
   if meta['solver_commit']!=SOLVER_COMMIT or meta['step']!=first-1:raise ValueError('checkpoint identity mismatch')
   if not {'motion_id','motion_selected'}<={v['name'] for v in meta['extraq']}:raise ValueError('missing motion IDs')
+  if meta['local_mesh']!=expected_mesh:raise ValueError('checkpoint/config local mesh mismatch: '+str(stem))
+  with stem.open('rb') as f:header=struct.unpack('=8i',f.read(32))
+  if header!=tuple(expected_mesh+[int(p['nproc'+a]) for a in 'xyz']+[1,first-1]):raise ValueError('checkpoint header mesh/step mismatch: '+str(stem))
+  if Path(str(stem)+'.pices.state').stat().st_size!=state_bytes:raise ValueError('checkpoint state size/config mismatch: '+str(stem))
   n=math.prod(meta['local_mesh']);local_mesh=meta['local_mesh'];expected=meta['time']
   for step in range(first,last+1):
    path=directory/('global.motion_velocity.%d.%d'%(rank,step))
@@ -117,7 +170,7 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
   config=text
   for k,v in dict(datadir=str(case/'DATA/%RANK'),datadir_old=str(source/'DATA/%RANK'),restart=1,solution_cycles_init=first-1).items():config=replace(config,k,v)
   (case/'case.cfg').write_text(config)
- manifest=dict(source=str(source),first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),standalone_unset_parameters=unset_parameters,histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
+ manifest=dict(source=str(source),first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),standalone_unset_parameters=unset_parameters,restored_precision_parameters=restored_parameters,standalone_mg_units=mg_units,checkpoint_state_bytes=state_bytes,histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
   scope='Prescribed time sequence of saved velocity fields; each field frozen within its original timestep. No coupled physics evolution.')
  (root/'replay_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  print('prepared',root,'tracked IDs',len(ids),flush=True)
