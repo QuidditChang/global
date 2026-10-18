@@ -149,7 +149,12 @@ class Controller(Component):
     def save(self):
         self.solver.save(self.inventory.monitoringFrequency)
         self.solver.save_profiles(self.inventory.profileMonitoringFrequency)
-        self.solver.checkpoint(self.inventory.checkpointFrequency)
+        # Opt-in motion experiment: preserve the pre-event replay states.
+        import os
+        checkpoint_frequency = self.inventory.checkpointFrequency
+        if os.environ.get("PICES_MOTION_AUDIT") == "1" and self.solver.step in (80, 90):
+            checkpoint_frequency = 1
+        self.solver.checkpoint(checkpoint_frequency)
         CBF_frequency = self.inventory.monitoringFrequency_CBF
         if CBF_frequency < 0:
             CBF_frequency = self.inventory.monitoringFrequency

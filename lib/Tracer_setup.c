@@ -249,6 +249,7 @@ void tracer_advection(struct All_variables *E)
 /* Shared lifecycle: PICES inserts its thermal work around these operations. */
 void tracer_move_particles(struct All_variables *E)
 {
+    pices_motion_begin(E);
     predict_tracers(E);
     correct_tracers(E);
 
@@ -359,7 +360,7 @@ static void predict_tracers(struct All_variables *E)
     double x0,y0,z0;
     double theta_pred,phi_pred,rad_pred;
     double x_pred,y_pred,z_pred;
-    double velocity_vector[4];
+    double velocity_vector[4], motion_raw[3], motion_v[3];
 
     void cart_to_sphere();
 
@@ -383,6 +384,8 @@ static void predict_tracers(struct All_variables *E)
             nelem=E->trace.ielement[j][kk];
             (E->trace.get_velocity)(E,j,nelem,theta0,phi0,rad0,velocity_vector);
 
+            for(a=0;a<3;a++) motion_v[a]=velocity_vector[a+1];
+
             /* Liu: smooth VV if too large */
             t1 = sqrt(pow(velocity_vector[1],2)+pow(velocity_vector[2],2)+pow(velocity_vector[3],2));
             if(t1>100*E->data.scalev) {
@@ -398,6 +401,8 @@ static void predict_tracers(struct All_variables *E)
             y_pred=y0+velocity_vector[2]*dt;
             z_pred=z0+velocity_vector[3]*dt;
 
+
+            motion_raw[0]=x_pred;motion_raw[1]=y_pred;motion_raw[2]=z_pred;
 
             /* keep in box */
 
@@ -426,12 +431,14 @@ static void predict_tracers(struct All_variables *E)
             E->trace.basicq[j][11][kk]=velocity_vector[3];  /* Vz */
 
 
+            pices_motion_particle(E,j,kk,1,motion_raw,motion_v);
         } /* end kk, predicting tracers */
     } /* end caps */
 
     /* find new tracer elements and caps */
 
     find_tracers(E);
+    pices_motion_end(E,1);
 
     return;
 
@@ -465,7 +472,7 @@ static void correct_tracers(struct All_variables *E)
     double x_pred,y_pred,z_pred;
     double theta_cor,phi_cor,rad_cor;
     double x_cor,y_cor,z_cor;
-    double velocity_vector[4];
+    double velocity_vector[4], motion_raw[3], motion_v[3];
     double Vx0,Vy0,Vz0;
     double Vx_pred,Vy_pred,Vz_pred;
 
@@ -505,6 +512,8 @@ static void correct_tracers(struct All_variables *E)
             y_cor=y0 + dt * 0.5*(Vy0+Vy_pred);
             z_cor=z0 + dt * 0.5*(Vz0+Vz_pred);
 
+            motion_raw[0]=x_cor;motion_raw[1]=y_cor;motion_raw[2]=z_cor;
+            motion_v[0]=Vx_pred;motion_v[1]=Vy_pred;motion_v[2]=Vz_pred;
             cart_to_sphere(E,x_cor,y_cor,z_cor,&theta_cor,&phi_cor,&rad_cor);
             (E->trace.keep_within_bounds)(E,&x_cor,&y_cor,&z_cor,&theta_cor,&phi_cor,&rad_cor);
 
@@ -517,12 +526,14 @@ static void correct_tracers(struct All_variables *E)
             E->trace.basicq[j][4][kk]=y_cor;
             E->trace.basicq[j][5][kk]=z_cor;
 
+            pices_motion_particle(E,j,kk,2,motion_raw,motion_v);
         } /* end kk, correcting tracers */
     } /* end caps */
 
     /* find new tracer elements and caps */
 
     find_tracers(E);
+    pices_motion_end(E,2);
 
     return;
 }

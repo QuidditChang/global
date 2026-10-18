@@ -712,6 +712,7 @@ void pices_initialize(struct All_variables *E)
         E->trace.extraq[1][E->pices.slot][p]=v;
     }
     for(n=1;n<=E->lmesh.nno;n++) E->Tdot[1][n]=0;
+    pices_motion_initialize(E);
     p5_particle_initial(E);
     composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;

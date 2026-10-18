@@ -1,0 +1,109 @@
+{
+  "experiment": "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_motion300",
+  "steps": [
+    0,
+    300
+  ],
+  "fresh_initialization": true,
+  "particles_per_element": 27,
+  "physics_changes": false,
+  "TA_changes": false,
+  "insertion_deletion": false,
+  "activation": "PICES_MOTION_AUDIT=1; matching LSF required",
+  "identity": "Two checkpointed extraq slots: unique integer ID and per-step sparse selection; count plus mixed-ID sum/xor checked after each MPI migration",
+  "sparse_capture": "Cells with start count<=4; all node-sharing neighbors, including MPI neighbors, added only for steps 81..105; selection travels with particles",
+  "path_columns": {
+    "PATH": "step stage id host_before dt old_xyz[3] raw_trial_xyz[3] bounded_trial_xyz[3] raw_velocity[3] [stage1:gradient_valid dv_i_dx_j[9] h_halving_discrepancy]",
+    "HOST": "step stage id host_after valid",
+    "CELL": "step element start_count"
+  },
+  "gradient": "Central Cartesian finite difference h=min_edge*1e-4 and h/2 of production interpolant; samples crossing host boundaries omitted and counted; no claim of pointwise Stokes divergence",
+  "replay": {
+    "mesh": "native int32 header magic PMM1, rank, cap, nno, nel, elx, elz; five float64 ri,ro,cushion,theta_f,phi_f; spherical coordinates 3*nno float64; connectivity 8*nel int32",
+    "velocity": "native int32 magic PMV1,rank,step,nno; float64 time/dt; spherical velocities 3*nno float32",
+    "steps": [
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105
+    ],
+    "extra_checkpoints": [
+      80,
+      90
+    ],
+    "regular_checkpoint_frequency": 50,
+    "tool": "tests/pices/build_motion_replay.py links real MPI tracer mover, frozen nodal field, no Stokes/TA/heat advancement; subdivisions 1/2/4",
+    "production_replays": "Not submitted automatically. Select event/state after capture audit. Different MPI decomposition requires a separate manufactured initial-state test, not a same-partition checkpoint restart."
+  },
+  "cost": {
+    "extra_particle_memory_bytes": 5435817984,
+    "extra_checkpoints": "Two complete global states; retained on HPC along with mesh and velocity files. Archive excludes these large replay inputs."
+  },
+  "validation": {
+    "full_O2_MPI_build": "PASS",
+    "checkpoint_schedule_cases": 12,
+    "LSF_bash_syntax": "PASS",
+    "diagnostic_on_off": {
+      "status": "PASS",
+      "steps": 2,
+      "identity_signatures": "constant_count_and_two_hashes_not_exact_uniqueness_proof",
+      "clipped": 0,
+      "limited": 0,
+      "sampled_div_max_nd": 0.09978107519496443,
+      "sparse": {
+        "paths": 45348,
+        "cells": 7824,
+        "valid_gradients": 22670,
+        "gradient_unavailable": 4
+      },
+      "replay_inventory": {},
+      "interpretation": "observational capture validated; frozen-field convergence and alternative MPI decomposition still require replay",
+      "physical_snapshots_byte_identical": 48
+    },
+    "frozen_replay": {
+      "status": "PASS",
+      "particles": 24576,
+      "subdivisions": [
+        1,
+        2,
+        4
+      ],
+      "cross_rank_endpoints": [
+        19,
+        19,
+        19
+      ],
+      "max_endpoint_difference_to_four": [
+        1.4172602031260094e-08,
+        4.752503372836116e-09
+      ]
+    }
+  },
+  "limits": [
+    "No production cause attribution before HPC evidence",
+    "ID signatures are probabilistic integrity checks; sparse trace pairing rejects duplicate/missing IDs exactly within recorded paths",
+    "No insertion/deletion or numerical correction is applied",
+    "Runtime velocity snapshots capture a narrow window, not all 300 steps"
+  ]
+}

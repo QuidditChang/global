@@ -32,4 +32,11 @@ void pices_checkpoint_preflight(struct All_variables *, const char *);
 void pices_checkpoint_publish(struct All_variables *, const char *, const char *);
 void pices_checkpoint_check_state(struct All_variables *, const char *);
 void pices_checkpoint_restore_state(struct All_variables *, const char *);
+int pices_motion_enabled(struct All_variables *);
+void pices_motion_initialize(struct All_variables *);
+void pices_motion_begin(struct All_variables *);
+void pices_motion_particle(struct All_variables *,int,int,int,const double *,const double *);
+void pices_motion_end(struct All_variables *,int);
+int pices_motion_host_valid(struct All_variables *,int,int);
+int pices_motion_gradient(struct All_variables *,int,int,double,double,double,double *);
 #endif

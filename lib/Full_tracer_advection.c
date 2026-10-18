@@ -172,6 +172,7 @@ void full_tracer_setup(struct All_variables *E)
 
     if(E->pices.enabled)
         E->pices.slot = E->trace.number_of_extra_quantities++;
+    if(pices_motion_enabled(E)) E->trace.number_of_extra_quantities += 2; /* ID and per-step selection */
 
     E->trace.number_of_tracer_quantities =
         E->trace.number_of_basic_quantities +
@@ -3649,4 +3650,35 @@ void pices_coverage_probe(struct All_variables *E, int *counts, int moved, int e
         }
         fflush(out);free(sum);free(hits);
     }
+}
+
+/* Read-only finite differences of the very same particle velocity interpolant.
+ * Reject differences crossing a host face: no coordinate repair or extrapolation.
+ * g[0..8] = dv_i/dx_j, g[9] = max discrepancy between h and h/2 derivatives.
+ */
+int pices_motion_gradient(struct All_variables *E,int cap,int e,double x,double y,double z,double *g)
+{
+ double point[3]={x,y,z},values[2][3],coarse[9],vv[4][9],h=E->pices.min_edge*1e-4;
+ int level,d,side,a,k,nodes[9];
+ if(!(h>0))return 0;
+ velo_from_element_d(E,vv,cap,e,0);
+ for(level=0;level<2;level++,h*=.5)for(d=0;d<3;d++) {
+  for(side=0;side<2;side++) {
+   double q[3]={point[0],point[1],point[2]},weights[9],r,t,p;
+   q[d]+=(side?1:-1)*h;r=sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]);
+   t=atan2(hypot(q[0],q[1]),q[2]);p=atan2(q[1],q[0]);if(p<0)p+=2*M_PI;
+   if(!pices_element_weights(E,cap,e,t,p,r,nodes,weights))return 0;
+   for(k=0;k<3;k++){values[side][k]=0;for(a=1;a<=8;a++)values[side][k]+=weights[a]*vv[k+1][a];}
+  }
+  for(k=0;k<3;k++) {
+   double deriv=(values[1][k]-values[0][k])/(2*h);
+   if(!level)coarse[k*3+d]=deriv;else {g[k*3+d]=deriv;g[9]=fmax(g[9],fabs(deriv-coarse[k*3+d]));}
+  }
+ }
+ return 1;
+}
+
+int pices_motion_host_valid(struct All_variables *E,int cap,int p) {
+ int nodes[9];double w[9];
+ return pices_element_weights(E,cap,E->trace.ielement[cap][p],E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],nodes,w);
 }

@@ -150,20 +150,21 @@ static void fingerprint(struct All_variables *E,char out[65]) {
  pices_sha_end(&s,out);
 }
 static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
- char sha[65],physics[65],vsha[65];int n;
+ char sha[65],physics[65],vsha[65],motion[160]="";int n;
+ if(pices_motion_enabled(E))snprintf(motion,sizeof(motion),",{\"name\":\"motion_id\",\"slot\":%d},{\"name\":\"motion_selected\",\"slot\":%d}",E->pices.slot+1,E->pices.slot+2);
  hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics);
  n=snprintf(out,META_SIZE,
  "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":%d,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
  "\"step\":%d,\n\"time\":%.17g,\n\"dt\":%.17g,\n\"total_timesteps\":%d,\n"
  "\"rank\":%d,\n\"mpi_size\":%d,\n\"decomposition\":[%d,%d,%d],\n\"local_mesh\":[%d,%d,%d],\n\"cap_ids\":[%d],\n"
- "\"particles\":%d,\n\"basic_quantities\":%d,\n\"extraq\":[%s{\"name\":\"Tp\",\"slot\":%d}],\n\"flavors\":%d,\n"
+ "\"particles\":%d,\n\"basic_quantities\":%d,\n\"extraq\":[%s{\"name\":\"Tp\",\"slot\":%d}%s],\n\"flavors\":%d,\n"
  "\"temperature_normalization\":{\"offset_K\":%.17g,\"scale_K\":%.17g},\n"
  "\"interpolation\":\"gnomonic_wedge_radial_v1\",\n\"length\":\"min_directional_rms_cartesian_v1\",\n"
  "\"accepted_velocity_sha256\":\"%s\",\n"
  "\"physics_mesh_sha256\":\"%s\",\n\"checkpoint_sha256\":\"%s\"\n}\n",
  schema(E),PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
  E->parallel.me,E->parallel.nproc,E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz,E->lmesh.nox,E->lmesh.noy,E->lmesh.noz,E->sphere.capid[1],
- E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,E->trace.nflavors,
+ E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,motion,E->trace.nflavors,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
  if(n<0 || n>=META_SIZE)pices_fail(E,"metadata overflow");
 }
@@ -241,7 +242,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(h[0]!=E->lmesh.nox || h[1]!=E->lmesh.noy || h[2]!=E->lmesh.noz || h[3]!=E->parallel.nprocx || h[4]!=E->parallel.nprocy || h[5]!=E->parallel.nprocz || h[6]!=1 || h[7]!=E->monitor.solution_cycles_init || !isfinite(times[0]) || !isfinite(times[1]) || !isfinite(times[2]))pices_fail(E,"checkpoint mesh/clock mismatch");
  offset=44L+16+16L*(E->lmesh.nno+1)+16+8+8L*(E->lmesh.npno+1+E->lmesh.neq);
  if(fseek(f,offset,SEEK_SET) || fread(sent,4,4,f)!=4 || fread(tr,4,5,f)!=5)pices_fail(E,"truncated tracer checkpoint");
- if(sent[0]||sent[1]||sent[2]||sent[3]||tr[0]!=12 || tr[1]!=1+(E->trace.nflavors>0) || tr[2]!=E->trace.nflavors || tr[4]!=np)pices_fail(E,"checkpoint tracer schema/count mismatch");
+ if(sent[0]||sent[1]||sent[2]||sent[3]||tr[0]!=12 || tr[1]!=1+(E->trace.nflavors>0)+2*pices_motion_enabled(E) || tr[2]!=E->trace.nflavors || tr[4]!=np)pices_fail(E,"checkpoint tracer schema/count mismatch");
  bytes=offset+16+20+(8L*(6+tr[1])+4)*(np+1L);
  if(E->composition.on) {
   int cs[5];
