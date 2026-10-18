@@ -57,6 +57,14 @@ def restore_input_precision(text,original):
    if b not in (a,float(format(a,'.6g')),float(format(f,'.6g'))):
     raise ValueError('runtime differs from original beyond %g rounding: '+key)
   text=replace(text,key,value);restored.append(key)
+ # setup_parser stops unquoted values at whitespace, including after commas.
+ # Normalize every numeric record, not only values restored above. Preserve
+ # each original numeric token verbatim: formatting via float would lose bits.
+ for key,value in parameters(text).items():
+  tokens=[v.strip() for v in value.split(',')]
+  try:[float(v) for v in tokens]
+  except ValueError:continue
+  text=replace(text,key,','.join(tokens))
  return text,restored
 
 def standalone_mesh(text):

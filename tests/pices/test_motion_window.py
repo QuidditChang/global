@@ -76,4 +76,12 @@ class RuntimeBridgeTest(unittest.TestCase):
   self.assertEqual(parameters(fixed),parameters(original));self.assertEqual(len(keys),2)
   with self.assertRaisesRegex(ValueError,'beyond %g rounding'):restore_input_precision(shown.replace('6.90018e+08','6.90019e+08'),original)
 
+ def test_numeric_arrays_have_no_token_whitespace(self):
+  original='phase_delta_s=-0.032902012641276054, -0.022663818742040032, 0.017520140281939885\n'
+  shown='phase_delta_s=-0.032902,-0.0226638,0.0175201\nunchanged=1, 2, 3\n'
+  fixed,keys=restore_input_precision(shown,original)
+  self.assertEqual(parameters(fixed)['phase_delta_s'],original.strip().split('=')[1].replace(' ',''))
+  self.assertEqual(parameters(fixed)['unchanged'],'1,2,3')
+  self.assertEqual(keys,['phase_delta_s'])
+
 if __name__=='__main__':unittest.main()
