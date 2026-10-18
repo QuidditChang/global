@@ -20,6 +20,21 @@ def replace(text,key,value):
  if not re.search(pattern,text):raise ValueError('missing runtime parameter '+key)
  return re.sub(pattern,lambda m:key+'='+str(value),text)
 
+def standalone_runtime(text):
+ """Map Pyre's unset conductivity sentinels to absent standalone parameters.
+
+ module/setProperties.c treats exactly -1 as unspecified. The standalone
+ reader instead rejects any explicitly supplied value inconsistent with ks/k0.
+ Keep explicit values (including invalid ones) so its validation still runs.
+ """
+ removed=[]
+ for key in ('inputdiffusivity','reference_conductivity'):
+  value=parameters(text).get(key)
+  if value is not None and float(value)==-1.0:
+   text=re.sub(r'(?m)^\s*'+key+r'\s*=.*$', '',text)
+   removed.append(key)
+ return text,removed
+
 def prepare(source,root,template,build,first=91,last=100,ranks=384):
  if root.exists():raise ValueError('refusing to reuse '+str(root))
  source=source.resolve();root=root.resolve();build=build.resolve()
@@ -33,13 +48,14 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  exe=build/'PICESMotionReplay'
  if hashlib.sha256(exe.read_bytes()).hexdigest()!=provenance['binary_sha256']:
   raise ValueError('replay binary/build manifest mismatch')
- # Preserve the exact normalized values actually passed to the original C solver.
+ # Read the serialized Pyre inventory; adapt its unset sentinels below.
  runtime=list(source.glob('pid[0-9]*.cfg'))
  if len(runtime)!=1:raise ValueError('expected exactly one source pid*.cfg; found '+str(runtime))
  text=runtime[0].read_text();p=parameters(text);t=parameters(template.read_text());original=parameters((source/'input.cfg').read_text())
  allowed={'steps','walltime','name','datadir','datadir_old','restart','solution_cycles_init','refstate_file','coor_file'}
  differences={k:(t.get(k),original.get(k)) for k in t.keys()|original.keys() if t.get(k)!=original.get(k) and k not in allowed}
  if differences:raise ValueError('template changed physics: '+str(differences))
+ text,unset_parameters=standalone_runtime(text)
  if int(p['nproc_surf'])*int(p['nprocx'])*int(p['nprocy'])*int(p['nprocz'])!=ranks:raise ValueError('rank layout mismatch')
  clocks={};local_mesh=None
  for rank in range(ranks):
@@ -101,7 +117,7 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
   config=text
   for k,v in dict(datadir=str(case/'DATA/%RANK'),datadir_old=str(source/'DATA/%RANK'),restart=1,solution_cycles_init=first-1).items():config=replace(config,k,v)
   (case/'case.cfg').write_text(config)
- manifest=dict(source=str(source),first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
+ manifest=dict(source=str(source),first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),standalone_unset_parameters=unset_parameters,histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
   scope='Prescribed time sequence of saved velocity fields; each field frozen within its original timestep. No coupled physics evolution.')
  (root/'replay_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  print('prepared',root,'tracked IDs',len(ids),flush=True)

@@ -63,8 +63,17 @@
     },
     "first_step_matches_single_replay": "byte-identical all three factors, all 24 ranks",
     "audit_negative_cases": "altered source position and low-cell map rejected",
-    "preflight_tests": 4,
+    "preflight_tests": 6,
     "runtime_template_physics_comparison": "PASS",
-    "LSF_syntax": "PASS"
+    "LSF_syntax": "PASS",
+    "pyre_runtime_bridge": "24-rank regression: reproduced unset-conductivity startup rejection, converted cfg restarted, all 24 endpoint files byte-identical"
+  },
+  "runtime_conversion": {
+    "remove_unset_only": [
+      "inputdiffusivity=-1",
+      "reference_conductivity=-1"
+    ],
+    "reason": "Preserve Pyre unset semantics in standalone reader; derived ks/k0 and explicit-value validation unchanged",
+    "manifest_field": "standalone_unset_parameters"
   }
 }

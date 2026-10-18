@@ -1,7 +1,7 @@
 """Preflight format tests; synthetic files do not stand in for MPI restart tests."""
 import hashlib,json,struct,tempfile,unittest
 from pathlib import Path
-from motion_window import prepare,parameters,SOLVER_COMMIT
+from motion_window import prepare,parameters,SOLVER_COMMIT,standalone_runtime
 
 class PrepareTest(unittest.TestCase):
  def setUp(self):
@@ -10,7 +10,7 @@ class PrepareTest(unittest.TestCase):
   exe=self.build/'PICESMotionReplay';exe.write_bytes(b'format-test-only')
   (self.build/'replay_build.json').write_text(json.dumps(dict(solver_commit=SOLVER_COMMIT,isolated_compile=True,binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())))
   (self.source/'solver_commit.txt').write_text(SOLVER_COMMIT)
-  cfg='\n'.join(['nproc_surf=1','nprocx=1','nprocy=1','nprocz=1','Q0=30','datafile=global','datafile_old=global','datadir=DATA/%RANK','datadir_old=Restart','restart=0','solution_cycles_init=0','refstate_file=refstate_EBA.txt','coor_file=GLB.coor.global.dat'])+'\n'
+  cfg='\n'.join(['nproc_surf=1','nprocx=1','nprocy=1','nprocz=1','Q0=30','reference_conductivity=-1','inputdiffusivity=-1','datafile=global','datafile_old=global','datadir=DATA/%RANK','datadir_old=Restart','restart=0','solution_cycles_init=0','refstate_file=refstate_EBA.txt','coor_file=GLB.coor.global.dat'])+'\n'
   for name in ('pid1.cfg','input.cfg'):(self.source/name).write_text(cfg)
   self.template=self.root/'template.cfg';self.template.write_text(cfg)
   for name in ('refstate_EBA.txt','GLB.coor.global.dat','Inca_plateau_15Ma_v5.xy','Nazca_ridge_15Ma_v2.xy','Juan_Fernandez_Ridge_15Ma_v2.xy'):(self.source/name).write_text('fixture\n')
@@ -27,7 +27,8 @@ class PrepareTest(unittest.TestCase):
  def test_reuses_normalized_parameters_and_tracks_source(self):
   self.run_prepare();m=json.loads((self.output/'replay_manifest.json').read_text());self.assertEqual(m['tracked'],1);self.assertEqual(m['low_cells']['2'],[[0,1,1]])
   for factor in (1,2,4):
-   p=parameters((self.output/('sub%d/case.cfg'%factor)).read_text());self.assertEqual(p['Q0'],'30');self.assertEqual(p['restart'],'1');self.assertEqual(p['datadir_old'],str(self.source.resolve()/'DATA/%RANK'));self.assertEqual(p['coor_file'],'GLB.coor.global.dat')
+   p=parameters((self.output/('sub%d/case.cfg'%factor)).read_text());self.assertEqual(p['Q0'],'30');self.assertEqual(p['restart'],'1');self.assertEqual(p['datadir_old'],str(self.source.resolve()/'DATA/%RANK'));self.assertEqual(p['coor_file'],'GLB.coor.global.dat');self.assertNotIn('reference_conductivity',p);self.assertNotIn('inputdiffusivity',p)
+  self.assertEqual(m['standalone_unset_parameters'],['inputdiffusivity','reference_conductivity'])
  def test_rejects_changed_physics_before_creating_output(self):
   self.template.write_text(self.template.read_text().replace('Q0=30','Q0=31'))
   with self.assertRaisesRegex(ValueError,'changed physics'):self.run_prepare()
@@ -38,5 +39,17 @@ class PrepareTest(unittest.TestCase):
  def test_rejects_changed_binary(self):
   (self.build/'PICESMotionReplay').write_bytes(b'changed')
   with self.assertRaisesRegex(ValueError,'binary/build manifest'):self.run_prepare()
+
+class RuntimeBridgeTest(unittest.TestCase):
+ def test_explicit_values_are_preserved(self):
+  for value in ('0.5859375','0','-2'):
+   text='reference_conductivity='+value+'\ninputdiffusivity=-1\n'
+   fixed,removed=standalone_runtime(text)
+   self.assertEqual(parameters(fixed),{'reference_conductivity':value})
+   self.assertEqual(removed,['inputdiffusivity'])
+ def test_alias_is_preserved_when_reference_is_unset(self):
+  fixed,removed=standalone_runtime('reference_conductivity=-1.0\ninputdiffusivity=0.5\nQ0=30\n')
+  self.assertEqual(parameters(fixed),{'inputdiffusivity':'0.5','Q0':'30'})
+  self.assertEqual(removed,['reference_conductivity'])
 
 if __name__=='__main__':unittest.main()
