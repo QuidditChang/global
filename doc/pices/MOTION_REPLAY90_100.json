@@ -92,5 +92,31 @@
     "preflight": "All checkpoint local_mesh and binary headers checked against configured mesh; sidecar state lengths checked before MPI",
     "production_state_bytes": 4285104,
     "numeric_array_syntax": "Strip whitespace surrounding comma-separated numeric tokens without rounding; standalone setup_parser otherwise truncates at the first space"
+  },
+  "checkpoint_diagnostic": {
+    "version": 1,
+    "implementation": "Build-local instrumented copy of Pices_checkpoint.c; lib/bin remain exactly pinned",
+    "source_components_available": false,
+    "output": [
+      "global.checkpoint_diag.RANK.actual.json",
+      "global.checkpoint_diag.RANK.expected.json",
+      "global.checkpoint_diag.RANK.tsv",
+      "checkpoint_diagnostic_summary.json"
+    ],
+    "collective": "All ranks finish reports before global failure decision",
+    "unused_field_candidate": "Separately hash identical byte stream with only the 5 obsolete fields replaced by zero; never use candidate for acceptance",
+    "hpc_next": "REPLAY_CHECKPOINT_ONLY=1 REPLAY_RUN_SUFFIX=_r5; restores step 90 without motion",
+    "build_directory": "pices-motion-replay-diag-build",
+    "validation": {
+      "isolated_build": "PASS",
+      "real_MPI_ranks": 24,
+      "normal_restart_metadata": "EXACT",
+      "endpoint_files_byte_identical_to_uninstrumented": 24,
+      "modified_physical_parameter": "REJECTED, all 24 rank reports captured",
+      "modified_unused_fields": "REJECTED, all 24 zero-unused candidate hashes match original saved physics",
+      "checkpoint_only": "PASS, zero motion steps",
+      "preflight_unit_tests": 11,
+      "lsf_syntax": "PASS"
+    }
   }
 }

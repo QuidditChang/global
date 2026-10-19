@@ -54,6 +54,10 @@ static void motion_replay(struct All_variables *E) {
  int subdivisions=factor?atoi(factor):0,first=E->monitor.solution_cycles+1,last=endenv?atoi(endenv):first,step,head[4],d;
  double clock[2];char name[2048];FILE *f;
  if(!root||(subdivisions!=1&&subdivisions!=2&&subdivisions!=4)||last<first||last-first>100)pices_fail(E,"invalid replay controls");
+ if(getenv("PICES_REPLAY_CHECKPOINT_ONLY")) {
+  if(!E->parallel.me)fprintf(stderr,"PICES_REPLAY_CHECKPOINT_ONLY validated=exact motion_steps=0\n");
+  return;
+ }
  replay_load_ids(E);
  for(step=first;step<=last;step++) {
   snprintf(name,sizeof(name),"%s/DATA/%d/global.motion_velocity.%d.%d",root,E->parallel.me,E->parallel.me,step);
