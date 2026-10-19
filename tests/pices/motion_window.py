@@ -93,6 +93,8 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  if root.exists():raise ValueError('refusing to reuse '+str(root))
  source=source.resolve();root=root.resolve();build=build.resolve()
  provenance=json.loads((build/'replay_build.json').read_text())
+ entry=provenance.get('entry','standalone')
+ if entry not in ('standalone','producer_pyre_objects_v1'):raise ValueError('unknown replay entry')
  if provenance['solver_commit']!=SOLVER_COMMIT or not provenance['isolated_compile']:
   raise ValueError('rebuild isolated replay at the recorded solver commit')
  if (source/'runtime_source_diff.txt').exists() and (source/'runtime_source_diff.txt').stat().st_size:
@@ -102,6 +104,12 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  exe=build/'PICESMotionReplay'
  if hashlib.sha256(exe.read_bytes()).hexdigest()!=provenance['binary_sha256']:
   raise ValueError('replay binary/build manifest mismatch')
+ if entry=='producer_pyre_objects_v1':
+  files=provenance.get('pyre_files',{})
+  actual={str(p.relative_to(build/'PyreSite')) for p in (build/'PyreSite').rglob('*') if p.is_file()}
+  if not files or actual!=files.keys():raise ValueError('Pyre package snapshot inventory mismatch')
+  for name,digest in files.items():
+   if hashlib.sha256((build/'PyreSite'/name).read_bytes()).hexdigest()!=digest:raise ValueError('Pyre package snapshot checksum mismatch')
  # Read the serialized Pyre inventory; adapt its unset sentinels below.
  runtime=list(source.glob('pid[0-9]*.cfg'))
  if len(runtime)!=1:raise ValueError('expected exactly one source pid*.cfg; found '+str(runtime))
@@ -160,7 +168,11 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  hist={int(f['step']):list(map(int,f['histogram'].split(','))) for line in source_rows if line.startswith('PICES_COVERAGE_STATS ') for f in [fields(line)]}
  signatures={tuple(f[k] for k in ('count','hash_sum','hash_xor')) for line in source_rows if line.startswith('PICES_MOTION ') for f in [fields(line)]}
  if len(signatures)!=1 or any(s not in hist for s in range(first,last+1)):raise ValueError('incomplete source census')
+ # Native Pyre reads the original sectioned input, not the lossy pid dump or
+ # the standalone bridge. Only restart/output/short local input paths change.
+ if entry=='producer_pyre_objects_v1':text=(source/'input.cfg').read_text()
  root.mkdir(parents=True)
+ if entry=='producer_pyre_objects_v1':shutil.copytree(build/'PyreSite',root/'PyreSite')
  shutil.copy2(exe,root/'PICESMotionReplay');shutil.copy2(build/'replay_build.json',root)
  shutil.copy2(template,root/'submitted.cfg');shutil.copy2(source/'input.cfg',root/'source_input.cfg');shutil.copy2(runtime[0],root/'source_runtime.cfg')
  for name,key in [('refstate_EBA.txt','refstate_file'),('GLB.coor.global.dat','coor_file')]:
@@ -176,9 +188,9 @@ def prepare(source,root,template,build,first=91,last=100,ranks=384):
  for factor in (1,2,4):
   case=root/('sub%d'%factor);case.mkdir();(case/'DATA').mkdir()
   config=text
-  for k,v in dict(datadir=str(case/'DATA/%RANK'),datadir_old=str(source/'DATA/%RANK'),restart=1,solution_cycles_init=first-1).items():config=replace(config,k,v)
+  for k,v in dict(datadir=str(case/'DATA/%RANK'),datadir_old=str(source/'DATA/%RANK'),restart='on' if entry=='producer_pyre_objects_v1' else 1,solution_cycles_init=first-1).items():config=replace(config,k,v)
   (case/'case.cfg').write_text(config)
- manifest=dict(source=str(source),first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),standalone_unset_parameters=unset_parameters,restored_precision_parameters=restored_parameters,standalone_mg_units=mg_units,checkpoint_state_bytes=state_bytes,histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
+ manifest=dict(source=str(source),entry=entry,first=first,last=last,ranks=ranks,solver_commit=SOLVER_COMMIT,tracked=len(ids),reference_rows=len(refs),standalone_unset_parameters=unset_parameters,restored_precision_parameters=restored_parameters,standalone_mg_units=mg_units,checkpoint_state_bytes=state_bytes,histograms=hist,low_cells=low_cells,signature=list(next(iter(signatures))),clocks=clocks,local_mesh=local_mesh,
   scope='Prescribed time sequence of saved velocity fields; each field frozen within its original timestep. No coupled physics evolution.')
  (root/'replay_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  print('prepared',root,'tracked IDs',len(ids),flush=True)

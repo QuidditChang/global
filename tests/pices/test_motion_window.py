@@ -42,6 +42,31 @@ class PrepareTest(unittest.TestCase):
   (self.build/'PICESMotionReplay').write_bytes(b'changed')
   with self.assertRaisesRegex(ValueError,'binary/build manifest'):self.run_prepare()
 
+ def native_manifest(self):
+  p=self.build/'replay_build.json';m=json.loads(p.read_text())
+  f=self.build/'PyreSite/CitcomS/Solver/Solver.py';f.parent.mkdir(parents=True);f.write_text('# package fixture\n')
+  m.update(entry='producer_pyre_objects_v1',pyre_files={'CitcomS/Solver/Solver.py':hashlib.sha256(f.read_bytes()).hexdigest()})
+  p.write_text(json.dumps(m));return f
+
+ def test_native_entry_preserves_original_sectioned_input(self):
+  self.native_manifest()
+  original='[CitcomS.solver]\n'+(self.source/'input.cfg').read_text()+'\n# retain exact source spelling\n'
+  (self.source/'input.cfg').write_text(original)
+  self.run_prepare()
+  text=(self.output/'sub1/case.cfg').read_text();p=parameters(text)
+  self.assertTrue(text.startswith('[CitcomS.solver]'))
+  self.assertIn('# retain exact source spelling',text)
+  self.assertEqual(p['reference_conductivity'],'-1')
+  self.assertEqual(p['inputdiffusivity'],'-1')
+  self.assertNotIn('mgunitx',p)
+  self.assertEqual(p['restart'],'on')
+  self.assertTrue((self.output/'PyreSite/CitcomS/Solver/Solver.py').is_file())
+
+ def test_native_entry_rejects_changed_python_snapshot(self):
+  self.native_manifest().write_text('# altered\n')
+  with self.assertRaisesRegex(ValueError,'snapshot checksum'):self.run_prepare()
+  self.assertFalse(self.output.exists())
+
  def test_rejects_wrong_state_size_before_output(self):
   (self.source/'DATA/0/global.chkpt.0.0.pices.state').write_bytes(b'x')
   with self.assertRaisesRegex(ValueError,'state size/config mismatch'):self.run_prepare()

@@ -29,8 +29,8 @@
   "particle_add_delete": false,
   "production_binary_modified": false,
   "baseline_gate": [
-    "Source input precision restored after checking against the Pyre %g display; Pyre mesh-unit derivation reproduced",
-    "Isolated replay reuses the pinned producer Pyre normalization expression, including float radius in metres; unchanged strict physics hash remains authoritative",
+    "Native Pyre receives original input.cfg with only restart, output and short local input paths changed; source mesh/velocity inventory preflight retained",
+    "Reuse compiled production initializer, mover and Python bindings; replace only checkpoint member in an isolated archive, using original Makefile compile/link flags",
     "all checkpoint metadata/physics/payload checks remain active",
     "1-substep endpoint error <=1e-12 nondimensional, same recorded hosts",
     "exact global occupancy histograms and <=4-particle cell map"
@@ -72,7 +72,16 @@
     "production_C_parser": "Unmodified Parsing.c, actual r3 source_runtime.cfg + source_input.cfg: r3 31 mismatched elements across 219 numeric records; fixed 0 mismatches for float and double reads",
     "entry_normalization": "PASS: production Ra mismatch reproduced, fixed arithmetic byte-identical to producer in 3 compiled cases",
     "entry_MPI": "PASS: 24/24 strict metadata equality; old entry and modified physics rejected; 1/2/4 replay passed",
-    "early_baseline_gate": "PASS: no sub2/sub4 directories required; altered reference positions and occupancy map rejected"
+    "early_baseline_gate": "PASS: no sub2/sub4 directories required; altered reference positions and occupancy map rejected",
+    "native_archive_relink": {
+      "local_fixture": "PASS, 63 other archive members unchanged; producer artifacts unchanged",
+      "mpi": "24 ranks, strict metadata EXACT; 1/2/4 factors and 3 steps; 63 cross-rank endpoints per factor",
+      "endpoint_regression": "216 files byte-identical to previous local reference",
+      "physical_mismatch": "REJECTED by all 24 ranks",
+      "checkpoint_only": "PASS, zero motion outputs",
+      "native_input_and_snapshot_preflight": "13 unit tests passed",
+      "actual_Pyre_bootstrap": "Must pass on HPC in builder; not available on local macOS"
+    }
   },
   "runtime_conversion": {
     "remove_unset_only": [
@@ -95,7 +104,8 @@
     "restore_precision": "Original explicit numeric inputs replace pid values only when consistent with float/double %g display; unexplained differences rejected",
     "preflight": "All checkpoint local_mesh and binary headers checked against configured mesh; sidecar state lengths checked before MPI",
     "production_state_bytes": 4285104,
-    "numeric_array_syntax": "Strip whitespace surrounding comma-separated numeric tokens without rounding; standalone setup_parser otherwise truncates at the first space"
+    "numeric_array_syntax": "Strip whitespace surrounding comma-separated numeric tokens without rounding; standalone setup_parser otherwise truncates at the first space",
+    "active_native_config": "Original sectioned source input.cfg; standalone conversions remain only for legacy C replay and preflight inventory checks"
   },
   "checkpoint_diagnostic": {
     "version": 1,
@@ -109,8 +119,8 @@
     ],
     "collective": "All ranks finish reports before global failure decision",
     "unused_field_candidate": "Separately hash identical byte stream with only the 5 obsolete fields replaced by zero; never use candidate for acceptance",
-    "hpc_next": "REPLAY_CHECKPOINT_ONLY=0 REPLAY_RUN_SUFFIX=_r6; strict restore, then 1x baseline gate before 2x/4x",
-    "build_directory": "pices-motion-replay-diag-build",
+    "hpc_next": "REPLAY_CHECKPOINT_ONLY=0 REPLAY_RUN_SUFFIX=_r7; use native producer objects, strict restore and 1x gate before 2x/4x",
+    "build_directory": "pices-motion-pyre-build",
     "validation": {
       "isolated_build": "PASS",
       "real_MPI_ranks": 24,
@@ -141,6 +151,23 @@
       "changed physical parameter rejected on all 24 ranks",
       "three-step 1x/2x/4x replay with cross-rank transport"
     ],
-    "full_HPC_restore": "PENDING: original checkpoint binaries are not downloaded; no claim that this excludes every additional production-entry difference."
+    "full_HPC_restore": "PENDING: original checkpoint binaries are not downloaded; no claim that this excludes every additional production-entry difference.",
+    "status": "Superseded for this experiment: r6 produced byte-identical diagnostics to r5 on HPC; local expression discrepancy is not an established HPC root cause."
+  },
+  "entry": "producer_pyre_objects_v1",
+  "native_pyre_replay": {
+    "builder": "tests/pices/build_pyre_motion_replay.py",
+    "production_files_modified": false,
+    "compiled_objects": "Reuse original libCitcomS.a, libCitcomSLibmodule.a and mpipycitcoms entry objects; copy archive, replace only checkpoint member and verify other members byte-for-byte. Relink using original expanded Makefile recipe.",
+    "python": "Snapshot installed CitcomS package, hash every file, verify/copy into run directory; original Python 2.6/Pyre dependencies retained. Mandatory singleton native import preflight on HPC before manifest permits submission.",
+    "checkpoint_hook": "Same strict preflight and state/hash acceptance. All-rank diagnostic before rejection. Only after acceptance, replay frozen velocity and exit before Python Controller.save/march. No checkpoint rewrite.",
+    "provenance": [
+      "original archive/module/binary and entry-object SHA256",
+      "compiler --version and -show",
+      "expanded compile and link arguments",
+      "Python package snapshot SHA256",
+      "generated checkpoint source and replay binary SHA256"
+    ],
+    "HPC_full_checkpoint_status": "PENDING; local host lacks the producer embedded Python 2.6 build and full step-90 binary checkpoint."
   }
 }
