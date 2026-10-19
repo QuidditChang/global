@@ -5,6 +5,7 @@ The helper driver has separate provenance; checkpoint physics checks stay intact
 import argparse, concurrent.futures, hashlib, json, os, subprocess
 from pathlib import Path
 from replay_checkpoint_instrument import instrument,VERSION
+from replay_entry import adapt,VERSION as ENTRY_VERSION
 ROOT=Path(__file__).resolve().parents[2]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('build',type=Path)
@@ -21,10 +22,13 @@ diag_header=Path(__file__).with_name('replay_checkpoint_diagnostic.h').read_byte
 (b/'replay_checkpoint_diagnostic.h').write_bytes(diag_header)
 diag_source=b/'Pices_checkpoint.c'
 diag_source.write_text(instrument((ROOT/'lib/Pices_checkpoint.c').read_text()))
+entry_source=b/'Instructions.c'
+entry_properties=(ROOT/'module/setProperties.c').read_bytes()
+entry_source.write_text(adapt((ROOT/'lib/Instructions.c').read_text(),entry_properties.decode()))
 if a.compile:
- subprocess.run(['git','-C',str(ROOT),'diff','--exit-code',commit,'--','lib','bin',':(exclude,glob)**/Makefile.in'],check=True)
+ subprocess.run(['git','-C',str(ROOT),'diff','--exit-code',commit,'--','lib','bin','module/setProperties.c',':(exclude,glob)**/Makefile.in'],check=True)
  def compile_one(source):
-  compile_source=diag_source if source.name=='Pices_checkpoint.c' else source
+  compile_source={'Pices_checkpoint.c':diag_source,'Instructions.c':entry_source}.get(source.name,source)
   result=subprocess.run([cc,*flags,'-c',str(compile_source),'-o',str(b/(source.stem+'.o'))],capture_output=True,text=True)
   if result.returncode:raise RuntimeError(str(source)+'\n'+result.stderr)
  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
@@ -42,5 +46,7 @@ subprocess.run([cc,*objects,str(b/'CitcomSFull.o'),str(b/'PICESMotionReplay.o'),
 (b/'replay_build.json').write_text(json.dumps(dict(solver_commit=commit,isolated_compile=a.compile,
  driver_commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
  checkpoint_diagnostic_version=VERSION,checkpoint_diagnostic_sha256=hashlib.sha256(diag_source.read_bytes()+diag_header).hexdigest(),
+ entry_normalization_version=ENTRY_VERSION,entry_normalization_sha256=hashlib.sha256(entry_source.read_bytes()).hexdigest(),
+ producer_properties_sha256=hashlib.sha256(entry_properties).hexdigest(),
  helper_sha256=hashlib.sha256(helper.encode()).hexdigest(),binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest()),indent=2)+'\n')
 print(exe)

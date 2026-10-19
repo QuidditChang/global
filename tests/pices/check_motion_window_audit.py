@@ -26,16 +26,20 @@ for step in steps:
 (root/'replay_manifest.json').write_text(json.dumps(dict(first=1,last=3,ranks=ranks,signature=signature,histograms=hist,low_cells=low,scope='manufactured integration regression')))
 with contextlib.redirect_stdout(io.StringIO()):audit(root)
 assert json.loads((root/'replay_audit.json').read_text())['status']=='PASS_REVIEW_REQUIRED'
+# The baseline gate must work before either comparison run exists.
+for factor in (2,4):(root/('sub%d'%factor)).rename(root/('pending%d'%factor))
+with contextlib.redirect_stdout(io.StringIO()):audit(root,baseline_only=True)
+assert json.loads((root/'baseline_audit.json').read_text())['status']=='PASS_REVIEW_REQUIRED'
 original=(root/'reference.tsv').read_text();v=original.splitlines();first=v[0].split();first[2]=str(float(first[2])+1e-5);v[0]=' '.join(first);(root/'reference.tsv').write_text('\n'.join(v)+'\n')
 try:
- with contextlib.redirect_stdout(io.StringIO()):audit(root)
+ with contextlib.redirect_stdout(io.StringIO()):audit(root,baseline_only=True)
 except ValueError:pass
 else:raise AssertionError('altered reference position was accepted')
-assert json.loads((root/'replay_audit.json').read_text())['status']=='FAIL_BASELINE'
+assert json.loads((root/'baseline_audit.json').read_text())['status']=='FAIL_BASELINE'
 (root/'reference.tsv').write_text(original)
 m=json.loads((root/'replay_manifest.json').read_text());m['low_cells']['1'][0][2]+=1;(root/'replay_manifest.json').write_text(json.dumps(m))
 try:
- with contextlib.redirect_stdout(io.StringIO()):audit(root)
+ with contextlib.redirect_stdout(io.StringIO()):audit(root,baseline_only=True)
 except ValueError:pass
 else:raise AssertionError('altered source cell census was accepted')
 print('PASS: real MPI outputs accepted; altered endpoint and low-cell map rejected')

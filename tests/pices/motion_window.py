@@ -194,15 +194,16 @@ def read_positions(root,step,ranks):
    result[uid]=(xyz,rank,int(host))
  return result
 
-def audit(root):
+def audit(root,baseline_only=False):
  import numpy as np
+ factors=(1,) if baseline_only else (1,2,4)
  m=json.loads((root/'replay_manifest.json').read_text());steps=range(m['first'],m['last']+1);ranks=m['ranks'];ids={int(s) for s in (root/'tracked_ids.txt').read_text().split()}
  references={s:{} for s in steps}
  for line in (root/'reference.tsv').open():
   s,uid,x,y,z,rank,host=line.split();references[int(s)][int(uid)]=(tuple(map(float,(x,y,z))),int(rank),int(host))
  report={'status':'PASS_REVIEW_REQUIRED','issues':[],'baseline_max_position_error_nd':0.,'baseline_host_mismatches':0,'steps':[],'scope':m['scope']}
  logs={}
- for factor in (1,2,4):
+ for factor in factors:
   case=root/('sub%d'%factor);lines=(case/'DATA/0/global.log').read_text().splitlines()
   if (case/'returncode.txt').read_text().strip()!='0':raise ValueError('replay failed: '+str(factor))
   rows=[fields(l) for l in lines if l.startswith('PICES_MOTION ')]
@@ -213,19 +214,19 @@ def audit(root):
   if [int(v['step']) for v in census]!=list(steps):raise ValueError('incomplete replay census')
   logs[factor]={int(v['step']):v for v in census}
  for step in steps:
-  states=[read_positions(root/('sub%d'%factor),step,ranks) for factor in (1,2,4)]
+  states=[read_positions(root/('sub%d'%factor),step,ranks) for factor in factors]
   if any(v.keys()!=ids for v in states):raise ValueError('tracked ID set changed')
   for uid,expected in references[step].items():
    actual=states[0][uid];err=math.dist(actual[0],expected[0]);report['baseline_max_position_error_nd']=max(err,report['baseline_max_position_error_nd']);report['baseline_host_mismatches']+=actual[1:]!=expected[1:]
-  hist=[list(map(int,logs[f][step]['histogram'].split(','))) for f in (1,2,4)]
+  hist=[list(map(int,logs[f][step]['histogram'].split(','))) for f in factors]
   if hist[0]!=m['histograms'][str(step)]:report['issues'].append('baseline histogram differs at step '+str(step))
-  if any(int(logs[f][step]['tracked'])!=len(ids) for f in (1,2,4)):raise ValueError('tracked census mismatch')
-  row={'step':step,'empty_counts':dict(zip(('1','2','4'),[v[0] for v in hist])),'histograms':dict(zip(('1','2','4'),hist)),'endpoint_error_to_4_m':{},'host_changes_to_4':{},'focus_cell_count':{}}
-  for index,factor in enumerate((1,2)):
+  if any(int(logs[f][step]['tracked'])!=len(ids) for f in factors):raise ValueError('tracked census mismatch')
+  row={'step':step,'empty_counts':dict(zip(map(str,factors),[v[0] for v in hist])),'histograms':dict(zip(map(str,factors),hist)),'endpoint_error_to_4_m':{},'host_changes_to_4':{},'focus_cell_count':{}}
+  for index,factor in enumerate(() if baseline_only else (1,2)):
    delta=np.array([math.dist(states[index][uid][0],states[2][uid][0])*6371000 for uid in ids]);row['endpoint_error_to_4_m'][str(factor)]=dict(rms=float(np.sqrt(np.mean(delta**2))),p99=float(np.quantile(delta,.99)),maximum=float(delta.max()))
    row['host_changes_to_4'][str(factor)]=sum(states[index][uid][1:]!=states[2][uid][1:] for uid in ids)
   empty_sets={}
-  for factor in (1,2,4):
+  for factor in factors:
    low={}
    for rank in range(ranks):
     path=root/('sub%d'%factor)/'DATA'/str(rank)/('global.replay_cells.%d.%d'%(rank,step))
@@ -234,23 +235,25 @@ def audit(root):
      if (rank,element) in low or not 0<=count<=8:raise ValueError('invalid sparse census')
      low[rank,element]=count
    empty_sets[factor]={k for k,v in low.items() if v==0}
-   if [sum(v==i for v in low.values()) for i in range(9)]!=hist[(1,2,4).index(factor)][:9]:raise ValueError('sparse census/global histogram disagreement')
+   if [sum(v==i for v in low.values()) for i in range(9)]!=hist[factors.index(factor)][:9]:raise ValueError('sparse census/global histogram disagreement')
    if factor==1 and {k:v for k,v in low.items() if v<=4}!={(r,e):n for r,e,n in m['low_cells'][str(step)]}:report['issues'].append('baseline low-cell map differs at step '+str(step))
    # Count files include every cell with <=8 particles. Absence means >=9.
    path=root/('sub%d'%factor)/'DATA/161'/('global.replay_cells.161.%d'%step)
    row['focus_cell_count'][str(factor)]=next((int(v[1]) for l in path.open() if (v:=l.split())[0]=='27151'),'>=9') if path.exists() else None
-  row['empty_cell_symmetric_difference_to_4']={str(f):len(empty_sets[f]^empty_sets[4]) for f in (1,2)}
+  if not baseline_only:row['empty_cell_symmetric_difference_to_4']={str(f):len(empty_sets[f]^empty_sets[4]) for f in (1,2)}
   report['steps'].append(row)
  if report['baseline_max_position_error_nd']>1e-12 or report['baseline_host_mismatches']:report['issues'].append('one-substep source reproduction failed')
  if report['issues']:report['status']='FAIL_BASELINE'
  report['interpretation']='Compare 1/2/4 convergence only after baseline passes. No automatic particle-addition or production-release decision. MPI decomposition is unchanged.'
- (root/'replay_audit.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
- if report['issues']:raise ValueError('baseline replay differs from original; see replay_audit.json')
+ report['baseline_only']=baseline_only
+ report_name='baseline_audit.json' if baseline_only else 'replay_audit.json'
+ (root/report_name).write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
+ if report['issues']:raise ValueError('baseline replay differs from original; see '+report_name)
 
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='mode',required=True)
  q=sub.add_parser('prepare');q.add_argument('--source',type=Path,required=True);q.add_argument('--root',type=Path,required=True);q.add_argument('--template',type=Path,required=True);q.add_argument('--build',type=Path,required=True)
- q=sub.add_parser('audit');q.add_argument('root',type=Path)
+ q=sub.add_parser('audit');q.add_argument('root',type=Path);q.add_argument('--baseline-only',action='store_true')
  a=p.parse_args()
  if a.mode=='prepare':prepare(a.source,a.root,a.template,a.build)
- else:audit(a.root)
+ else:audit(a.root,a.baseline_only)

@@ -1,7 +1,7 @@
 {
   "experiment": "PICES_motion_replay90_100",
   "source_commit": "92f6fa44b52fec25fe283fa76c8be08d90b99499",
-  "source_run": "/scratch/2026-10-18/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_motion300",
+  "source_run": "/scratch/2026-10-19/ess-zhangkd/cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_motion300",
   "checkpoint": 90,
   "velocity_steps": [
     91,
@@ -30,6 +30,7 @@
   "production_binary_modified": false,
   "baseline_gate": [
     "Source input precision restored after checking against the Pyre %g display; Pyre mesh-unit derivation reproduced",
+    "Isolated replay reuses the pinned producer Pyre normalization expression, including float radius in metres; unchanged strict physics hash remains authoritative",
     "all checkpoint metadata/physics/payload checks remain active",
     "1-substep endpoint error <=1e-12 nondimensional, same recorded hosts",
     "exact global occupancy histograms and <=4-particle cell map"
@@ -68,7 +69,10 @@
     "runtime_template_physics_comparison": "PASS",
     "LSF_syntax": "PASS",
     "pyre_runtime_bridge": "24-rank MPI with comma-space numeric arrays matching production formatting: strict restart passed; all 24 particle endpoint files byte-identical to baseline; independent conductivity and missing-mesh negative cases reproduced",
-    "production_C_parser": "Unmodified Parsing.c, actual r3 source_runtime.cfg + source_input.cfg: r3 31 mismatched elements across 219 numeric records; fixed 0 mismatches for float and double reads"
+    "production_C_parser": "Unmodified Parsing.c, actual r3 source_runtime.cfg + source_input.cfg: r3 31 mismatched elements across 219 numeric records; fixed 0 mismatches for float and double reads",
+    "entry_normalization": "PASS: production Ra mismatch reproduced, fixed arithmetic byte-identical to producer in 3 compiled cases",
+    "entry_MPI": "PASS: 24/24 strict metadata equality; old entry and modified physics rejected; 1/2/4 replay passed",
+    "early_baseline_gate": "PASS: no sub2/sub4 directories required; altered reference positions and occupancy map rejected"
   },
   "runtime_conversion": {
     "remove_unset_only": [
@@ -105,7 +109,7 @@
     ],
     "collective": "All ranks finish reports before global failure decision",
     "unused_field_candidate": "Separately hash identical byte stream with only the 5 obsolete fields replaced by zero; never use candidate for acceptance",
-    "hpc_next": "REPLAY_CHECKPOINT_ONLY=1 REPLAY_RUN_SUFFIX=_r5; restores step 90 without motion",
+    "hpc_next": "REPLAY_CHECKPOINT_ONLY=0 REPLAY_RUN_SUFFIX=_r6; strict restore, then 1x baseline gate before 2x/4x",
     "build_directory": "pices-motion-replay-diag-build",
     "validation": {
       "isolated_build": "PASS",
@@ -118,5 +122,25 @@
       "preflight_unit_tests": 11,
       "lsf_syntax": "PASS"
     }
+  },
+  "entry_normalization": {
+    "version": 1,
+    "implementation": "Build-local Instructions.c replaces only the reference Rayleigh/DeltaT expression with the exact block extracted from pinned module/setProperties.c. Production lib/bin/module files untouched.",
+    "confirmed_discrepancy": {
+      "production_pyre_Ra": 690018560,
+      "old_standalone_Ra": 690018496,
+      "fixed_replay_Ra": 690018560
+    },
+    "cause": "Different floating-point precision and operation order in otherwise algebraically equivalent expressions; affects Rayleigh and derived phase Ra.",
+    "checks": [
+      "production numeric inputs through compiled original C expressions",
+      "nonintegral input radius",
+      "inverse DeltaT branch",
+      "refuse overwritten radius temporary",
+      "24-rank checkpoint from independent producer-expression entry: old replay rejected, fixed replay exact",
+      "changed physical parameter rejected on all 24 ranks",
+      "three-step 1x/2x/4x replay with cross-rank transport"
+    ],
+    "full_HPC_restore": "PENDING: original checkpoint binaries are not downloaded; no claim that this excludes every additional production-entry difference."
   }
 }
