@@ -659,7 +659,7 @@ static void report_empty_elements(struct All_variables *E)
         fprintf(E->fp,"PICES_EMPTY_MONITOR step=%d empty=%lld volume_nd=%.17g volume_fraction=%.17g longest_current=%d longest_since_start=%d fallback_element_steps=%lld policy=retain_previous_composition\n",step,global[4],global_volume,global_volume/global_domain,(int)global_longest,peak,fallback_total);
         fflush(E->fp);
     }
-    if(E->parallel.me==161 && E->lmesh.nel>=27151)
+    if(pices_motion_enabled(E) && E->parallel.me==161 && E->lmesh.nel>=27151)
         fprintf(E->trace.fpt,"PICES_EMPTY_TARGET step=%d element=27151 count=%d streak=%d\n",step,direct[27151],streak[27151]);
     if(getenv("PICES_COVERAGE_PROBE")) {
         extern void pices_coverage_probe(struct All_variables *,int *,int,int);

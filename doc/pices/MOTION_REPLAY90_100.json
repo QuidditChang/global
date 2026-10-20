@@ -151,8 +151,8 @@
       "changed physical parameter rejected on all 24 ranks",
       "three-step 1x/2x/4x replay with cross-rank transport"
     ],
-    "full_HPC_restore": "PENDING: original checkpoint binaries are not downloaded; no claim that this excludes every additional production-entry difference.",
-    "status": "Superseded for this experiment: r6 produced byte-identical diagnostics to r5 on HPC; local expression discrepancy is not an established HPC root cause."
+    "full_HPC_restore": "r6 rejected; r7 original producer entry passed. Rank-0 scalar/block comparison isolates Rayleigh and phase Rayleigh differences, with all other listed block hashes unchanged.",
+    "status": "Original producer objects are the validated solution. Editing the standalone expression alone was insufficient on HPC."
   },
   "entry": "producer_pyre_objects_v1",
   "native_pyre_replay": {
@@ -168,6 +168,25 @@
       "Python package snapshot SHA256",
       "generated checkpoint source and replay binary SHA256"
     ],
-    "HPC_full_checkpoint_status": "PENDING; local host lacks the producer embedded Python 2.6 build and full step-90 binary checkpoint."
+    "HPC_full_checkpoint_status": "PASS: r7 restored all 384 ranks with exact metadata, then completed 1x/2x/4x steps 91-100 with exit 0."
+  },
+  "r7_audit": {
+    "date": "2026-10-20",
+    "driver_commit": "997c033ff70bc83e7c4a2e20b14c71a9ca687502",
+    "checkpoint_ranks_exact_per_case": 384,
+    "reference_rows": 292111,
+    "baseline_position_error_nd": 0,
+    "baseline_host_mismatches": 0,
+    "tracked_particles": 111839,
+    "empty_event": {
+      "step": 96,
+      "rank": 161,
+      "element": 27151,
+      "all_factors_count": 0,
+      "step97_all_factors_count": 2
+    },
+    "empty_sets_equal_all_steps": true,
+    "local_recomputation": "PASS; only floating statistic roundoff up to 2.220446049250313e-16 differs from HPC report",
+    "scope": "Frozen saved velocities; does not independently validate spatial interpolation, alternate MPI decomposition or coupled long-term thermal accuracy."
   }
 }

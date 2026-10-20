@@ -1,0 +1,88 @@
+{
+  "status": "USER_AUTHORIZED_PRODUCTION",
+  "date": "2026-10-20",
+  "source_branch": "cmbhf_EBA_PICES",
+  "runs_branch": "cmbhf_EBA",
+  "experiment": "cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES",
+  "physical_baseline": "motion300 (producer 92f6fa44b52fec25fe283fa76c8be08d90b99499); r7 frozen-field replay audited successfully",
+  "initialization": {
+    "restart": false,
+    "age_Ma": 249.9,
+    "steps_limit": 30000
+  },
+  "resources": {
+    "queue": "medium",
+    "nodes": 10,
+    "slots": 400,
+    "solver_ranks": 384,
+    "postprocessing_cores": 16,
+    "walltime_hours": 168
+  },
+  "method": {
+    "projection": "lumped",
+    "TA": "particle_relaxation_v1 before heat",
+    "TA_tau_Ma": 0.1,
+    "initial_particles_per_element": 27,
+    "particle_insertion": false,
+    "particle_deletion": false,
+    "transport": "unchanged original mover; existing automatic particle CFL limit",
+    "empty_composition": "retain previous elemental composition",
+    "temperature": "actual particle-to-grid projection; existing invalid-weight/temperature guards retained"
+  },
+  "outputs": {
+    "format": "ascii",
+    "profiles": "existing profile_optional retained",
+    "diagnostics": [
+      "accepted-step PICES_DIAGNOSTICS and NPZ shared diagnostics",
+      "global particle balance",
+      "empty count, volume fraction, duration, event coordinates",
+      "global coverage histogram and transitions"
+    ],
+    "disabled": [
+      "motion paths/velocity replay",
+      "sparse empty audit JSONL",
+      "coverage probe",
+      "restart compatibility environment overrides"
+    ],
+    "target_cell_print": "Only when PICES_MOTION_AUDIT=1; no per-step hardcoded-cell output in production"
+  },
+  "runtime": {
+    "entry": "original installed mpipycitcoms / Pyre",
+    "snapshot": "RUN_ROOT/Runtime/install plus external egg dependencies, hash verified and dereferenced; stale bytecode excluded",
+    "shared_dependencies": "system Intel MPI/HDF5 and vendor Python2.6 remain external; do not replace them during a run",
+    "postprocessing": "existing PostProc.lsf.py launcher and CBF pipeline retained; scripts commit recorded",
+    "path": "/scratch/<execution date Asia/Shanghai>/ess-zhangkd/<experiment>",
+    "existing_run": "refused without overwriting input or checkpoints"
+  },
+  "source_changes": "Only gate PICES_EMPTY_TARGET behind the existing motion audit flag. No numerical operator, particle population or checkpoint-format changes. Diagnostic drivers remain under tests and are not linked into production.",
+  "validation": {
+    "configuration_and_launcher": {
+      "physical_configuration_matches_motion300": true,
+      "lsf_syntax": "PASS",
+      "inherited_diagnostics_cleared": true,
+      "runtime_snapshot_survives_producer_rebuild": true,
+      "symlink_targets_copied": true,
+      "stale_bytecode_excluded": true,
+      "existing_snapshot_rejected": true
+    },
+    "local_MPI": {
+      "status": "PASS",
+      "steps": 2,
+      "identity_signatures": "constant_count_and_two_hashes_not_exact_uniqueness_proof",
+      "clipped": 0,
+      "limited": 0,
+      "sampled_div_max_nd": 0.09978107519496443,
+      "sparse": {
+        "paths": 45348,
+        "cells": 7824,
+        "valid_gradients": 22670,
+        "gradient_unavailable": 4
+      },
+      "replay_inventory": {},
+      "interpretation": "observational capture validated; frozen-field convergence and alternative MPI decomposition still require replay",
+      "physical_snapshots_byte_identical": 48
+    },
+    "HPC_full_production": "Not run locally; long-run thermal and coverage behavior remains subject to runtime diagnostics."
+  },
+  "restart": "Use the saved runtime snapshot and matching checkpoint for continuation. Strict commit/physics/state integrity checks stay enabled. This release config starts fresh; no old-checkpoint conversion."
+}
