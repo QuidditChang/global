@@ -37,6 +37,7 @@ import journal
 class Controller(Component):
 
     output_ready_version = 1
+    storage_pause_version = 1
 
 
     def __init__(self, name, facility):
@@ -160,6 +161,44 @@ class Controller(Component):
             CBF_frequency = self.inventory.monitoringFrequency
         self.solver.save_q_CBF(CBF_frequency)
         self.publishOutputReady(CBF_frequency)
+        if os.environ.get("CITCOMS_STORAGE_CONTROL"):
+            self.storagePause()
+        return
+
+
+    def storagePause(self):
+        """All ranks stop after completed output; rank zero acknowledges once.
+
+        Control files are outside scratch. Both barriers are unconditional for
+        opted-in runs, so a request arriving between ranks cannot split the MPI
+        collective sequence. Python 2.6 compatible; no model state is changed.
+        """
+        import os
+        import json
+        import time
+        directory = os.environ["CITCOMS_STORAGE_CONTROL"]
+        communicator = self.solver.communicator
+        communicator.barrier()
+        if communicator.rank == 0:
+            request = os.path.join(directory, "request.json")
+            if os.path.exists(request):
+                stream = open(request)
+                try:
+                    token = json.load(stream)["token"]
+                finally:
+                    stream.close()
+                target = os.path.join(directory, "solver.paused.json")
+                stream = open(target + ".tmp", "w")
+                try:
+                    json.dump({"token": token, "step": self.step}, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                finally:
+                    stream.close()
+                os.rename(target + ".tmp", target)
+                while os.path.exists(request):
+                    time.sleep(0.2)
+        communicator.barrier()
         return
 
 
