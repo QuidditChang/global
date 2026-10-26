@@ -67,7 +67,7 @@ static void forcing_hash(struct All_variables *E,PicesSHA *s) {
   }
  }
 }
-static void fingerprint(struct All_variables *E,char out[65]) {
+static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage) {
  PicesSHA s;int d;double params[]={E->data.Ttop,E->data.ref_temperature,E->control.Atemp,
  E->control.accuracy,E->control.tole_comp,E->advection.fixed_timestep,
  E->control.reference_conductivity,E->control.kd_upper_prefactor,E->control.kd_lower_prefactor,
@@ -147,12 +147,16 @@ static void fingerprint(struct All_variables *E,char out[65]) {
   pices_sha_add(&s,E->mat[1]+1,E->lmesh.nel*sizeof(E->mat[1][0]));
   forcing_hash(E,&s);
  }
+ if(!legacy_coverage && !E->pices.consistent_projection) {
+  const char policy[]="retain_grid_zero_increment_v1";
+  pices_sha_add(&s,policy,sizeof(policy));
+ }
  pices_sha_end(&s,out);
 }
-static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
+static void metadata_policy(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE],int legacy_coverage) {
  char sha[65],physics[65],vsha[65],motion[160]="";int n;
  if(pices_motion_enabled(E))snprintf(motion,sizeof(motion),",{\"name\":\"motion_id\",\"slot\":%d},{\"name\":\"motion_selected\",\"slot\":%d}",E->pices.slot+1,E->pices.slot+2);
- hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics);
+ hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics,legacy_coverage);
  n=snprintf(out,META_SIZE,
  "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":%d,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
  "\"step\":%d,\n\"time\":%.17g,\n\"dt\":%.17g,\n\"total_timesteps\":%d,\n"
@@ -167,6 +171,9 @@ static void metadata(struct All_variables *E,const char *payload,const char *sta
  E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,motion,E->trace.nflavors,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
  if(n<0 || n>=META_SIZE)pices_fail(E,"metadata overflow");
+}
+static void metadata(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE]) {
+ metadata_policy(E,payload,state,out,0);
 }
 static void manifest(struct All_variables *E,const char *meta,char out[META_SIZE]) {
  PicesSHA s;char digest[65],collective[65],*all;
@@ -269,14 +276,42 @@ static int coverage_restart_compatible(const char *actual,char *expected)
  memcpy(b,source,40);
  return !strcmp(actual,expected);
 }
+/* Explicit, audited transition from production checkpoints made before the
+ * uncovered-node policy change. Only solver identity and this operator tag may
+ * differ: recompute the complete OLD fingerprint from the restored state and
+ * inputs; never rewrite a stored hash or waive any other metadata check. */
+static int uncovered_restart_compatible(const char *actual,char *expected)
+{
+ const char *permit=getenv("PICES_RESTART_SOURCE_COMMIT");
+ const char *sources[]={"43d530bde585b49e3dec2ab22cdb2d62e89f9af1",
+                        "6a8401420be67b7f280b885e185bd049e711c4c7"};
+ const char *tag="\"solver_commit\":\"",*a=strstr(actual,tag);
+ char *b=strstr(expected,tag);int i,allowed=0;
+ if(!permit || !a || !b)return 0;
+ for(i=0;i<2;i++)if(!strcmp(permit,sources[i]))allowed=1;
+ if(!allowed)return 0;
+ a+=strlen(tag);b+=strlen(tag);
+ if(strncmp(a,permit,40) || a[40]!='"' || strlen(b)<41 || b[40]!='"')return 0;
+ memcpy(b,permit,40);
+ return !strcmp(actual,expected);
+}
 void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  char meta[512],state[512],actual[META_SIZE],expected[META_SIZE];
  pathcat(E,meta,path,".pices.json");pathcat(E,state,path,".pices.state");
  readtext(E,meta,actual);metadata(E,path,state,expected);
- if(strcmp(actual,expected)) {
-  if(!coverage_restart_compatible(actual,expected))pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
+ if(!strcmp(actual,expected))return;
+ if(coverage_restart_compatible(actual,expected)) {
   if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=bb334f35892f88b3c9a9fc5265f70b2e621049bf running_commit=%s all_other_metadata=exact reason=coverage_diagnostics_only\n",PICES_SOLVER_COMMIT);
+  return;
  }
+ if(!E->pices.consistent_projection) {
+  metadata_policy(E,path,state,expected,1);
+  if(uncovered_restart_compatible(actual,expected)) {
+   if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=%s running_commit=%s old_physics_validated=exact operator_transition=retain_grid_zero_increment_v1\n",getenv("PICES_RESTART_SOURCE_COMMIT"),PICES_SOLVER_COMMIT);
+   return;
+  }
+ }
+ pices_fail(E,"checkpoint metadata/physics/normalization/commit mismatch");
 }
 
 /* U is the Stokes iterate; nodal V can differ after rigid-rotation removal.

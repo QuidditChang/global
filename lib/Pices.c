@@ -388,8 +388,11 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
 static double interp(const int *nodes,const double *w,const double *field)
 { int a; double t=0; for(a=1;a<=8;a++) t+=w[a]*field[nodes[a]]; return t; }
 
-/* P maps either absolute Tp or a supplied, nonpersistent particle increment. */
-static void project(struct All_variables *E,const double *values,double *out,int boundary)
+/* P maps either absolute Tp or a supplied, nonpersistent particle increment.
+ * fallback is the current grid temperature for absolute maps, NULL for signed
+ * increments. Zero support retains that temperature (reference PICES policy)
+ * or contributes zero increment; it never fabricates particle support. */
+static void project(struct All_variables *E,const double *values,double *out,int boundary,const double *fallback)
 {
     int p,a,n,nodes[9],e; double w[9];
     if(E->pices.consistent_projection){pices_consistent_project(E,values,out,boundary);return;}
@@ -403,7 +406,16 @@ static void project(struct All_variables *E,const double *values,double *out,int
         boundary_values=saved_boundary;
     }
     int *covered=(int *)calloc(E->lmesh.nel+1,sizeof(int));
-    int empty=0,zero=0;
+    double *saved_fallback=NULL;
+    if(fallback==out) {
+        if(saved_boundary) fallback=saved_boundary;
+        else {
+            saved_fallback=array(E,E->lmesh.nno+1);
+            memcpy(saved_fallback,fallback,(E->lmesh.nno+1)*sizeof(double));
+            fallback=saved_fallback;
+        }
+    }
+    int empty=0,zero=0,zero_free=0,first_zero=0;
     if(!covered) pices_fail(E,"allocation failed");
     memset(out,0,(E->lmesh.nno+1)*sizeof(double));
     for(p=1;p<=E->trace.ntracers[1];p++) {
@@ -415,18 +427,19 @@ static void project(struct All_variables *E,const double *values,double *out,int
     exchange(E,out); exchange(E,den);
     for(n=1;n<=E->lmesh.nno;n++) {
         if(!isfinite(den[n]) || !isfinite(out[n])) pices_fail(E,"nonfinite projection");
-        if(den[n]<=0) {
-            zero++;
-            if(!fixed(E,n)) {
-                fprintf(stderr,"PICES_COVERAGE rank=%d node=%d particles=%d empty_elements=%d\n",E->parallel.me,n,E->trace.ntracers[1],empty);
-                pices_fail(E,"zero particle coverage at free node");
-            }
-            out[n]=0;
+        if(den[n]<0) pices_fail(E,"negative particle projection weight");
+        if(den[n]==0) {
+            if(fixed(E,n)) zero++;
+            else {zero_free++;if(!first_zero)first_zero=n;}
+            out[n]=fallback?fallback[n]:0;
+            if(fallback && !pices_temperature_valid(E,out[n]))
+                pices_fail(E,"invalid zero-coverage fallback temperature");
         } else out[n]/=den[n];
         if(boundary && fixed(E,n)) out[n]=boundary_values[n];
     }
-    if(boundary) fprintf(E->fp,"PICES_COVERAGE step=%d empty_elements=%d zero_boundary_nodes=%d\n",E->monitor.solution_cycles,empty,zero);
-    free(saved_boundary); free(den); free(covered);
+    if(boundary) fprintf(E->fp,"PICES_COVERAGE step=%d empty_elements=%d zero_boundary_nodes=%d zero_free_nodes=%d policy=retain_grid_zero_increment_v1 scope=rank_local\n",E->monitor.solution_cycles,empty,zero,zero_free);
+    if(zero_free && fallback) fprintf(E->fp,"PICES_UNCOVERED step=%d rank=%d nodes=%d first_node=%d theta=%.17g phi=%.17g radius=%.17g retained_T_nd=%.17g policy=retain_grid_zero_increment_v1\n",E->monitor.solution_cycles,E->parallel.me,zero_free,first_zero,E->sx[1][1][first_zero],E->sx[1][2][first_zero],E->sx[1][3][first_zero],out[first_zero]);
+    free(saved_fallback); free(saved_boundary); free(den); free(covered);
 }
 
 static double energy(struct All_variables *E,const double *field)
@@ -478,7 +491,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
         /* Separate the pre-existing particle/grid reconciliation from TA.
          * TA storage below includes only the projection change caused by TA.
          * Use the configured absolute projection on both sides of TA. */
-        project(E,E->trace.extraq[1][E->pices.slot],projected,1);
+        project(E,E->trace.extraq[1][E->pices.slot],projected,1,g);
         for(n=1;n<=nn;n++)E->assim_delta_T[1][n]=projected[n]-before[n];
         reconciliation=energy(E,E->assim_delta_T[1]);
         for(p=1;p<=E->trace.ntracers[1];p++) {
@@ -493,7 +506,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
             E->trace.extraq[1][E->pices.slot][p]=after;
         }
         /* Use one identical projection boundary/initial state for both maps. */
-        project(E,E->trace.extraq[1][E->pices.slot],g,1);
+        project(E,E->trace.extraq[1][E->pices.slot],g,1,E->T[1]);
         for(n=1;n<=nn;n++) {
             E->assim_delta_T[1][n]=g[n]-projected[n];
             maximum=fmax(maximum,fabs(E->assim_delta_T[1][n]));
@@ -837,7 +850,7 @@ void pices_advance(struct All_variables *E)
     }
     np=E->trace.ntracers[1];sub=array(E,np+1);
     temperatures_conform_bcs(E);
-    project(E,E->trace.extraq[1][E->pices.slot],g,1);
+    project(E,E->trace.extraq[1][E->pices.slot],g,1,E->T[1]);
     advected=energy(E,g);remaining=dt;
     stage_minima(E,g,"after_remap",-1);
     if(E->pices.p4 && E->pices.ta_before_heat && E->control.lith_age) {
@@ -871,7 +884,7 @@ void pices_advance(struct All_variables *E)
             sub[p]=(interp(nodes,w,g)-E->trace.extraq[1][E->pices.slot][p])*factor;
             if(fabs(sub[p])>submax)submax=fabs(sub[p]);
         }
-        project(E,sub,mapped,0);
+        project(E,sub,mapped,0,NULL);
         for(n=1;n<=nn;n++) mapped[n]=dg[n]-mapped[n];
         for(p=1;p<=np;p++) {
             double *tp=&E->trace.extraq[1][E->pices.slot][p];
@@ -892,7 +905,7 @@ void pices_advance(struct All_variables *E)
         E->pices.cbf_valid=1;
         if(E->control.lith_age && !E->pices.ta_before_heat)pices_assimilate(E,g,dt);
     }
-    project(E,E->trace.extraq[1][E->pices.slot],mapped,0);
+    project(E,E->trace.extraq[1][E->pices.slot],mapped,0,g);
     for(n=1;n<=nn;n++) {
         double error=fabs(mapped[n]-g[n]);
         if(!fixed(E,n) && error>mismatch)mismatch=error;
