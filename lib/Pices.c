@@ -80,6 +80,7 @@ void pices_parameters(struct All_variables *E)
     E->pices.initialized=0;
     E->pices.slot=-1;
     input_boolean("pices_test_no_diffusion",&E->pices.no_diffusion,"off",E->parallel.me);
+    input_double("pices_cfl",&E->pices.cfl,"0.24",E->parallel.me);
     input_double("pices_max_timestep_Ma",&E->pices.max_timestep_Ma,"0.1",E->parallel.me);
     input_int("pices_max_substeps",&E->pices.max_substeps,"10000,1,1000000",E->parallel.me);
     input_boolean("pices_ta_before_heat",&E->pices.ta_before_heat,"off",E->parallel.me);
@@ -106,6 +107,8 @@ void pices_validate(struct All_variables *E)
         pices_fail(E,"nonfinite EBA heating parameters");
     if(!isfinite(E->pices.max_timestep_Ma) || E->pices.max_timestep_Ma<=0)
         pices_fail(E,"pices_max_timestep_Ma must be finite and positive");
+    if(!isfinite(E->pices.cfl) || E->pices.cfl<=0 || E->pices.cfl>0.5)
+        pices_fail(E,"pices_cfl must be finite and in (0, 0.5]; larger values are unvalidated");
     if(E->pices.checkpoint) {
         if(pices_checkpoint_coupled(E) && !E->pices.p4)
             pices_fail(E,"coupled checkpoint requires P4 EBA heat state");
@@ -207,6 +210,7 @@ static void assemble(struct All_variables *E,const double *field)
         p->K=array(E,(E->lmesh.nel+1)*64);
         p->emass=array(E,(E->lmesh.nel+1)*8);
         p->mass=array(E,E->lmesh.nno+1); p->rate=array(E,E->lmesh.nno+1);
+        p->cfl_edge=array(E,E->lmesh.nel+1);
         p->length=array(E,E->lmesh.nel+1);p->ekappa=array(E,E->lmesh.nel+1);
         p->gp_capacity=array(E,(E->lmesh.nel+1)*8);
         p->gp_k=array(E,(E->lmesh.nel+1)*8);
@@ -251,6 +255,7 @@ static void assemble(struct All_variables *E,const double *field)
             for(a=1;a<=8;a++) for(b=1;b<=8;b++)
                 for(d=0;d<3;d++) ke[(a-1)*8+b-1]+=w*k[g]*grad[a][d]*grad[b][d];
         }
+        p->cfl_edge[e]=DBL_MAX;
         p->length[e]=DBL_MAX;
         for(d=0;d<3;d++) {
             double rms=0;
@@ -260,6 +265,7 @@ static void assemble(struct All_variables *E,const double *field)
                 for(a=1;a<=3;a++) { double v=E->x[1][a][n1]-E->x[1][a][n2]; l2+=v*v; }
                 if(!(l2>0) || !isfinite(l2)) pices_fail(E,"invalid physical edge length");
                 rms+=l2/4; if(sqrt(l2)<edge) edge=sqrt(l2);
+                p->cfl_edge[e]=fmin(p->cfl_edge[e],sqrt(l2));
             }
             if(sqrt(rms)<p->length[e]) p->length[e]=sqrt(rms);
         }
@@ -743,19 +749,52 @@ int pices_time_finished(struct All_variables *E)
         age<=4*FLT_EPSILON*fmax(1.0,fabs(E->control.start_age));
 }
 
+/* Same element-local metric for automatic steps, fixed-step checks and logs.
+ * h is the shortest of the 12 physical edges, U the largest nodal speed in
+ * that element. This is a displacement estimate, not a trajectory error bound.
+ * Empty elements also participate: arriving particles must see valid bounds.
+ */
+static double particle_cfl_rate(struct All_variables *E,double *legacy_rate)
+{
+    int e,a,d,n;
+    double crossing=DBL_MAX,speed=0;
+    if(!E->pices.cfl_edge)pices_fail(E,"particle CFL before geometry assembly");
+    for(e=1;e<=E->lmesh.nel;e++) {
+        double u=0,h=E->pices.cfl_edge[e];
+        if(!(h>0) || !isfinite(h))pices_fail(E,"invalid particle CFL element length");
+        for(a=1;a<=8;a++) {
+            double v=0;n=E->ien[1][e].node[a];
+            for(d=1;d<=3;d++)v+=E->sphere.cap[1].V[d][n]*E->sphere.cap[1].V[d][n];
+            if(!isfinite(v))pices_fail(E,"nonfinite particle CFL velocity");
+            u=fmax(u,sqrt(v));
+        }
+        speed=fmax(speed,u);
+        if(u>0)crossing=fmin(crossing,h/u);
+    }
+    crossing=reduce(E,crossing,MPI_MIN);
+    speed=reduce(E,speed,MPI_MAX);
+    *legacy_rate=speed/E->pices.min_edge;
+    if(crossing==DBL_MAX)return 0;
+    if(!(crossing>0) || !isfinite(1/crossing))pices_fail(E,"invalid particle CFL crossing time");
+    return 1/crossing;
+}
+
+static double checked_particle_cfl(struct All_variables *E,double dt,double *legacy_cfl)
+{
+    double legacy,rate=particle_cfl_rate(E,&legacy),cfl=dt*rate;
+    *legacy_cfl=dt*legacy;
+    if(!(dt>0) || !isfinite(cfl) || cfl>E->pices.cfl*(1+8*FLT_EPSILON))
+        pices_fail(E,"timestep exceeds element-local pices_cfl; reduce fixed_timestep");
+    return cfl;
+}
+
 void pices_limit_timestep(struct All_variables *E)
 {
-    int n,d;
-    double speed=0,limit=E->advection.timestep,candidate=limit,particle,age=-1,knot=0;
+    double limit=E->advection.timestep,candidate=limit,particle,age=-1,knot=0;
+    double rate,legacy_rate;
     if(!E->pices.initialized || !(E->data.scalet>0))pices_fail(E,"automatic step before PICES setup");
-    for(n=1;n<=E->lmesh.nno;n++) {
-        double v=0;
-        for(d=1;d<=3;d++)v+=E->sphere.cap[1].V[d][n]*E->sphere.cap[1].V[d][n];
-        if(!isfinite(v))pices_fail(E,"nonfinite automatic-step velocity");
-        speed=fmax(speed,sqrt(v));
-    }
-    speed=reduce(E,speed,MPI_MAX);
-    particle=speed>0?.24*E->pices.min_edge/speed:DBL_MAX;
+    rate=particle_cfl_rate(E,&legacy_rate);
+    particle=rate>0?E->pices.cfl/rate:DBL_MAX;
     limit=fmin(limit,fmin(particle,E->pices.max_timestep_Ma/E->data.scalet));
     if(E->control.lith_age || E->control.vbcs_file) {
         double resolution=4*FLT_EPSILON*fmax(1.0,fabs(E->control.start_age));
@@ -770,8 +809,8 @@ void pices_limit_timestep(struct All_variables *E)
     if(E->advection.timestep>limit)E->advection.timestep=nextafterf(E->advection.timestep,0.f);
     if(E->monitor.elapsed_time+E->advection.timestep==E->monitor.elapsed_time)
         pices_fail(E,"automatic timestep below clock resolution");
-    fprintf(E->fp,"PICES_TIMESTEP step=%d candidate=%.17g dt=%.17g particle_limit=%.17g age_Ma=%.17g knot_Ma=%.17g\n",
-        E->monitor.solution_cycles,candidate,(double)E->advection.timestep,particle,age,knot);
+    fprintf(E->fp,"PICES_TIMESTEP step=%d candidate=%.17g dt=%.17g particle_limit=%.17g age_Ma=%.17g knot_Ma=%.17g cfl_target=%.17g cfl_metric=element_min_edge_max_nodal_speed legacy_particle_limit=%.17g\n",
+        E->monitor.solution_cycles,candidate,(double)E->advection.timestep,particle,age,knot,E->pices.cfl,legacy_rate>0?E->pices.cfl/legacy_rate:DBL_MAX);
 }
 
 /* Read-only operator-stage minima. Locations use the owning rank and local
@@ -806,7 +845,7 @@ void pices_advance(struct All_variables *E)
 {
     int n,e,a,b,p,s,ns,nodes[9];
     int nn=E->lmesh.nno,np;
-    double dt=E->advection.timestep,speed=0,cfl,ds,w[9],remaining;
+    double dt=E->advection.timestep,cfl,legacy_cfl,ds,w[9],remaining;
     double *g,*old,*dg,*sub,*mapped,*rhs,*previous;
     double ledger[7]={0,0,0,0,0,0,0};
     double before,advected,heated,mismatch=0,submax=0,tmin=DBL_MAX,tmax=-DBL_MAX;
@@ -814,13 +853,7 @@ void pices_advance(struct All_variables *E)
     if(!E->pices.initialized) pices_fail(E,"PICES not initialized");
     f=fopen("rheo.dat","r"); if(f) { fclose(f); pices_fail(E,"rheo.dat temperature edits unsupported"); }
     if(!(dt>0) || !isfinite(dt)) pices_fail(E,"invalid timestep");
-    for(n=1;n<=nn;n++) {
-        double v=0;for(a=1;a<=3;a++) v+=E->sphere.cap[1].V[a][n]*E->sphere.cap[1].V[a][n];
-        if(!isfinite(v)) pices_fail(E,"nonfinite velocity");
-        if(sqrt(v)>speed) speed=sqrt(v);
-    }
-    speed=reduce(E,speed,MPI_MAX);cfl=dt*speed/E->pices.min_edge;
-    if(cfl>.25) pices_fail(E,"fixed dt violates particle CFL<=0.25; reduce fixed_timestep");
+    cfl=checked_particle_cfl(E,dt,&legacy_cfl);
     if(!E->pices.eba && dt/E->pices.dt_heat>E->pices.max_substeps) pices_fail(E,"heat substep limit exceeded before particle movement");
     ns=E->pices.eba?1:(int)ceil(dt/E->pices.dt_heat);if(ns<1) ns=1;
     g=array(E,nn+1);old=array(E,nn+1);dg=array(E,nn+1);mapped=array(E,nn+1);rhs=array(E,nn+1);previous=array(E,nn+1);
@@ -948,7 +981,7 @@ void pices_advance(struct All_variables *E)
         }
     }
 
-    fprintf(E->fp,"PICES_STEP step=%d rank=%d time=%.17g dt=%.17g substeps=%d particles=%d cfl=%.17g Tmin=%.17g Tmax=%.17g mismatch=%.17g subgrid_max=%.17g remap_energy=%.17g heat_energy=%.17g derivative=heat_stage_only\n",E->monitor.solution_cycles,E->parallel.me,(double)E->monitor.elapsed_time,dt,ns,np,cfl,reduce(E,tmin,MPI_MIN),reduce(E,tmax,MPI_MAX),reduce(E,mismatch,MPI_MAX),reduce(E,submax,MPI_MAX),advected-before,heated-advected);
+    fprintf(E->fp,"PICES_STEP step=%d rank=%d time=%.17g dt=%.17g substeps=%d particles=%d cfl=%.17g Tmin=%.17g Tmax=%.17g mismatch=%.17g subgrid_max=%.17g remap_energy=%.17g heat_energy=%.17g derivative=heat_stage_only cfl_legacy=%.17g cfl_target=%.17g cfl_metric=element_min_edge_max_nodal_speed\n",E->monitor.solution_cycles,E->parallel.me,(double)E->monitor.elapsed_time,dt,ns,np,cfl,reduce(E,tmin,MPI_MIN),reduce(E,tmax,MPI_MAX),reduce(E,mismatch,MPI_MAX),reduce(E,submax,MPI_MAX),advected-before,heated-advected,legacy_cfl,E->pices.cfl);
     fflush(E->fp);
     free(g);free(old);free(dg);free(mapped);free(rhs);free(previous);free(sub);
 }

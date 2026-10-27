@@ -147,6 +147,11 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
   pices_sha_add(&s,E->mat[1]+1,E->lmesh.nel*sizeof(E->mat[1][0]));
   forcing_hash(E,&s);
  }
+ if(!legacy_coverage) {
+  const char metric[]="element_min_edge_max_nodal_speed_v1";
+  pices_sha_add(&s,metric,sizeof(metric));
+  pices_sha_add(&s,&E->pices.cfl,sizeof(E->pices.cfl));
+ }
  if(!legacy_coverage && !E->pices.consistent_projection) {
   const char policy[]="retain_grid_zero_increment_v1";
   pices_sha_add(&s,policy,sizeof(policy));
@@ -277,8 +282,8 @@ static int coverage_restart_compatible(const char *actual,char *expected)
  return !strcmp(actual,expected);
 }
 /* Explicit, audited transition from production checkpoints made before the
- * uncovered-node policy change. Only solver identity and this operator tag may
- * differ: recompute the complete OLD fingerprint from the restored state and
+ * uncovered-node and element-local CFL policy changes. Only solver identity
+ * and these policy tags/settings may differ: recompute the complete OLD fingerprint from the restored state and
  * inputs; never rewrite a stored hash or waive any other metadata check. */
 static int uncovered_restart_compatible(const char *actual,char *expected)
 {
@@ -307,7 +312,7 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  if(!E->pices.consistent_projection) {
   metadata_policy(E,path,state,expected,1);
   if(uncovered_restart_compatible(actual,expected)) {
-   if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=%s running_commit=%s old_physics_validated=exact operator_transition=retain_grid_zero_increment_v1\n",getenv("PICES_RESTART_SOURCE_COMMIT"),PICES_SOLVER_COMMIT);
+   if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=%s running_commit=%s old_physics_validated=exact operator_transition=retain_grid_zero_increment_v1 timestep_transition=element_local_cfl_v1\n",getenv("PICES_RESTART_SOURCE_COMMIT"),PICES_SOLVER_COMMIT);
    return;
   }
  }
