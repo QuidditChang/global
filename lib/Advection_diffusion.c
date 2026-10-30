@@ -98,6 +98,8 @@ void advection_diffusion_parameters(struct All_variables *E)
     int legacy_found, reference_found;
     float legacy_inputdiffusivity;
 
+    E->pg_cbf_valid = 0;
+    memset(E->pg_cbf_residual,0,sizeof(E->pg_cbf_residual));
     pices_parameters(E);
     input_boolean("ADV",&(E->advection.ADVECTION),"on",m);
     input_boolean("filter_temp",&(E->advection.filter_temperature),"off",m);
@@ -290,6 +292,30 @@ void std_timestep(struct All_variables *E)
 }
 
 
+/* Use the arrival-age target, as in PICES pre-heat TA, without committing
+ * the clock. Called inside each trial after resetting its assimilation ledger.
+ * Rejected attempts restore T/Tdot and recompute TA at the reduced dt. */
+static void pg_assimilate_before_heat(struct All_variables *E)
+{
+    double time=E->monitor.elapsed_time;
+    void temperatures_conform_bcs();
+    void parallel_process_termination();
+    if(!E->control.lith_age || !E->control.lith_age_asml ||
+       !E->control.lith_age_time || !E->advection.ADVECTION) {
+        if(E->parallel.me==0)
+            fprintf(stderr,"pg_ta_before_heat requires active PG, lith_age, lith_age_asml and lith_age_time\n");
+        parallel_process_termination();
+    }
+    E->monitor.elapsed_time=time+E->advection.timestep;
+    lith_age_conform_tbc(E);
+    lith_age_temperature_bound_adj(E,E->mesh.levmax);
+    temperatures_conform_bcs(E);
+    assimilate_lith_conform_bcs(E);
+    temperatures_conform_bcs(E);
+    audit_temperature(E,"pg_ta_before_heat",E->advection.last_sub_iterations,-1);
+    E->monitor.elapsed_time=time;
+}
+
 void PG_timestep_solve(struct All_variables *E)
 {
 
@@ -305,6 +331,7 @@ void PG_timestep_solve(struct All_variables *E)
 
   if(E->pices.enabled) { pices_advance(E); return; }
 
+  E->pg_cbf_valid = 0;
   audit_temperature(E,"thermal_entry",0,-1);
   E->advection.timesteps++;
 
@@ -345,6 +372,7 @@ void PG_timestep_solve(struct All_variables *E)
     for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(i=1;i<=E->lmesh.nno;i++)
             E->assim_delta_T[m][i] = 0.0;
+    if(E->control.pg_ta_before_heat) pg_assimilate_before_heat(E);
     if (E->advection.ADVECTION) {
 
       predictor(E,E->T,E->Tdot);
@@ -393,6 +421,9 @@ void PG_timestep_solve(struct All_variables *E)
   }  while ( iredo==1 && E->advection.last_sub_iterations <= 5);
 
 
+  /* Never publish a rejected attempt or a step without a thermal solve.
+   * Freeze before filter/melt, any post-heat TA, and the next Stokes solve. */
+  if(!iredo && E->advection.ADVECTION) CBF_capture_pg_endpoint(E);
   audit_temperature(E,"thermal_accepted",E->advection.last_sub_iterations,-1);
 
   /* filter temperature to remove over-/under-shoot */
@@ -439,7 +470,7 @@ void PG_timestep_solve(struct All_variables *E)
       }
   }
 
-  if(E->control.lith_age) {
+  if(E->control.lith_age && !E->control.pg_ta_before_heat) {
       if(E->parallel.me==0) fprintf(stderr,"PG_timestep_solve\n");
       if(E->control.lith_age_asml) lith_age_conform_tbc(E);
       if(E->control.lith_age_time) {
@@ -469,6 +500,11 @@ void PG_timestep_solve(struct All_variables *E)
 void PG_timestep_solve_back(struct All_variables *E)
 {
   if(E->pices.enabled) pices_fail(E,"backward is unsupported");
+  E->pg_cbf_valid=0; /* No forward accepted-endpoint cache for reverse steps. */
+  if(E->control.pg_ta_before_heat) {
+      fprintf(stderr,"pg_ta_before_heat does not support backward integration\n");
+      parallel_process_termination();
+  }
 
   double Tmaxd();
   double Tmind();
@@ -1548,7 +1584,8 @@ void print_thermal_budget(struct All_variables *E)
 
     if(E->pices.enabled) return; /* P1 has a separate heat-stage ledger. */
 
-    /* Same output T, solver Tdot, current velocity/composition as CBF. */
+    /* Instantaneous output-state volume sources. Boundary CBF is a separate
+     * accepted thermal-endpoint diagnostic; these are not a closure ledger. */
     if(E->control.disptn_number != 0) process_heating(E,0);
     else for(m=1;m<=E->sphere.caps_per_proc;m++) {
         memset(E->heating_visc[m],0,(E->lmesh.nel+1)*sizeof(double));
@@ -1633,12 +1670,12 @@ void print_thermal_budget(struct All_variables *E)
 
     if(E->parallel.me == 0) {
         fputs(rule,E->fp);
-        fprintf(E->fp,"BOUNDARY_CBF: TOTAL_W; MAX/MIN=W_m-2; q_surf positive mantle_to_surface; q_botm positive core_to_mantle\n");
+        fprintf(E->fp,"BOUNDARY_CBF: stage=pg_accepted_thermal_endpoint_pre_filter velocity=thermal_step; TOTAL_W; MAX/MIN=W_m-2; q_surf positive mantle_to_surface; q_botm positive core_to_mantle\n");
         fprintf(E->fp,"%-20s  %24s  %24s  %24s\n","TERM","TOTAL_W","MAX_W_m2","MIN_W_m2");
         print_thermal_row(E->fp,"q_surf",boundary[0][0],boundary[0][1],boundary[0][2]);
         print_thermal_row(E->fp,"q_botm",boundary[1][0],boundary[1][1],boundary[1][2]);
-        fprintf(E->fp,"CBF_AREAS surf_m2=%.17g botm_m2=%.17g; nan means non-Dirichlet boundary\n",boundary[0][3],boundary[1][3]);
-        fprintf(E->fp,"NET_SOURCE_PLUS_BOUNDARY_W=%.17g (Qtotal+q_botm-q_surf; not a measured storage derivative or closure residual)\n",
+        fprintf(E->fp,"CBF_AREAS surf_m2=%.17g botm_m2=%.17g; nan means unavailable accepted step or non-Dirichlet boundary\n",boundary[0][3],boundary[1][3]);
+        fprintf(E->fp,"NET_SOURCE_PLUS_BOUNDARY_W=%.17g (mixed-stage diagnostic only: instantaneous output sources plus thermal-endpoint CBF; not storage or closure)\n",
                 source_total_W+boundary[1][0]-boundary[0][0]);
         fputs(separator, E->fp);
         fflush(E->fp);

@@ -238,7 +238,7 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
         for(e=top ? elz : 1;e<=E->lmesh.nel;e+=elz) {
             if(E->pices.enabled && E->pices.p4)
                 for(a=1;a<=8;a++)er[a]=E->pices.heat_residual[e*8+a-1];
-            else CBF_element_thermal_residual(E,m,e,er);
+            else for(a=1;a<=8;a++)er[a]=E->pg_cbf_residual[m][e*8+a-1];
             for(a=0;a<4;++a) {
                 node=E->ien[m][e].node[sidenodes[side][a+1]];
                 if(!(E->node[m][node] & TBZ)) bad=1;
@@ -308,13 +308,69 @@ static void heat_flux_CBF_boundary(struct All_variables *E, int top,
     for(m=1;m<=E->sphere.caps_per_proc;++m) { free(rhs[m]); free(mass[m]); free(qnodal[m]); }
 }
 
-static void evaluate_heat_flux_CBF(struct All_variables *E, int write_native,
-                                   double stats[2][4])
+/* Physical Galerkin residual at the accepted PG endpoint. Tdot is the
+ * predictor/corrector derivative (not a TA finite difference). Sources
+ * are evaluated at this same T and thermal-step velocity. This is an endpoint
+ * diagnostic, not the PICES heat-substep average or an exact SUPG closure.
+ * Diagnostic source evaluation must not mutate the evolution state. */
+void CBF_capture_pg_endpoint(struct All_variables *E)
 {
-    int m,bad=0,global_bad;
+    int e,a,m,bad=0,global_bad;
     double *saved_adi[NCS],*saved_visc[NCS],*adi[NCS],*visc[NCS];
     struct CC saved_cc=E->element_Cc;
     struct CCX saved_ccx=E->element_Ccx;
+    double er[9], extrema[2]={-DBL_MAX,-DBL_MAX}, global_extrema[2];
+    void parallel_process_termination();
+    E->pg_cbf_valid=0;
+    for(m=1;m<=E->sphere.caps_per_proc;++m) {
+        adi[m]=(double *)calloc(E->lmesh.nel+1,sizeof(double));
+        visc[m]=(double *)calloc(E->lmesh.nel+1,sizeof(double));
+        if(!adi[m] || !visc[m])bad=1;
+    }
+    MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(global_bad)parallel_process_termination();
+    for(m=1;m<=E->sphere.caps_per_proc;++m) {
+        CBF_heat_sources(E,m,adi[m],visc[m]);
+        saved_adi[m]=E->heating_adi[m];saved_visc[m]=E->heating_visc[m];
+        E->heating_adi[m]=adi[m];E->heating_visc[m]=visc[m];
+    }
+    for(m=1;m<=E->sphere.caps_per_proc;++m) {
+        if(!E->pg_cbf_residual[m])
+            E->pg_cbf_residual[m]=(double *)calloc((E->lmesh.nel+1)*8,sizeof(double));
+        if(!E->pg_cbf_residual[m])bad=1;
+    }
+    MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
+    if(global_bad)parallel_process_termination();
+    /* Only radial boundary elements are consumed by CBF. */
+    for(m=1;m<=E->sphere.caps_per_proc;++m)
+        for(e=1;e<=E->lmesh.nel;++e)
+            if((e-1)%E->lmesh.elz==0 || e%E->lmesh.elz==0) {
+                CBF_element_thermal_residual(E,m,e,er);
+                for(a=1;a<=8;++a) E->pg_cbf_residual[m][e*8+a-1]=er[a];
+            }
+    for(m=1;m<=E->sphere.caps_per_proc;++m) {
+        E->heating_adi[m]=saved_adi[m];E->heating_visc[m]=saved_visc[m];
+        free(adi[m]);free(visc[m]);
+    }
+    E->element_Cc=saved_cc;E->element_Ccx=saved_ccx;
+    E->pg_cbf_valid=1;
+    for(m=1;m<=E->sphere.caps_per_proc;++m)
+        for(a=1;a<=E->lmesh.nno;++a) {
+            double t=E->data.Ttop+E->data.ref_temperature*E->T[m][a];
+            extrema[0]=fmax(extrema[0],t);extrema[1]=fmax(extrema[1],-t);
+        }
+    MPI_Allreduce(extrema,global_extrema,2,MPI_DOUBLE,MPI_MAX,E->parallel.world);
+    if(E->parallel.me==0) {
+        fprintf(E->fp,"PG_CBF_ENDPOINT step=%d time_nd=%.17g dt_nd=%.17g scope=global_grid Tmin_K=%.17g Tmax_K=%.17g stage=thermal_endpoint_pre_filter ta_before_heat=%d\n",
+            E->monitor.solution_cycles,E->monitor.elapsed_time+E->advection.timestep,
+            E->advection.timestep,-global_extrema[1],global_extrema[0],E->control.pg_ta_before_heat);
+        fflush(E->fp);
+    }
+}
+
+static void evaluate_heat_flux_CBF(struct All_variables *E, int write_native,
+                                   double stats[2][4])
+{
     void parallel_process_termination();
     if(E->pices.enabled && E->pices.p4) {
         if(!E->pices.cbf_valid) {
@@ -331,27 +387,17 @@ static void evaluate_heat_flux_CBF(struct All_variables *E, int write_native,
         if(E->parallel.me==0) fprintf(stderr,"CBF requires CBF_use_advection=on\n");
         parallel_process_termination();
     }
-    for(m=1;m<=E->sphere.caps_per_proc;++m) {
-        adi[m]=(double *)calloc(E->lmesh.nel+1,sizeof(double));
-        visc[m]=(double *)calloc(E->lmesh.nel+1,sizeof(double));
-        if(!adi[m] || !visc[m])bad=1;
+    if(!E->pg_cbf_valid) {
+        if(write_native && E->parallel.me==0)
+            fprintf(E->fp,"PG_CBF state=unavailable_initial_or_restart_or_rejected\n");
+        return;
     }
-    MPI_Allreduce(&bad,&global_bad,1,MPI_INT,MPI_MAX,E->parallel.world);
-    if(global_bad)parallel_process_termination();
-    for(m=1;m<=E->sphere.caps_per_proc;++m) {
-        CBF_heat_sources(E,m,adi[m],visc[m]);
-        saved_adi[m]=E->heating_adi[m];saved_visc[m]=E->heating_visc[m];
-        E->heating_adi[m]=adi[m];E->heating_visc[m]=visc[m];
-    }
+    if(write_native && E->parallel.me==0)
+        fprintf(E->fp,"PG_CBF stage=accepted_thermal_endpoint_pre_filter derivative=solver_Tdot advection=explicit velocity=thermal_step averaging=endpoint\n");
     if(write_native ? E->output.output_q_surf_CBF : E->mesh.toptbc==1)
         heat_flux_CBF_boundary(E,1,E->slice.q_surf_CBF,write_native,stats ? stats[0]:NULL);
     if(write_native ? E->output.output_q_botm_CBF : E->mesh.bottbc==1)
         heat_flux_CBF_boundary(E,0,E->slice.q_botm_CBF,write_native,stats ? stats[1]:NULL);
-    for(m=1;m<=E->sphere.caps_per_proc;++m) {
-        E->heating_adi[m]=saved_adi[m];E->heating_visc[m]=saved_visc[m];
-        free(adi[m]);free(visc[m]);
-    }
-    E->element_Cc=saved_cc;E->element_Ccx=saved_ccx;
 }
 
 

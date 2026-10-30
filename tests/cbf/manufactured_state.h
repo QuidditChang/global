@@ -17,4 +17,6 @@ static void CBF_manufactured_state(struct All_variables *E)
             E->Tdot[m][n]=0;
             for(d=1;d<=3;++d)E->sphere.cap[m].V[d][n]=0;
         }
+    /* Explicitly certify the manufactured steady state for diagnostic output. */
+    CBF_capture_pg_endpoint(E);
 }

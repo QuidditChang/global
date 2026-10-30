@@ -331,6 +331,7 @@ class Solver(Component):
 
         rayleigh = inv.float("rayleigh", default=1e+05)
         dissipation_number = inv.float("dissipation_number", default=0.0)
+        pg_ta_before_heat = inv.bool("pg_ta_before_heat", default=False)
         temperature_audit = inv.bool("temperature_audit", default=False)
         qvis_mode = inv.int("qvis_mode", default=0)
         qvis_cohesion_pa = inv.float("qvis_cohesion_pa", default=1.0e7)

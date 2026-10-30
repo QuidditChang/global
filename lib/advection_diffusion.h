@@ -37,6 +37,7 @@ void print_thermal_budget(struct All_variables *);
 void PG_timestep_init(struct All_variables *);
 void PG_timestep_solve(struct All_variables *);
 void std_timestep(struct All_variables *);
+void CBF_capture_pg_endpoint(struct All_variables *);
 void CBF_heat_sources(struct All_variables *, int, double *, double *);
 double CBF_element_thermal_residual(struct All_variables *, int, int, double [9]);
 

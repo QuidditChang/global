@@ -562,6 +562,7 @@ struct CONTROL {
     float TBCtopval;
     float TBCbotval;
 
+    int pg_ta_before_heat; /* opt-in TA split before Eulerian thermal solve */
     int temperature_audit; /* diagnostic stage tracing, default off */
     int qvis_mode; /* 0 off, 1 diagnose, 2 apply; EBA only */
     double qvis_cohesion_pa, qvis_friction_angle_rad;
@@ -866,6 +867,9 @@ struct All_variables {
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
     double *DataT[NCS];          /* derived initial anomaly: total T - refstate.Tref */
     double *assim_delta_T[NCS];
+    /* Accepted PG thermal endpoint, before filter and the next velocity solve. */
+    double *pg_cbf_residual[NCS];
+    int pg_cbf_valid;
     double *u1[NCS];
     double *temp[NCS],*temp1[NCS];
     float *NP[NCS],*edot[NCS],*Mass[NCS];
