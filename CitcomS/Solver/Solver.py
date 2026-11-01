@@ -268,7 +268,13 @@ class Solver(Component):
 
         from CitcomSLib import Solver_set_properties
 
-        Solver_set_properties(self.all_variables, self.inventory, stream)
+        effective = Solver_set_properties(self.all_variables, self.inventory, stream)
+        requested = int(self.inventory.pg_ta_before_heat)
+        if effective is None or effective != requested:
+            raise RuntimeError("PG TA parameter bridge mismatch: requested=%s C=%s; rebuild solver" % (requested, effective))
+        if not self.communicator.rank:
+            import sys
+            sys.stderr.write("PG_TA_CONFIG requested=%d effective=%d status=PASS\n" % (requested, effective))
 
         inv = self.inventory
         inv.mesher.setProperties(stream)

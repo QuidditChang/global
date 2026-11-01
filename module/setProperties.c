@@ -646,6 +646,11 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
 
     getFloatProperty(properties, "rayleigh", E->control.Atemp, fp);
     getFloatProperty(properties, "dissipation_number", E->control.disptn_number, fp);
+    getIntProperty(properties, "pg_ta_before_heat", E->control.pg_ta_before_heat, fp);
+    if(E->control.pg_ta_before_heat != 0 && E->control.pg_ta_before_heat != 1) {
+        PyErr_SetString(PyExc_ValueError,"pg_ta_before_heat must be boolean");
+        return NULL;
+    }
     getIntProperty(properties, "temperature_audit", E->control.temperature_audit, fp);
     getIntProperty(properties, "qvis_mode", E->control.qvis_mode, fp);
     getDoubleProperty(properties, "qvis_cohesion_pa", E->control.qvis_cohesion_pa, fp);
@@ -689,8 +694,8 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
 
     PUTS(("\n"));
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    /* Return the actual C value so the Python caller can verify the bridge. */
+    return PyInt_FromLong(E->control.pg_ta_before_heat);
 }
 
 
