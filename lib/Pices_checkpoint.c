@@ -47,6 +47,7 @@ int pices_checkpoint_coupled(struct All_variables *E) {
         E->control.qvis_mode || E->advection.fixed_timestep<=0;
 }
 static int schema(struct All_variables *E) {
+ if(E->control.RH!=1)return 6;
  return E->pices.p4?5:pices_checkpoint_coupled(E)?4:(E->composition.on?3:(E->pices.p4?2:1));
 }
 /* Identity of the current forcing brackets, independent of relocation. Future
@@ -78,6 +79,10 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ if(E->control.RH!=1) {
+  pices_sha_add(&s,&E->control.RH,sizeof(E->control.RH));
+  pices_sha_add(&s,E->control.rh_state,sizeof(E->control.rh_state));
+ }
  {const char geometry[]="shared_particle_geometry_v1";pices_sha_add(&s,geometry,sizeof(geometry));}
  if(E->pices.p4) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
  if(E->pices.ta_before_heat){const char order[]="particle_ta_before_heat_v1";pices_sha_add(&s,order,sizeof(order));}
@@ -224,6 +229,7 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
   if(E->control.lith_age && fwrite(E->flag_depth2+1,sizeof(float),E->mesh.nox*E->mesh.noy,f)!=(size_t)(E->mesh.nox*E->mesh.noy))
    pices_fail(E,"trench geometry write failed");
  }
+ if(E->control.RH!=1 && (!E->control.rh_initialized || fwrite(E->control.rh_state,sizeof(double),4,f)!=4))pices_fail(E,"RH state write failed");
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -246,7 +252,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=(E->pices.p4?(3L*E->lmesh.nno+(E->control.lith_age?E->mesh.nox*E->mesh.noy:0))*sizeof(float):0)+(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=(E->control.RH!=1?4*sizeof(double):0)+(E->pices.p4?(3L*E->lmesh.nno+(E->control.lith_age?E->mesh.nox*E->mesh.noy:0))*sizeof(float):0)+(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -364,5 +370,16 @@ void pices_checkpoint_restore_state(struct All_variables *E,const char *path) {
    for(n=1;n<=count;n++)if(!isfinite(E->flag_depth2[n]))pices_fail(E,"invalid trench geometry");
   }
  }
+ if(E->control.RH!=1) {
+  double *s=E->control.rh_state;
+  if(fread(s,sizeof(double),4,f)!=4)pices_fail(E,"missing RH normalization state");
+  for(d=0;d<4;d++)if(!isfinite(s[d]))pices_fail(E,"nonfinite RH state");
+  if(s[0]<0 || s[0]>1 || s[1]<0 || s[3]<0 ||
+     fabs(s[2]-E->control.RH*s[1])>1.e-12*fmax(1.,fabs(s[2])) ||
+     fabs(s[1]*(1+(E->control.RH-1)*s[0])-E->control.Q0)>1.e-12*fmax(1.,fabs(E->control.Q0)))
+   pices_fail(E,"incompatible RH normalization");
+  E->control.rh_initialized=1;
+ }
+ if(fgetc(f)!=EOF)pices_fail(E,"unexpected checkpoint state suffix");
  if(fclose(f))pices_fail(E,"velocity close failed");
 }

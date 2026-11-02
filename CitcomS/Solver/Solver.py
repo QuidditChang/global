@@ -347,6 +347,7 @@ class Solver(Component):
         surfaceT = inv.float("surfaceT", default=-1.0)
         #adiabaticT0 = inv.float("adiabaticT0", default=0.4)
         Q0 = inv.float("Q0", default=0.0)
+        RH = inv.float("RH", default=1.0)
 
         output_q_surf_CBF = inv.bool("output_q_surf_CBF", default=True)
         output_q_botm_CBF = inv.bool("output_q_botm_CBF", default=True)

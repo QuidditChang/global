@@ -27,6 +27,7 @@
  */
 
 #include <math.h>
+#include "element_definitions.h"
 #include "global_defs.h"
 #include "parsing.h"
 #include "parallel_related.h"
@@ -318,6 +319,7 @@ void init_composition(struct All_variables *E)
     map_composition_to_nodes(E);
 
     init_bulk_composition(E);
+    composition_heating_initialize(E);
 
     return;
 }
@@ -652,4 +654,75 @@ void get_bulk_composition(struct All_variables *E)
     }
 
     return;
+}
+
+/* RH is a material contrast, normalized once with the actual source quadrature.
+ * State is checkpointed; no normalization is performed on advancing composition. */
+static void rh_error(struct All_variables *E,const char *reason)
+{
+    fprintf(stderr,"RH_ERROR rank=%d: %s\n",E->parallel.me,reason);
+    MPI_Abort(E->parallel.world,72);
+}
+
+static void rh_integrals(struct All_variables *E,double total[4])
+{
+    int m,e,z,g,f,count; double local[4]={0,0,0,0};
+    struct Shape_function GN; struct Shape_function_dx dx;
+    struct Shape_function_dA omega; double rtf[4][9];
+    void get_global_shape_fn();
+    for(m=1;m<=E->sphere.caps_per_proc;m++)for(e=1;e<=E->lmesh.nel;e++) {
+        double v=0,c=E->composition.comp_el[m][23][e],rho;
+        if(!isfinite(c)||c<0||c>1)rh_error(E,"invalid primordial fraction");
+        get_global_shape_fn(E,e,&GN,&dx,&omega,0,1,rtf,E->mesh.levmax,m);
+        for(g=1;g<=8;g++)v+=omega.vpt[g]*g_point[g].weight[2];
+        z=(e-1)%E->lmesh.elz+1;
+        rho=.5*(E->refstate.rho[z]+E->refstate.rho[z+1]);
+        if(!isfinite(v*rho)||v<=0||rho<=0)rh_error(E,"invalid source integration weight");
+        local[0]+=rho*v; local[1]+=rho*v*c;
+        count=0;for(f=0;f<E->trace.nflavors;f++)count+=E->trace.ntracer_flavor[m][f][e];
+        if(!count)local[2]+=rho*v*c;
+        local[3]+=v*c;
+    }
+    MPI_Allreduce(local,total,4,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+}
+
+void composition_heating_initialize(struct All_variables *E)
+{
+    double t[4],*s=E->control.rh_state;
+    if(!isfinite(E->control.RH)||E->control.RH<1)rh_error(E,"RH must be finite and >= 1");
+    if(E->control.RH==1)return;
+    if(!E->pices.enabled || !E->pices.checkpoint || !E->composition.on ||
+       E->composition.ibuoy_type!=1 || E->composition.ncomp<24 ||
+       E->control.kC_primordial_flavor!=24 || E->control.tracer_enriched)
+        rh_error(E,"RH requires PICES checkpointing and ratio flavor 24; legacy enrichment is incompatible");
+    if(!isfinite(E->control.Q0)||E->control.Q0<0)rh_error(E,"RH requires finite nonnegative Q0");
+    if(E->control.restart)return; /* restored from the authenticated sidecar */
+    if(E->control.rh_initialized)return;
+    rh_integrals(E,t);
+    s[0]=t[1]/t[0];s[1]=E->control.Q0/(1+(E->control.RH-1)*s[0]);
+    s[2]=E->control.RH*s[1];s[3]=E->control.Q0*t[0];
+    E->control.rh_initialized=1;
+    composition_heating_report(E);
+}
+
+double composition_heating(struct All_variables *E,int m,int e)
+{
+    double c;
+    if(E->control.RH==1)return E->control.Q0;
+    if(!E->control.rh_initialized)rh_error(E,"missing fixed heating coefficients");
+    c=E->composition.comp_el[m][23][e];
+    if(!isfinite(c)||c<0||c>1)rh_error(E,"invalid primordial fraction");
+    return (1-c)*E->control.rh_state[1]+c*E->control.rh_state[2];
+}
+
+void composition_heating_report(struct All_variables *E)
+{
+    double t[4],*s=E->control.rh_state,scale,b,p;
+    if(E->control.RH==1)return;
+    rh_integrals(E,t);
+    scale=E->data.k0*E->data.ref_temperature*E->data.radius_km*1000.;
+    b=(t[0]-t[1])*s[1];p=t[1]*s[2];
+    if(E->parallel.me==0)fprintf(E->fp,
+      "RH_HEATING step=%d RH=%.17g f0=%.17g Qbg=%.17g Qprim=%.17g f_current=%.17g primordial_volume_nd=%.17g background_W=%.17g primordial_W=%.17g total_W=%.17g baseline_W=%.17g drift_W=%.17g empty_primordial_W=%.17g scope=whole_shell state=current_composition\n",
+      E->monitor.solution_cycles,(double)E->control.RH,s[0],s[1],s[2],t[1]/t[0],t[3],b*scale,p*scale,(b+p)*scale,s[3]*scale,(b+p-s[3])*scale,t[2]*s[2]*scale);
 }

@@ -295,7 +295,7 @@ static double qinternal_at_element(struct All_variables *E, int cap,
     int radial_element = (element - 1) % E->lmesh.elz + 1;
     double rho = 0.5 * (E->refstate.rho[radial_element]
                         + E->refstate.rho[radial_element + 1]);
-    double heat_production = E->control.Q0;
+    double heat_production = composition_heating(E,cap,element);
 
     if (E->control.tracer_enriched) {
         heat_production *= 1.0 - E->composition.comp_el[cap][0][element];

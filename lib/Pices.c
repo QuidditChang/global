@@ -309,7 +309,7 @@ static void heat_load(struct All_variables *E,const double *field,double *load,d
         thermal_transport_at_gp(E,1,e,tg,E->control.reference_conductivity,rho,cp,k,kap);
         for(g=1;g<=8;g++) {
             double capacity,pressure,fractions[PHASE_TRANSITIONS],w=omega.vpt[g]*g_point[g].weight[2];
-            double internal=.5*(E->refstate.rho[z]+E->refstate.rho[z+1])*E->control.Q0;
+            double internal=.5*(E->refstate.rho[z]+E->refstate.rho[z+1])*composition_heating(E,1,e);
             phase_coefficients(E,e,g,&dx,rtf[3][g],tg[g],rho[g],cp[g],&capacity,&pressure,fractions);
             diagnostics.volume[e]+=w;
             diagnostics.trial[e*PD_NQ+PD_INTERNAL]+=w*internal;
@@ -927,6 +927,7 @@ void pices_advance(struct All_variables *E)
         }
         stage_minima(E,g,"after_particle_heat",s);
     }
+    if(E->control.RH!=1 && E->control.record_every>0 && E->monitor.solution_cycles%E->control.record_every==0)composition_heating_report(E);
     if(E->pices.eba) {
         ns=s;for(a=0;a<7;a++)ledger[a]=reduce(E,ledger[a],MPI_SUM);
         fprintf(E->fp,"PICES_EBA step=%d storage=%.17g internal=%.17g adiabatic=%.17g viscous=%.17g phase_pressure=%.17g boundary_reaction=%.17g\n",E->monitor.solution_cycles,ledger[0],ledger[1],ledger[2],ledger[3],ledger[4],ledger[5]);

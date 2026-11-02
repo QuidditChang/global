@@ -673,6 +673,7 @@ PyObject * pyCitcom_Solver_set_properties(PyObject *self, PyObject *args)
     getFloatProperty(properties, "surfaceT", E->control.surface_temp, fp);
     /*getFloatProperty(properties, "adiabaticT0", E->control.adiabaticT0, fp);*/
     getFloatProperty(properties, "Q0", E->control.Q0, fp);
+    getFloatProperty(properties, "RH", E->control.RH, fp);
 
     getIntProperty(properties, "output_q_surf_CBF", E->output.output_q_surf_CBF, fp);
     getIntProperty(properties, "output_q_botm_CBF", E->output.output_q_botm_CBF, fp);

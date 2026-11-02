@@ -59,6 +59,9 @@ struct All_variables* citcom_init(MPI_Comm *world)
   /* Parameter readers can log before output_init opens the rank log. */
   E->fp = stderr;
   memset(&E->pices, 0, sizeof(E->pices));
+  E->control.RH=1;
+  E->control.rh_initialized=0;
+  memset(E->control.rh_state,0,sizeof(E->control.rh_state));
   E->monitor.solution_cycles=0;
   E->control.keep_going=1;
 

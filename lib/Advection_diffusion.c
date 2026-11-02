@@ -1074,7 +1074,7 @@ static void element_residual(struct All_variables *E, int el,
 */
 
     /* heat production */
-    Q = E->control.Q0;
+    Q = composition_heating(E,m,el);
 
     /* should we add a compositional contribution? */
     if(E->control.tracer_enriched){
@@ -1607,7 +1607,7 @@ void print_thermal_budget(struct All_variables *E)
             ez = ((e-1) % E->lmesh.elz) + 1;
             rho = 0.5 * (E->refstate.rho[ez]
                          + E->refstate.rho[ez+1]);
-            Q = E->control.Q0;
+            Q = composition_heating(E,m,e);
             if(E->control.tracer_enriched) {
                 Q *= 1.0 - E->composition.comp_el[m][0][e];
                 Q += E->composition.comp_el[m][0][e] * E->control.Q0ER;

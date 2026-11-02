@@ -568,6 +568,9 @@ struct CONTROL {
     double qvis_cohesion_pa, qvis_friction_angle_rad;
 
     float Q0;
+    float RH; /* Primordial/background heating ratio; default 1. */
+    double rh_state[4]; /* f0, Qbackground, Qprimordial, baseline power (nd). */
+    int rh_initialized;
     float Q0ER;
 
     int precondition;
@@ -958,6 +961,10 @@ struct All_variables {
   void (* temperatures_conform_bcs)(void*);
 
 };
+
+double composition_heating(struct All_variables *, int, int);
+void composition_heating_initialize(struct All_variables *);
+void composition_heating_report(struct All_variables *);
 
 #ifdef __cplusplus
 }
