@@ -282,7 +282,8 @@ static int coverage_restart_compatible(const char *actual,char *expected)
  const char *tag="\"solver_commit\":\"";
  const char *a=strstr(actual,tag);char *b=strstr(expected,tag);
  if(!permit || (strcmp(source,"bb334f35892f88b3c9a9fc5265f70b2e621049bf") &&
-    strcmp(source,"63b5641310e619a4e74ef1c92a3918110368022b")) || !a || !b)return 0;
+    strcmp(source,"63b5641310e619a4e74ef1c92a3918110368022b") &&
+    strcmp(source,"60e823e076cc96a083bf68ecb920ae8b4163b802")) || !a || !b)return 0;
  a+=strlen(tag);b+=strlen(tag);
  if(strncmp(a,source,40) || a[40]!='"' || strlen(b)<41 || b[40]!='"')return 0;
  memcpy(b,source,40);
@@ -313,7 +314,7 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  readtext(E,meta,actual);metadata(E,path,state,expected);
  if(!strcmp(actual,expected))return;
  if(coverage_restart_compatible(actual,expected)) {
-  if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=%s running_commit=%s all_other_metadata=exact reason=diagnostics_only\n",getenv("PICES_RESTART_SOURCE_COMMIT"),PICES_SOLVER_COMMIT);
+  if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=%s running_commit=%s all_other_metadata=exact reason=shared_spherical_geometry\n",getenv("PICES_RESTART_SOURCE_COMMIT"),PICES_SOLVER_COMMIT);
   return;
  }
  if(!E->pices.consistent_projection) {

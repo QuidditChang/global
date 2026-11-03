@@ -49,21 +49,21 @@ static void write_trace_instructions(struct All_variables *E);
 static int icheck_column_neighbors(struct All_variables *E,
                                    int j, int nel,
                                    double x, double y, double z,
-                                   double rad);
+                                   double theta, double phi, double rad);
 static int icheck_all_columns(struct All_variables *E,
                               int j,
                               double x, double y, double z,
-                              double rad);
+                              double theta, double phi, double rad);
 static int icheck_element(struct All_variables *E,
                           int j, int nel,
                           double x, double y, double z,
-                          double rad);
+                          double theta, double phi, double rad);
 static int icheck_shell(struct All_variables *E,
                         int nel, double rad);
 static int icheck_element_column(struct All_variables *E,
                                  int j, int nel,
                                  double x, double y, double z,
-                                 double rad);
+                                 double theta, double phi, double rad);
 static int icheck_bounds(struct All_variables *E,
                          double *test_point,
                          double *rnode1, double *rnode2,
@@ -1023,14 +1023,14 @@ void full_get_velocity(struct All_variables *E,
                     for(kk=1;kk<=4;kk++)
                         fprintf(E->trace.fpt,"%d: Theta: %f Phi:%f\n",kk,E->sx[j][1][E->ien[j][nelem].node[kk]],E->sx[j][2][E->ien[j][nelem].node[kk]]);
                     sphere_to_cart(E,theta,phi,rad,&x,&y,&z);
-                    ival=icheck_element(E,j,nelem,x,y,z,rad);
+                    ival=icheck_element(E,j,nelem,x,y,z,theta,phi,rad);
                     fprintf(E->trace.fpt,"ICHECK?: %d\n",ival);
                     ival=(E->trace.iget_element)(E,j,0,-99,x,y,z,theta,phi,rad);
                     fprintf(E->trace.fpt,"New Element?: %d\n",ival);
-                    ival=icheck_column_neighbors(E,j,nelem,x,y,z,rad);
+                    ival=icheck_column_neighbors(E,j,nelem,x,y,z,theta,phi,rad);
                     fprintf(E->trace.fpt,"New Element (neighs)?: %d\n",ival);
                     nelem=ival;
-                    ival=icheck_element(E,j,nelem,x,y,z,rad);
+                    ival=icheck_element(E,j,nelem,x,y,z,theta,phi,rad);
                     fprintf(E->trace.fpt,"ICHECK?: %d\n",ival);
                     itry++;
                     if (ival>0) goto try_again;
@@ -1574,7 +1574,7 @@ static void make_regular_grid(struct All_variables *E)
                       pp=mm/elz;
                       if ( (theta>=tmin[pp]) && (theta<=tmax[pp]) && (phi>=fmin[pp]) && (phi<=fmax[pp]) )
                       {
-                      ival=icheck_element_column(E,j,mm,x,y,z,rad);
+                      ival=icheck_element_column(E,j,mm,x,y,z,theta,phi,rad);
                       if (ival>0)
                       {
                       ilast_el=mm;
@@ -1590,7 +1590,7 @@ static void make_regular_grid(struct All_variables *E)
 
                     /* first check previous element */
 
-                    ival=icheck_element_column(E,j,ilast_el,x,y,z,rad);
+                    ival=icheck_element_column(E,j,ilast_el,x,y,z,theta,phi,rad);
                     if (ival>0)
                         {
                             E->trace.regnodetoel[j][kk]=ilast_el;
@@ -1599,7 +1599,7 @@ static void make_regular_grid(struct All_variables *E)
 
                     /* check neighbors */
 
-                    ival=icheck_column_neighbors(E,j,ilast_el,x,y,z,rad);
+                    ival=icheck_column_neighbors(E,j,ilast_el,x,y,z,theta,phi,rad);
                     if (ival>0)
                         {
                             E->trace.regnodetoel[j][kk]=ival;
@@ -1614,7 +1614,7 @@ static void make_regular_grid(struct All_variables *E)
                             pp=mm/elz;
                             if ( (theta>=tmin[pp]) && (theta<=tmax[pp]) && (phi>=fmin[pp]) && (phi<=fmax[pp]) )
                                 {
-                                    ival=icheck_element_column(E,j,mm,x,y,z,rad);
+                                    ival=icheck_element_column(E,j,mm,x,y,z,theta,phi,rad);
                                     if (ival>0)
                                         {
                                             ilast_el=mm;
@@ -2015,7 +2015,7 @@ static void write_trace_instructions(struct All_variables *E)
 static int icheck_column_neighbors(struct All_variables *E,
                                    int j, int nel,
                                    double x, double y, double z,
-                                   double rad)
+                                   double theta, double phi, double rad)
 {
 
     int ival;
@@ -2074,7 +2074,7 @@ static int icheck_column_neighbors(struct All_variables *E,
 
             if ((neighbor[kk]>=1)&&(neighbor[kk]<=E->lmesh.nel))
                 {
-                    ival=icheck_element_column(E,j,neighbor[kk],x,y,z,rad);
+                    ival=icheck_element_column(E,j,neighbor[kk],x,y,z,theta,phi,rad);
                     if (ival>0)
                         {
                             return neighbor[kk];
@@ -2095,7 +2095,7 @@ static int icheck_column_neighbors(struct All_variables *E,
 static int icheck_all_columns(struct All_variables *E,
                               int j,
                               double x, double y, double z,
-                              double rad)
+                              double theta, double phi, double rad)
 {
 
     int icheck;
@@ -2106,7 +2106,7 @@ static int icheck_all_columns(struct All_variables *E,
 
     for (nel=elz;nel<=numel;nel=nel+elz)
         {
-            icheck=icheck_element_column(E,j,nel,x,y,z,rad);
+            icheck=icheck_element_column(E,j,nel,x,y,z,theta,phi,rad);
             if (icheck==1)
                 {
                     return nel;
@@ -2126,7 +2126,7 @@ static int icheck_all_columns(struct All_variables *E,
 static int icheck_element(struct All_variables *E,
                           int j, int nel,
                           double x, double y, double z,
-                          double rad)
+                          double theta, double phi, double rad)
 {
 
     int icheck;
@@ -2137,7 +2137,7 @@ static int icheck_element(struct All_variables *E,
             return 0;
         }
 
-    icheck=icheck_element_column(E,j,nel,x,y,z,rad);
+    icheck=icheck_element_column(E,j,nel,x,y,z,theta,phi,rad);
     if (icheck==0)
         {
             return 0;
@@ -2186,7 +2186,7 @@ static int icheck_shell(struct All_variables *E,
 static int icheck_element_column(struct All_variables *E,
                                  int j, int nel,
                                  double x, double y, double z,
-                                 double rad)
+                                 double theta, double phi, double rad)
 {
 
     double test_point[4];
@@ -2200,7 +2200,9 @@ static int icheck_element_column(struct All_variables *E,
 
     E->trace.istat_elements_checked++;
     if(E->pices.enabled) {
-        double shape[4],theta=atan2(hypot(x,y),z),phi=atan2(y,x);
+        /* Use the same stored/predicted spherical coordinates as interpolation.
+         * Reconstructing angles from xyz can flip a face-tolerance decision. */
+        double shape[4];
         return pices_column_shape(E,j,nel,theta,phi,shape)!=0;
     }
 
@@ -2619,7 +2621,7 @@ int full_iget_element(struct All_variables *E,
     if (E->trace.regtoel[j][0][iregel]==0)
         {
             iel=E->trace.regtoel[j][1][iregel];
-            if(!E->pices.enabled || icheck_element_column(E,j,iel,x,y,z,rad))
+            if(!E->pices.enabled || icheck_element_column(E,j,iel,x,y,z,theta,phi,rad))
                 goto foundit;
         }
 
@@ -2627,7 +2629,7 @@ int full_iget_element(struct All_variables *E,
 
     if (iprevious_element>0)
         {
-            ival=icheck_element_column(E,j,iprevious_element,x,y,z,rad);
+            ival=icheck_element_column(E,j,iprevious_element,x,y,z,theta,phi,rad);
             if (ival==1)
                 {
                     iel=iprevious_element;
@@ -2648,7 +2650,7 @@ int full_iget_element(struct All_variables *E,
 
                     if (nelem!=iprevious_element)
                         {
-                            ival=icheck_element_column(E,j,nelem,x,y,z,rad);
+                            ival=icheck_element_column(E,j,nelem,x,y,z,theta,phi,rad);
                             if (ival==1)
                                 {
                                     iel=nelem;
@@ -2665,7 +2667,7 @@ int full_iget_element(struct All_variables *E,
 
     if (iprevious_element>0)
         {
-            iel=icheck_column_neighbors(E,j,iprevious_element,x,y,z,rad);
+            iel=icheck_column_neighbors(E,j,iprevious_element,x,y,z,theta,phi,rad);
             if (iel>0)
                 {
                     goto foundit;
@@ -2691,7 +2693,7 @@ int full_iget_element(struct All_variables *E,
     icorner[4]=elxz*ely;
     for (kk=1;kk<=4;kk++)
         {
-            ival=icheck_element_column(E,j,icorner[kk],x,y,z,rad);
+            ival=icheck_element_column(E,j,icorner[kk],x,y,z,theta,phi,rad);
             if (ival>0)
                 {
                     iel=icorner[kk];
@@ -2709,7 +2711,7 @@ int full_iget_element(struct All_variables *E,
                     for (kk=1;kk<=ichoice;kk++)
                         {
                             ineighbor=E->trace.regtoel[j][kk][iregel];
-                            iel=icheck_column_neighbors(E,j,ineighbor,x,y,z,rad);
+                            iel=icheck_column_neighbors(E,j,ineighbor,x,y,z,theta,phi,rad);
                             if (iel>0)
                                 {
                                     goto foundit;
@@ -2723,7 +2725,7 @@ int full_iget_element(struct All_variables *E,
 
     E->trace.istat1++;
 
-    iel=icheck_all_columns(E,j,x,y,z,rad);
+    iel=icheck_all_columns(E,j,x,y,z,theta,phi,rad);
 
     /*
       fprintf(E->trace.fpt,"WARNING(full_iget_element)-doing a full search!\n");
