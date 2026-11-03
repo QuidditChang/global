@@ -3550,6 +3550,32 @@ void pdebug(struct All_variables *E, int i)
 /* PICES uses the same gnomonic wedge and radial basis as tracer velocity.
  * Return eight local node weights (two are zero), with a strict host check.
  * One relocation is allowed before a fatal geometry error. */
+static void pices_weight_failure_geometry(struct All_variables *E,int cap,int e,
+                                           double theta,double phi,double rad)
+{
+    double u,v,s[4],sr[3],lo,hi;int w,a;
+    if(e<1 || e>E->lmesh.nel) {
+        fprintf(stderr,"PICES_WEIGHT_HOST rank=%d host=%d valid=0\n",E->parallel.me,e);
+        return;
+    }
+    spherical_to_uv(E,cap,theta,phi,&u,&v);
+    lo=E->sx[cap][3][E->ien[cap][e].node[1]];
+    hi=E->sx[cap][3][E->ien[cap][e].node[5]];
+    sr[1]=(hi-rad)/(hi-lo);sr[2]=(rad-lo)/(hi-lo);
+    fprintf(stderr,"PICES_WEIGHT_HOST rank=%d host=%d uv=%.17g,%.17g radial_bounds=%.17g,%.17g radial_shape=%.17g,%.17g\n",
+        E->parallel.me,e,u,v,lo,hi,sr[1],sr[2]);
+    for(w=1;w<=2;w++) {
+        get_2dshape(E,cap,e,u,v,w,s);
+        fprintf(stderr,"PICES_WEIGHT_SHAPE rank=%d host=%d wedge=%d tangential=%.17g,%.17g,%.17g sum=%.17g\n",
+            E->parallel.me,e,w,s[1],s[2],s[3],s[1]+s[2]+s[3]);
+    }
+    for(a=1;a<=8;a++) {
+        int n=E->ien[cap][e].node[a];
+        fprintf(stderr,"PICES_WEIGHT_NODE rank=%d host=%d corner=%d node=%d spherical=%.17g,%.17g,%.17g\n",
+            E->parallel.me,e,a,n,E->sx[cap][1][n],E->sx[cap][2][n],E->sx[cap][3][n]);
+    }
+}
+
 void tracer_temperature_weights(struct All_variables *E, int cap, int p,
                                 int *nodes, double *weights)
 {
@@ -3570,6 +3596,23 @@ void tracer_temperature_weights(struct All_variables *E, int cap, int p,
         (double)E->monitor.elapsed_time,(double)E->advection.timestep,
         E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],
         E->trace.basicq[cap][3][p],E->trace.basicq[cap][4][p],E->trace.basicq[cap][5][p]);
+    pices_weight_failure_geometry(E,cap,e,E->trace.basicq[cap][0][p],
+        E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
+    if(initial_host!=e) pices_weight_failure_geometry(E,cap,initial_host,
+        E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
+    /* Read-only exhaustive local search, only on the fatal path. */
+    {
+        int candidate,matches=0,nn[9];double ww[9];
+        for(candidate=1;candidate<=E->lmesh.nel;candidate++)
+            if(pices_element_weights(E,cap,candidate,E->trace.basicq[cap][0][p],
+                E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],nn,ww)) {
+                if(matches<8) pices_weight_failure_geometry(E,cap,candidate,
+                    E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p]);
+                matches++;
+            }
+        fprintf(stderr,"PICES_WEIGHT_SEARCH rank=%d local_valid_hosts=%d scanned=%d\n",
+            E->parallel.me,matches,E->lmesh.nel);
+    }
     fflush(stderr);
     pices_fail(E,"invalid particle interpolation weights after relocation");
 }
