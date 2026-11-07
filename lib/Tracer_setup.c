@@ -1,3 +1,5 @@
+/* Failure diagnostics: does not change particle motion. */
+extern void pices_velocity_context(int, const char *);
 /*
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *
@@ -382,6 +384,7 @@ static void predict_tracers(struct All_variables *E)
             z0=E->trace.basicq[j][5][kk];
 
             nelem=E->trace.ielement[j][kk];
+            if(E->pices.enabled)pices_velocity_context(kk,"predictor");
             (E->trace.get_velocity)(E,j,nelem,theta0,phi0,rad0,velocity_vector);
 
             for(a=0;a<3;a++) motion_v[a]=velocity_vector[a+1];
@@ -502,6 +505,7 @@ static void correct_tracers(struct All_variables *E)
 
             nelem=E->trace.ielement[j][kk];
 
+            if(E->pices.enabled)pices_velocity_context(kk,"corrector");
             (E->trace.get_velocity)(E,j,nelem,theta_pred,phi_pred,rad_pred,velocity_vector);
 
             Vx_pred=velocity_vector[1];

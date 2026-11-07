@@ -937,6 +937,15 @@ static int pices_element_weights(struct All_variables *E,int cap,int e,
     return 1;
 }
 
+/* Observational context only; each MPI rank advances particles serially. */
+static int velocity_particle = -1;
+static const char *velocity_stage = "unknown";
+void pices_velocity_context(int particle, const char *stage)
+{
+    velocity_particle=particle; velocity_stage=stage;
+}
+static void pices_weight_failure_geometry(struct All_variables *,int,int,double,double,double);
+
 void full_get_velocity(struct All_variables *E,
                        int j, int nelem,
                        double theta, double phi, double rad,
@@ -968,8 +977,31 @@ void full_get_velocity(struct All_variables *E,
     if(E->pices.enabled) {
         int nodes[9],a,k;
         double weights[9];
-        if(!pices_element_weights(E,j,nelem,theta,phi,rad,nodes,weights))
+        if(!pices_element_weights(E,j,nelem,theta,phi,rad,nodes,weights)) {
+            int p=velocity_particle,candidate,matches=0,q;
+            fprintf(stderr,"PICES_VELOCITY_FAILURE rank=%d step=%d stage=%s particle=%d cap=%d host=%d time=%.17g dt=%.17g spherical=%.17g,%.17g,%.17g tolerance=1e-10\n",
+                E->parallel.me,E->monitor.solution_cycles,velocity_stage,p,
+                E->sphere.capid[j],nelem,(double)E->monitor.elapsed_time,
+                (double)E->advection.timestep,theta,phi,rad);
+            if(p>=1 && p<=E->trace.ntracers[j]) {
+                fprintf(stderr,"PICES_VELOCITY_PARTICLE rank=%d flavor=%.17g basicq=",
+                    E->parallel.me,E->trace.extraq[j][0][p]);
+                for(q=0;q<12;q++)fprintf(stderr,"%s%.17g",q?",":"",E->trace.basicq[j][q][p]);
+                fprintf(stderr,"\n");
+            }
+            pices_weight_failure_geometry(E,j,nelem,theta,phi,rad);
+            fflush(stderr);
+            /* Read-only search: distinguish a wrong host from no local host. */
+            for(candidate=1;candidate<=E->lmesh.nel;candidate++)
+                if(pices_element_weights(E,j,candidate,theta,phi,rad,nodes,weights)) {
+                    if(matches<8)pices_weight_failure_geometry(E,j,candidate,theta,phi,rad);
+                    matches++;
+                }
+            fprintf(stderr,"PICES_VELOCITY_SEARCH rank=%d local_valid_hosts=%d scanned=%d\n",
+                E->parallel.me,matches,E->lmesh.nel);
+            fflush(stderr);
             pices_fail(E,"invalid shared particle velocity weights");
+        }
         velo_from_element_d(E,VV,j,nelem,sphere_key);
         for(k=1;k<=3;k++) {
             velocity_vector[k]=0;
