@@ -284,7 +284,8 @@ static int coverage_restart_compatible(const char *actual,char *expected)
  if(!permit || (strcmp(source,"bb334f35892f88b3c9a9fc5265f70b2e621049bf") &&
     strcmp(source,"63b5641310e619a4e74ef1c92a3918110368022b") &&
     strcmp(source,"60e823e076cc96a083bf68ecb920ae8b4163b802") &&
-    strcmp(source,"b7ace82ef7c4dbdbe9f2213e70302d52da93ddc3")) || !a || !b)return 0;
+    strcmp(source,"b7ace82ef7c4dbdbe9f2213e70302d52da93ddc3") &&
+    strcmp(source,"6a77fff40f4ec28aa5625b5a506d8a4ee0a40500")) || !a || !b)return 0;
  a+=strlen(tag);b+=strlen(tag);
  if(strncmp(a,source,40) || a[40]!='"' || strlen(b)<41 || b[40]!='"')return 0;
  memcpy(b,source,40);

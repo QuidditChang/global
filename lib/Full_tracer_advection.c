@@ -2600,6 +2600,23 @@ static void fix_theta_phi(double *theta, double *phi)
 /* iprevious_element, if known, is the last known element. If    */
 /* it is not known, input a negative number.                     */
 
+/* Column representatives and the final radial element have independently
+ * rounded shape coefficients. Never return a PICES host that interpolation
+ * will reject. The full local search is only used after a failed final check. */
+static int pices_validated_host(struct All_variables *E,int cap,int candidate,
+                                double theta,double phi,double rad)
+{
+    int e,nodes[9];
+    double weights[9];
+    if(pices_element_weights(E,cap,candidate,theta,phi,rad,nodes,weights))
+        return candidate;
+    for(e=1;e<=E->lmesh.nel;e++) {
+        if(e==candidate) continue;
+        if(pices_element_weights(E,cap,e,theta,phi,rad,nodes,weights)) return e;
+    }
+    return -1;
+}
+
 int full_iget_element(struct All_variables *E,
                       int j, int tracer, int iprevious_element,
                       double x, double y, double z,
@@ -2816,6 +2833,16 @@ int full_iget_element(struct All_variables *E,
     /* find radial element */
 
     ifinal_iel=iget_radial_element(E,j,iel,rad);
+    if(E->pices.enabled) {
+        int validated=pices_validated_host(E,j,ifinal_iel,theta,phi,rad);
+        if(validated<1) pices_fail(E,"locator found no interpolation-valid local host");
+        if(validated!=ifinal_iel) {
+            fprintf(E->trace.fpt,"PICES_HOST_RELOCATED old=%d new=%d spherical=%.17g,%.17g,%.17g\n",
+                    ifinal_iel,validated,theta,phi,rad);
+            fflush(E->trace.fpt);
+        }
+        ifinal_iel=validated;
+    }
 
     return ifinal_iel;
 }

@@ -19,6 +19,17 @@ int main(void) {
  META(expected,fresh,10);assert(!coverage_restart_compatible(actual,expected));
  META(expected,fresh,20);actual[60]='X';assert(!coverage_restart_compatible(actual,expected));
  META(actual,fresh,20);assert(!coverage_restart_compatible(actual,expected));
+ const char *replays[]={"b7ace82ef7c4dbdbe9f2213e70302d52da93ddc3",
+                        "6a77fff40f4ec28aa5625b5a506d8a4ee0a40500"};
+ for(int i=0;i<2;i++) {
+  setenv("PICES_RESTART_SOURCE_COMMIT",replays[i],1);
+  META(actual,replays[i],20);META(expected,fresh,20);
+  assert(coverage_restart_compatible(actual,expected));
+  META(expected,fresh,10);assert(!coverage_restart_compatible(actual,expected));
+ }
+ setenv("PICES_RESTART_SOURCE_COMMIT",fresh,1);
+ META(actual,fresh,20);META(expected,fresh,20);
+ assert(!coverage_restart_compatible(actual,expected));
  return 0;
 }
 '''
