@@ -8,4 +8,7 @@ void pices_volume_audit_moved(struct All_variables *);
 void pices_volume_audit_transition(struct All_variables *,int,int,int,int);
 void pices_volume_audit_rebuilt(struct All_variables *);
 void pices_volume_audit_commit(struct All_variables *);
+/* Close one completed ledger before an explicit controlled experiment starts
+ * another independent case. Normal production runs never call this. */
+void pices_volume_audit_reset(struct All_variables *);
 #endif

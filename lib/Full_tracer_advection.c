@@ -33,6 +33,7 @@
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
+#include "pices_volume_control.h"
 
 static void get_2dshape(struct All_variables *E,
                         int j, int nelem,
@@ -173,6 +174,7 @@ void full_tracer_setup(struct All_variables *E)
     if(E->pices.enabled)
         E->pices.slot = E->trace.number_of_extra_quantities++;
     if(pices_motion_enabled(E)) E->trace.number_of_extra_quantities += 2; /* ID and per-step selection */
+    pices_volume_control_register(E);
 
     E->trace.number_of_tracer_quantities =
         E->trace.number_of_basic_quantities +

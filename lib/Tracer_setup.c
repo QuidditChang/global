@@ -45,6 +45,7 @@ extern void pices_velocity_context(int, const char *);
 #include "global_defs.h"
 #include "pices.h"
 #include "pices_volume_audit.h"
+#include "pices_volume_control.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -261,6 +262,14 @@ void tracer_move_particles(struct All_variables *E)
 
 }
 
+/* Exact-trajectory controls still use the production host locator and MPI
+ * migration. This wrapper does not move a particle or modify its label. */
+void tracer_relocate_particles(struct All_variables *E)
+{
+    find_tracers(E);
+    check_sum(E);
+}
+
 void tracer_update_composition(struct All_variables *E)
 {
     /* count # of tracers of each flavor */
@@ -389,6 +398,7 @@ static void predict_tracers(struct All_variables *E)
             (E->trace.get_velocity)(E,j,nelem,theta0,phi0,rad0,velocity_vector);
 
             for(a=0;a<3;a++) motion_v[a]=velocity_vector[a+1];
+            pices_volume_control_check_velocity(E,velocity_vector);
 
             /* Liu: smooth VV if too large */
             t1 = sqrt(pow(velocity_vector[1],2)+pow(velocity_vector[2],2)+pow(velocity_vector[3],2));
@@ -412,6 +422,7 @@ static void predict_tracers(struct All_variables *E)
 
             cart_to_sphere(E,x_pred,y_pred,z_pred,&theta_pred,&phi_pred,&rad_pred);
             (E->trace.keep_within_bounds)(E,&x_pred,&y_pred,&z_pred,&theta_pred,&phi_pred,&rad_pred);
+            pices_volume_control_check_bounds(E,motion_raw,x_pred,y_pred,z_pred);
 
             /* Current Coordinates are always kept in positions 0-5. */
 
@@ -512,6 +523,7 @@ static void correct_tracers(struct All_variables *E)
             Vx_pred=velocity_vector[1];
             Vy_pred=velocity_vector[2];
             Vz_pred=velocity_vector[3];
+            pices_volume_control_check_velocity(E,velocity_vector);
 
             x_cor=x0 + dt * 0.5*(Vx0+Vx_pred);
             y_cor=y0 + dt * 0.5*(Vy0+Vy_pred);
@@ -521,6 +533,7 @@ static void correct_tracers(struct All_variables *E)
             motion_v[0]=Vx_pred;motion_v[1]=Vy_pred;motion_v[2]=Vz_pred;
             cart_to_sphere(E,x_cor,y_cor,z_cor,&theta_cor,&phi_cor,&rad_cor);
             (E->trace.keep_within_bounds)(E,&x_cor,&y_cor,&z_cor,&theta_cor,&phi_cor,&rad_cor);
+            pices_volume_control_check_bounds(E,motion_raw,x_cor,y_cor,z_cor);
 
             /* Fill in Current Positions (other positions are no longer important) */
 

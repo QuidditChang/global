@@ -37,6 +37,21 @@ struct Volume_audit {
 static struct Volume_audit audit;
 void get_global_shape_fn();
 
+void pices_volume_audit_reset(struct All_variables *E)
+{
+    if(audit.pending)pices_fail(E,"cannot reset an unaccepted volume audit step");
+#define CLOSE(name) if(audit.name)fclose(audit.name)
+    CLOSE(global_file);CLOSE(transition_file);CLOSE(radial_file);CLOSE(bin_file);CLOSE(sample_file);
+#undef CLOSE
+#define FREE(name) free(audit.name)
+    FREE(volume);FREE(node_weight);FREE(depth);FREE(before24);FREE(moved24);FREE(baseline);
+    FREE(counts);FREE(total);FREE(old_total);FREE(nbefore);FREE(nmoved);FREE(nafter);FREE(transitions);
+    FREE(before);FREE(arrival);FREE(after);FREE(node);FREE(transfer);FREE(source);FREE(residual);
+    FREE(radial);FREE(bins);FREE(samples);FREE(gathered);
+#undef FREE
+    memset(&audit,0,sizeof(audit));
+}
+
 static size_t cell(int cap,int e)
 { return (size_t)(cap-1)*audit.nel+(size_t)(e-1); }
 static void *allocate(struct All_variables *E,size_t n,size_t size)
