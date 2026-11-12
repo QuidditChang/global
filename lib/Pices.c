@@ -8,6 +8,7 @@
 #include "global_defs.h"
 #include "parsing.h"
 #include "pices.h"
+#include "pices_volume_audit.h"
 #include "pices_benchmark.h"
 #include "temperature_audit.h"
 #include "phase_change.h"
@@ -735,6 +736,7 @@ void pices_initialize(struct All_variables *E)
     p5_particle_initial(E);
     composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
+    pices_volume_audit_initialize(E);
     fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d checkpoint=%d eba=%d\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion,E->pices.checkpoint,E->pices.eba);
     fflush(E->fp);
 }
@@ -869,8 +871,10 @@ void pices_advance(struct All_variables *E)
     }
     memset(diagnostics.q,0,(E->lmesh.nel+1)*PD_NQ*sizeof(double));
 
+    pices_volume_audit_begin(E);
     capture_particle_coverage(E);
     tracer_move_particles(E);
+    pices_volume_audit_moved(E);
     /* Reclassify once at the arrival age, before conductivity is evaluated.
      * Like TA, this temporary clock view does not commit the accepted step. */
     {
@@ -878,6 +882,7 @@ void pices_advance(struct All_variables *E)
         E->monitor.elapsed_time=time+dt;
         if(E->trace.reclassify_flavors) lith_age_conform_tbc(E);
         tracer_update_composition(E);
+        pices_volume_audit_rebuilt(E);
         composition_check(E);
         E->monitor.elapsed_time=time;
     }
@@ -1013,4 +1018,8 @@ void pices_restore(struct All_variables *E)
     for(n=1;n<=E->lmesh.nno;n++) if(E->T[1][n]>E->monitor.T_interior) E->monitor.T_interior=E->T[1][n];
     E->monitor.T_interior=reduce(E,E->monitor.T_interior,MPI_MAX);
     fprintf(E->fp,"PICES_RESTORE step=%d particles=%d Tp_slot=%d time=%.17g\n",E->monitor.solution_cycles,E->trace.ntracers[1],E->pices.slot,(double)E->monitor.elapsed_time);
+    /* The restored checkpoint is already a completed state; it is a new
+     * diagnostic baseline, never a reconstruction of the original step zero. */
+    pices_volume_audit_initialize(E);
+    pices_volume_audit_commit(E);
 }

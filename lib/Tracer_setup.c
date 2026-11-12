@@ -44,6 +44,7 @@ extern void pices_velocity_context(int, const char *);
 #include <math.h>
 #include "global_defs.h"
 #include "pices.h"
+#include "pices_volume_audit.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -678,7 +679,7 @@ static void find_tracers(struct All_variables *E)
 static void count_flavors(struct All_variables *E, int reclassify)
 {
 
-    int j, flavor, e, kk, i;
+    int j, flavor, e, kk, i, audit_old_flavor;
     int numtracers,nox,noy,intage,num1,num2,num3;;
     int ii,jj,zz,node,nodeg;
     float rad, phi, theta, age, age1, dist, dist2, new_flag_depth, flag_depth1, flag_depth2, r_craton, dge_wid, craton_depth;
@@ -783,6 +784,7 @@ static void count_flavors(struct All_variables *E, int reclassify)
                floor(E->trace.extraq[j][0][kk])!=E->trace.extraq[j][0][kk]))
                 pices_fail(E,"invalid integer tracer flavor");
 	    flavor = E->trace.extraq[j][0][kk];
+	    audit_old_flavor = flavor;
 
             /*
              * Preserve cfg/restart flavors when legacy geological
@@ -1037,6 +1039,8 @@ static void count_flavors(struct All_variables *E, int reclassify)
 	       primordial CMB reservoir is represented exclusively by flavor 24. */
 
 	    flavor = E->trace.extraq[j][0][kk];
+            if(audit_old_flavor!=flavor)
+                pices_volume_audit_transition(E,j,e,audit_old_flavor,flavor);
             E->trace.ntracer_flavor[j][flavor][e]++;
         } /* end of kk loop */
 

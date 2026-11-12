@@ -33,6 +33,7 @@
 #include "global_defs.h"
 #include "qvis_limiter.h"
 #include "pices.h"
+#include "pices_volume_audit.h"
 #include "drive_solvers.h"
 #include "phase_change.h"
 
@@ -170,6 +171,8 @@ void general_stokes_solver(struct All_variables *E)
       remove_rigid_rot(E);
   }
 
+  /* A thermal/transport acceptance is not yet a completed coupled step. */
+  pices_volume_audit_commit(E);
   return;
 }
 
