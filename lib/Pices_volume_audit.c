@@ -143,6 +143,9 @@ void pices_volume_audit_initialize(struct All_variables *E)
     FILE *meta;
     if(audit.initialized)return;
     audit.initialized=1;flag=getenv("PICES_VOLUME_AUDIT");
+    /* The ratio-method ledger has different source and reconstruction
+     * semantics. Active weighted runs use VolumeConserve instead. */
+    if(E->pices.volume_mode==2)return;
     if(!flag || !strcmp(flag,"0") || !strcmp(flag,"off"))return;
     if(strcmp(flag,"1"))pices_fail(E,"PICES_VOLUME_AUDIT must be 0 or 1");
     if(!E->pices.enabled || !E->pices.eba || !E->composition.on || E->composition.ibuoy_type!=1 ||

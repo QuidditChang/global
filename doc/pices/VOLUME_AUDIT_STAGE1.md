@@ -69,9 +69,12 @@ fraction bounds use `1e-7`. Raw offsets and bound violations are retained. These
 thresholds do not define an acceptable physical C24 drift and do not relax
 particle-host validity, Stokes convergence, or existing solver checks.
 
-The scripts repository supplies `PostProc.volume_audit.py RUNROOT` to generate
+The EBA runs repository supplies `PostProc.volume_audit.py RUNROOT` to generate
 accepted-step CSV/JSON summaries and C24/radial figures. Diagnostic execution
 time is reported separately; production overhead must be measured on HPC.
+The local checkout is `../runs-cmbhf_EBA` relative to this solver worktree;
+the HPC checkout is `/work/ess-zhangkd/CitcomS/runs` on branch `cmbhf_EBA`.
+Its `PICES.RH20_volume_audit.md` contains the preparation and submission recipe.
 
 ## Validation commands
 

@@ -110,10 +110,10 @@ MPICC=/usr/local/bin/mpicc python3 tests/cbf/build_validation.py \
 python3 tests/pices/check_volume_control_math.py
 MPIEXEC=/usr/local/bin/mpiexec python3 tests/pices/check_volume_control_integration.py \
   /tmp/pices-controls-build ../runs-cmbhf_EBA /tmp/pices-controls-12 \
-  --report ../../scripts/PostProc.volume_control.py
+  --report ../runs-cmbhf_EBA/PostProc.volume_control.py
 MPIEXEC=/usr/local/bin/mpiexec python3 tests/pices/check_volume_control_integration.py \
   /tmp/pices-controls-build ../runs-cmbhf_EBA /tmp/pices-controls-24 \
-  --radial-partitions 2 --report ../../scripts/PostProc.volume_control.py
+  --radial-partitions 2 --report ../runs-cmbhf_EBA/PostProc.volume_control.py
 MPIEXEC=/usr/local/bin/mpiexec MPICC=/usr/local/bin/mpicc \
   python3 tests/pices/check_volume_control_production_regression.py \
   /tmp/pices-controls-build ../runs-cmbhf_EBA /tmp/pices-controls-regression \
@@ -124,5 +124,6 @@ The HPC launcher retains the production 384-rank layout in a 400-slot medium
 allocation, without an online postprocessor. Its 48-hour limit is a requested
 ceiling, not a measured production runtime. The local synchronized RH20 folder
 lacks the original grid file, so a real-input `--check-only` must succeed on
-HPC before submission. The separate scripts repository contains the launch
-recipe in `PICES.RH20_volume_control.md`.
+HPC before submission. The EBA runs repository contains the launch recipe in
+`PICES.RH20_volume_control.md`: locally `../runs-cmbhf_EBA` relative to this
+solver worktree, and `/work/ess-zhangkd/CitcomS/runs` on HPC, branch `cmbhf_EBA`.

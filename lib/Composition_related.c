@@ -35,6 +35,7 @@
 
 
 static void allocate_composition_memory(struct All_variables *E);
+#include "pices_composition_volume.h"
 static void compute_elemental_composition_ratio_method(struct All_variables *E);
 static void compute_elemental_composition_absolute_method(struct All_variables *E);
 static void init_bulk_composition(struct All_variables *E);
@@ -215,6 +216,10 @@ void write_composition_instructions(struct All_variables *E)
 /************ FILL COMPOSITION ************************/
 void fill_composition(struct All_variables *E)
 {
+    if(E->pices.volume_mode==2 && E->pices.volume_initialized) {
+        pices_composition_volume_reconstruct(E);
+        return;
+    }
 
     /* ratio method */
 
@@ -237,6 +242,9 @@ void fill_composition(struct All_variables *E)
     /* Map elemental composition to nodal points */
 
     map_composition_to_nodes(E);
+
+    if(E->pices.volume_mode==1 && E->pices.volume_initialized)
+        pices_composition_volume_reconstruct(E);
 
     return;
 }

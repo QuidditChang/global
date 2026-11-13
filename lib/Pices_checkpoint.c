@@ -47,8 +47,24 @@ int pices_checkpoint_coupled(struct All_variables *E) {
         E->control.qvis_mode || E->advection.fixed_timestep<=0;
 }
 static int schema(struct All_variables *E) {
+ if(E->pices.volume_mode)return 7;
  if(E->control.RH!=1)return 6;
  return E->pices.p4?5:pices_checkpoint_coupled(E)?4:(E->composition.on?3:(E->pices.p4?2:1));
+}
+static void volume_ledger_valid(struct All_variables *E) {
+ int f;double total=0,source=0;
+ if(!E->pices.volume_initialized || E->pices.volume_slot<0 ||
+    E->pices.volume_slot>=E->trace.number_of_extra_quantities)
+  pices_fail(E,"uninitialized composition-volume checkpoint state");
+ for(f=0;f<25;f++) {
+  if(!isfinite(E->pices.volume_baseline[f]) || E->pices.volume_baseline[f]<0 ||
+     !isfinite(E->pices.volume_source[f]))pices_fail(E,"invalid composition-volume checkpoint ledger");
+  total+=E->pices.volume_baseline[f];source+=E->pices.volume_source[f];
+ }
+ if(!isfinite(total) || total<=0 || !isfinite(source) || fabs(source)>1e-10*total ||
+    E->pices.volume_source[24]!=0)pices_fail(E,"unbalanced composition-volume checkpoint sources");
+ for(f=0;f<25;f++)if(E->pices.volume_baseline[f]+E->pices.volume_source[f]<-1e-10*total)
+  pices_fail(E,"negative composition-volume checkpoint target");
 }
 /* Identity of the current forcing brackets, independent of relocation. Future
  * forcing coverage belongs to the run's input manifest, not this checkpoint. */
@@ -87,6 +103,12 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  if(E->pices.p4) {const char method[]="particle_relaxation_v1";pices_sha_add(&s,method,sizeof(method));}
  if(E->pices.ta_before_heat){const char order[]="particle_ta_before_heat_v1";pices_sha_add(&s,order,sizeof(order));}
  if(E->pices.consistent_projection){const char method[]="bounded_consistent_v1";pices_sha_add(&s,method,sizeof(method));}
+ if(E->pices.volume_mode) {
+  const char method[]="bounded_local_weighted_composition_v1";
+  double settings[]={E->pices.volume_mode,E->pices.volume_hops,
+                     E->pices.volume_iterations,E->pices.volume_tolerance};
+  pices_sha_add(&s,method,sizeof(method));pices_sha_add(&s,settings,sizeof(settings));
+ }
  pices_sha_add(&s,E->viscosity.N0,sizeof(E->viscosity.N0[0])*E->viscosity.num_mat);
  pices_sha_add(&s,E->viscosity.E,sizeof(E->viscosity.E[0])*E->viscosity.num_mat);
  pices_sha_add(&s,E->viscosity.T,sizeof(E->viscosity.T[0])*E->viscosity.num_mat);
@@ -164,21 +186,26 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  pices_sha_end(&s,out);
 }
 static void metadata_policy(struct All_variables *E,const char *payload,const char *state,char out[META_SIZE],int legacy_coverage) {
- char sha[65],physics[65],vsha[65],motion[160]="";int n;
+ char sha[65],physics[65],vsha[65],motion[160]="",weight[80]="",volume[320]="";int n;
  if(pices_motion_enabled(E))snprintf(motion,sizeof(motion),",{\"name\":\"motion_id\",\"slot\":%d},{\"name\":\"motion_selected\",\"slot\":%d}",E->pices.slot+1,E->pices.slot+2);
+ if(E->pices.volume_mode) {
+  snprintf(weight,sizeof(weight),",{\"name\":\"volume_weight\",\"slot\":%d}",E->pices.volume_slot);
+  snprintf(volume,sizeof(volume),"\"composition_volume\":{\"method\":\"bounded_local_weighted_composition_v1\",\"mode\":\"%s\",\"hops\":%d,\"iterations\":%d,\"tolerance\":%.17g,\"ledger\":\"initial_volume_and_cumulative_label_sources\"},\n",
+           E->pices.volume_mode==2?"active":"shadow",E->pices.volume_hops,E->pices.volume_iterations,E->pices.volume_tolerance);
+ }
  hashfile(E,state,vsha);hashfile(E,payload,sha);fingerprint(E,physics,legacy_coverage);
  n=snprintf(out,META_SIZE,
  "{\n\"magic\":\"CITCOMS_EBA_PICES\",\n\"schema\":%d,\n\"solver_commit\":\"%s\",\n\"phase\":\"accepted\",\n"
  "\"step\":%d,\n\"time\":%.17g,\n\"dt\":%.17g,\n\"total_timesteps\":%d,\n"
  "\"rank\":%d,\n\"mpi_size\":%d,\n\"decomposition\":[%d,%d,%d],\n\"local_mesh\":[%d,%d,%d],\n\"cap_ids\":[%d],\n"
- "\"particles\":%d,\n\"basic_quantities\":%d,\n\"extraq\":[%s{\"name\":\"Tp\",\"slot\":%d}%s],\n\"flavors\":%d,\n"
+ "\"particles\":%d,\n\"basic_quantities\":%d,\n\"extraq\":[%s{\"name\":\"Tp\",\"slot\":%d}%s%s],\n\"flavors\":%d,\n%s"
  "\"temperature_normalization\":{\"offset_K\":%.17g,\"scale_K\":%.17g},\n"
  "\"interpolation\":\"gnomonic_wedge_radial_v1\",\n\"length\":\"min_directional_rms_cartesian_v1\",\n"
  "\"accepted_velocity_sha256\":\"%s\",\n"
  "\"physics_mesh_sha256\":\"%s\",\n\"checkpoint_sha256\":\"%s\"\n}\n",
  schema(E),PICES_SOLVER_COMMIT,E->monitor.solution_cycles,(double)E->monitor.elapsed_time,(double)E->advection.timestep,E->advection.total_timesteps,
  E->parallel.me,E->parallel.nproc,E->parallel.nprocx,E->parallel.nprocy,E->parallel.nprocz,E->lmesh.nox,E->lmesh.noy,E->lmesh.noz,E->sphere.capid[1],
- E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,motion,E->trace.nflavors,
+ E->trace.ntracers[1],E->trace.number_of_basic_quantities,E->trace.nflavors?"{\"name\":\"flavor\",\"slot\":0},":"",E->pices.slot,motion,weight,E->trace.nflavors,volume,
  E->data.Ttop,E->data.ref_temperature,vsha,physics,sha);
  if(n<0 || n>=META_SIZE)pices_fail(E,"metadata overflow");
 }
@@ -230,6 +257,14 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
    pices_fail(E,"trench geometry write failed");
  }
  if(E->control.RH!=1 && (!E->control.rh_initialized || fwrite(E->control.rh_state,sizeof(double),4,f)!=4))pices_fail(E,"RH state write failed");
+ if(E->pices.volume_mode) {
+  int header[4]={0x564f4c31,1,E->pices.volume_mode,E->pices.volume_slot};
+  volume_ledger_valid(E);
+  if(fwrite(header,sizeof(int),4,f)!=4 ||
+     fwrite(E->pices.volume_baseline,sizeof(double),25,f)!=25 ||
+     fwrite(E->pices.volume_source,sizeof(double),25,f)!=25)
+   pices_fail(E,"composition-volume checkpoint state write failed");
+ }
  if(fflush(f)||fsync(fileno(f))||fclose(f))pices_fail(E,"velocity close failed");
  metadata(E,temp,vt,text);writetext(E,mt,text);
  MPI_Barrier(E->parallel.world);
@@ -244,15 +279,21 @@ void pices_checkpoint_publish(struct All_variables *E,const char *temp,const cha
  * set. Payload hash + exact expected size prevents malformed legacy counts. */
 void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  char meta[512],complete[512],state[512],text[META_SIZE],expected[META_SIZE],sha[65],claimed[65],*p;
- FILE *f;struct stat st;int np=-1,h[8],tr[5],sent[4];float times[3];long offset,bytes;
+ FILE *f;struct stat st;int np=-1,h[8],tr[5],sent[4],saved_schema;float times[3];long offset,bytes;
  pathcat(E,meta,path,".pices.json");pathcat(E,complete,path,".pices.manifest");
  manifest(E,meta,expected);readtext(E,complete,text);
  if(strcmp(text,expected))pices_fail(E,"incomplete or mixed checkpoint manifest");
  readtext(E,meta,text);hashfile(E,path,sha);p=strstr(text,"\"checkpoint_sha256\":\"");
  if(!p || sscanf(p,"\"checkpoint_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"checkpoint checksum mismatch");
+ if(E->pices.volume_mode) {
+  p=strstr(text,"\"schema\":");
+  if(!p || sscanf(p,"\"schema\":%d",&saved_schema)!=1 || saved_schema!=7 ||
+     !strstr(text,"\"name\":\"volume_weight\""))
+   pices_fail(E,"composition-volume restart requires schema 7 with original particle weights");
+ }
  pathcat(E,state,path,".pices.state");hashfile(E,state,sha);p=strstr(text,"\"accepted_velocity_sha256\":\"");
  if(!p || sscanf(p,"\"accepted_velocity_sha256\":\"%64[0-9a-f]\"",claimed)!=1 || strcmp(sha,claimed))pices_fail(E,"accepted velocity checksum mismatch");
- if(stat(state,&st) || st.st_size!=(E->control.RH!=1?4*sizeof(double):0)+(E->pices.p4?(3L*E->lmesh.nno+(E->control.lith_age?E->mesh.nox*E->mesh.noy:0))*sizeof(float):0)+(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
+ if(stat(state,&st) || st.st_size!=(E->pices.volume_mode?4*sizeof(int)+50*sizeof(double):0)+(E->control.RH!=1?4*sizeof(double):0)+(E->pices.p4?(3L*E->lmesh.nno+(E->control.lith_age?E->mesh.nox*E->mesh.noy:0))*sizeof(float):0)+(pices_checkpoint_coupled(E)?(8L*E->lmesh.nel+E->lmesh.nno)*sizeof(float):0)+3L*E->lmesh.nno*sizeof(float)+(E->pices.p4?sizeof(int)+8L*E->lmesh.nel*sizeof(double):0)+(E->composition.on?2*sizeof(int)+(E->trace.reclassify_flavors?E->mesh.nox*E->mesh.noy*sizeof(float):0):0))pices_fail(E,"accepted velocity length mismatch");
  p=strstr(text,"\"particles\":");if(!p || sscanf(p,"\"particles\":%d",&np)!=1 || np<0 || np>INT_MAX/128)pices_fail(E,"invalid particle metadata");
  if(sizeof(int)!=4 || sizeof(float)!=4 || sizeof(double)!=8)pices_fail(E,"unsupported checkpoint ABI");
  f=fopen(path,"rb");if(!f)pices_fail(E,"missing checkpoint payload");
@@ -260,7 +301,7 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(h[0]!=E->lmesh.nox || h[1]!=E->lmesh.noy || h[2]!=E->lmesh.noz || h[3]!=E->parallel.nprocx || h[4]!=E->parallel.nprocy || h[5]!=E->parallel.nprocz || h[6]!=1 || h[7]!=E->monitor.solution_cycles_init || !isfinite(times[0]) || !isfinite(times[1]) || !isfinite(times[2]))pices_fail(E,"checkpoint mesh/clock mismatch");
  offset=44L+16+16L*(E->lmesh.nno+1)+16+8+8L*(E->lmesh.npno+1+E->lmesh.neq);
  if(fseek(f,offset,SEEK_SET) || fread(sent,4,4,f)!=4 || fread(tr,4,5,f)!=5)pices_fail(E,"truncated tracer checkpoint");
- if(sent[0]||sent[1]||sent[2]||sent[3]||tr[0]!=12 || tr[1]!=1+(E->trace.nflavors>0)+2*pices_motion_enabled(E) || tr[2]!=E->trace.nflavors || tr[4]!=np)pices_fail(E,"checkpoint tracer schema/count mismatch");
+ if(sent[0]||sent[1]||sent[2]||sent[3]||tr[0]!=12 || tr[1]!=1+(E->trace.nflavors>0)+2*pices_motion_enabled(E)+(E->pices.volume_mode!=0) || tr[2]!=E->trace.nflavors || tr[4]!=np)pices_fail(E,"checkpoint tracer schema/count mismatch");
  bytes=offset+16+20+(8L*(6+tr[1])+4)*(np+1L);
  if(E->composition.on) {
   int cs[5];
@@ -383,6 +424,15 @@ void pices_checkpoint_restore_state(struct All_variables *E,const char *path) {
      fabs(s[1]*(1+(E->control.RH-1)*s[0])-E->control.Q0)>1.e-12*fmax(1.,fabs(E->control.Q0)))
    pices_fail(E,"incompatible RH normalization");
   E->control.rh_initialized=1;
+ }
+ if(E->pices.volume_mode) {
+  int header[4],expected[4]={0x564f4c31,1,E->pices.volume_mode,E->pices.volume_slot};
+  if(fread(header,sizeof(int),4,f)!=4 || memcmp(header,expected,sizeof(header)) ||
+     fread(E->pices.volume_baseline,sizeof(double),25,f)!=25 ||
+     fread(E->pices.volume_source,sizeof(double),25,f)!=25)
+   pices_fail(E,"invalid or missing composition-volume checkpoint state");
+  E->pices.volume_initialized=1; /* core validates targets against restored particles */
+  volume_ledger_valid(E);
  }
  if(fgetc(f)!=EOF)pices_fail(E,"unexpected checkpoint state suffix");
  if(fclose(f))pices_fail(E,"velocity close failed");

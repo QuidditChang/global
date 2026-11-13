@@ -46,6 +46,7 @@ extern void pices_velocity_context(int, const char *);
 #include "pices.h"
 #include "pices_volume_audit.h"
 #include "pices_volume_control.h"
+#include "pices_composition_volume.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -1052,8 +1053,10 @@ static void count_flavors(struct All_variables *E, int reclassify)
 	       primordial CMB reservoir is represented exclusively by flavor 24. */
 
 	    flavor = E->trace.extraq[j][0][kk];
-            if(audit_old_flavor!=flavor)
+            if(audit_old_flavor!=flavor) {
                 pices_volume_audit_transition(E,j,e,audit_old_flavor,flavor);
+                pices_composition_volume_transition(E,j,kk,audit_old_flavor,flavor);
+            }
             E->trace.ntracer_flavor[j][flavor][e]++;
         } /* end of kk loop */
 

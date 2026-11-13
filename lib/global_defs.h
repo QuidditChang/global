@@ -781,6 +781,11 @@ struct COMPOSITION {
 
 struct PICES_STATE {
     int enabled, initialized, slot, no_diffusion, max_substeps, checkpoint, eba, p4, cbf_valid, consistent_projection, ta_before_heat;
+    /* Opt-in EBA composition-volume reconstruction. The weight slot follows
+     * existing Tp/motion slots and is carried by ordinary extraq migration. */
+    int volume_mode, volume_slot, volume_hops, volume_iterations, volume_initialized;
+    double volume_tolerance;
+    double volume_baseline[25], volume_source[25]; /* replicated global accepted ledger */
     double *K, *mass, *emass, *length, *rate;
     double kappa, dt_heat, min_edge;
     double max_timestep_Ma, cfl;

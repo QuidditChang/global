@@ -10,6 +10,7 @@
 #include "pices.h"
 #include "pices_volume_audit.h"
 #include "pices_volume_control.h"
+#include "pices_composition_volume.h"
 #include "pices_benchmark.h"
 #include "temperature_audit.h"
 #include "phase_change.h"
@@ -70,7 +71,8 @@ static int fixed(struct All_variables *E,int n)
 
 void pices_parameters(struct All_variables *E)
 {
-    char method[32],projection[32]; int restart=0,post=0;
+    char method[32],projection[32],volume_mode[32],volume_number[64],*volume_end;
+    long volume_integer;int restart=0,post=0;
     input_string("energy_solver",method,"pg",E->parallel.me);
     if(strcmp(method,"pg") && strcmp(method,"pices"))
         pices_fail(E,"energy_solver must be pg or pices");
@@ -89,6 +91,35 @@ void pices_parameters(struct All_variables *E)
     input_boolean("pices_p4",&E->pices.p4,"off",E->parallel.me);
     input_boolean("pices_eba",&E->pices.eba,"off",E->parallel.me);
     input_boolean("pices_checkpoint",&E->pices.checkpoint,"off",E->parallel.me);
+    input_string("pices_volume_mode",volume_mode,"off",E->parallel.me);
+    if(strcmp(volume_mode,"off") && strcmp(volume_mode,"shadow") && strcmp(volume_mode,"active"))
+        pices_fail(E,"pices_volume_mode must be off, shadow or active");
+    E->pices.volume_mode=!strcmp(volume_mode,"active")?2:!strcmp(volume_mode,"shadow");
+    E->pices.volume_slot=-1;E->pices.volume_initialized=0;
+    memset(E->pices.volume_baseline,0,sizeof(E->pices.volume_baseline));
+    memset(E->pices.volume_source,0,sizeof(E->pices.volume_source));
+    /* The legacy numeric reader silently clamps bounds and accepts numeric
+     * prefixes. These immutable experiment settings must fail closed. */
+    input_string("pices_volume_hops",volume_number,"2",E->parallel.me);
+    volume_integer=strtol(volume_number,&volume_end,10);
+    while(*volume_end==' ' || *volume_end=='\t')volume_end++;
+    if(volume_end==volume_number || *volume_end || volume_integer<1 || volume_integer>8)
+        pices_fail(E,"pices_volume_hops must be an integer in [1, 8]");
+    E->pices.volume_hops=(int)volume_integer;
+    input_string("pices_volume_iterations",volume_number,"1000",E->parallel.me);
+    volume_integer=strtol(volume_number,&volume_end,10);
+    while(*volume_end==' ' || *volume_end=='\t')volume_end++;
+    if(volume_end==volume_number || *volume_end || volume_integer<1 || volume_integer>100000)
+        pices_fail(E,"pices_volume_iterations must be an integer in [1, 100000]");
+    E->pices.volume_iterations=(int)volume_integer;
+    input_string("pices_volume_tolerance",volume_number,"1e-12",E->parallel.me);
+    E->pices.volume_tolerance=strtod(volume_number,&volume_end);
+    while(*volume_end==' ' || *volume_end=='\t')volume_end++;
+    if(volume_end==volume_number || *volume_end || !isfinite(E->pices.volume_tolerance) ||
+       E->pices.volume_tolerance<=0 || E->pices.volume_tolerance>1e-8)
+        pices_fail(E,"invalid composition-volume neighborhood, iterations or tolerance");
+    if(E->pices.volume_mode && (!E->pices.enabled || !E->pices.eba))
+        pices_fail(E,"composition-volume reconstruction requires EBA PICES");
     if(E->pices.ta_before_heat && (!E->pices.enabled || !E->pices.p4))
         pices_fail(E,"pre-heat TA requires PICES and pices_p4");
     if(E->pices.enabled) {
@@ -677,7 +708,7 @@ static void report_empty_elements(struct All_variables *E)
     if(step!=last_step)fallback_total+=global[4];
     if(E->parallel.me==0) {
         fprintf(E->fp,"PICES_PARTICLE_BALANCE step=%d before_valid=%d before=%lld after=%lld delta=%lld invalid_hosts=%lld count_mismatch_elements=%lld empty_elements=%lld\n",step,coverage_before_valid,global[0],global[1],global[1]-global[0],global[2],global[3],global[4]);
-        fprintf(E->fp,"PICES_EMPTY_MONITOR step=%d empty=%lld volume_nd=%.17g volume_fraction=%.17g longest_current=%d longest_since_start=%d fallback_element_steps=%lld policy=retain_previous_composition\n",step,global[4],global_volume,global_volume/global_domain,(int)global_longest,peak,fallback_total);
+        fprintf(E->fp,"PICES_EMPTY_MONITOR step=%d empty=%lld volume_nd=%.17g volume_fraction=%.17g longest_current=%d longest_since_start=%d fallback_element_steps=%lld policy=%s\n",step,global[4],global_volume,global_volume/global_domain,(int)global_longest,peak,fallback_total,E->pices.volume_mode==2?"conservative_capacity_reconstruction":"retain_previous_composition");
         fflush(E->fp);
     }
     if(pices_motion_enabled(E) && E->parallel.me==161 && E->lmesh.nel>=27151)
@@ -706,7 +737,7 @@ static void composition_check(struct All_variables *E)
         for(i=0;i<E->composition.ncomp;i++) {
             double c=E->composition.comp_el[1][i][e];
             if(!isfinite(c) || c<0 || c>1)pices_fail(E,"invalid composition fraction");
-            if(total>0)error=fmax(error,fabs(c-E->trace.ntracer_flavor[1][i+1][e]/(double)total));
+            if(total>0 && E->pices.volume_mode!=2)error=fmax(error,fabs(c-E->trace.ntracer_flavor[1][i+1][e]/(double)total));
         }
         if(E->control.kC_primordial_flavor>0 && E->control.kC_primordial_flavor<=E->composition.ncomp) {
             double c=E->composition.comp_el[1][E->control.kC_primordial_flavor-1][e];
@@ -717,6 +748,7 @@ static void composition_check(struct All_variables *E)
     global_error=reduce(E,error,MPI_MAX);
     global_min=reduce(E,cmin,MPI_MIN);global_max=reduce(E,cmax,MPI_MAX);
     if(global_error>1e-12)pices_fail(E,"composition/count mismatch");
+    pices_composition_volume_check(E);
     fprintf(E->fp,"PICES_COMPOSITION step=%d primordial=%d error=%.17g Cmin=%.17g Cmax=%.17g kC_ratio=%.17g\n",
         E->monitor.solution_cycles,global_primordial,global_error,global_min,global_max,E->control.kC_ratio);
 }
@@ -735,6 +767,8 @@ void pices_initialize(struct All_variables *E)
     for(n=1;n<=E->lmesh.nno;n++) E->Tdot[1][n]=0;
     pices_motion_initialize(E);
     p5_particle_initial(E);
+    pices_composition_volume_initialize(E,0);
+    if(!pices_volume_control_enabled(E))pices_composition_volume_reconstruct(E);
     composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
     if(!pices_volume_control_enabled(E))pices_volume_audit_initialize(E);
@@ -880,6 +914,7 @@ void pices_advance(struct All_variables *E)
     memset(diagnostics.q,0,(E->lmesh.nel+1)*PD_NQ*sizeof(double));
 
     pices_volume_audit_begin(E);
+    pices_composition_volume_begin(E);
     capture_particle_coverage(E);
     tracer_move_particles(E);
     pices_volume_audit_moved(E);
@@ -1019,6 +1054,8 @@ void pices_restore(struct All_variables *E)
         lith_age_temperature_bound_adj(E,E->mesh.levmax);
         temperatures_conform_bcs(E);
     }
+    pices_composition_volume_initialize(E,1);
+    pices_composition_volume_reconstruct(E);
     composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
     E->advection.total_timesteps=E->monitor.solution_cycles+1;
@@ -1030,4 +1067,5 @@ void pices_restore(struct All_variables *E)
      * diagnostic baseline, never a reconstruction of the original step zero. */
     pices_volume_audit_initialize(E);
     pices_volume_audit_commit(E);
+    pices_composition_volume_commit(E);
 }

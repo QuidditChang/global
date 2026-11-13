@@ -55,7 +55,7 @@ libCitcomS_a_SOURCES = $(sources)
 libCitcomS_la_LDFLAGS = -release $(VERSION)
 libCitcomS_la_SOURCES = $(sources)
 
-sources = Pices_motion.c Pices_benchmark.c pices_benchmark.h Pices.c Pices_volume_audit.c pices_volume_audit.h Pices_volume_control.c pices_volume_control.h pices_volume_control_math.h pices_coverage_stats.h Pices_projection.c Pices_checkpoint.c pices.h pices_sha256.h \
+sources = Pices_motion.c Pices_benchmark.c pices_benchmark.h Pices.c Pices_composition_volume.c pices_composition_volume.h Pices_volume_audit.c pices_volume_audit.h Pices_volume_control.c pices_volume_control.h pices_volume_control_math.h pices_coverage_stats.h Pices_projection.c Pices_checkpoint.c pices.h pices_sha256.h \
 	Advection_diffusion.c \
 	advection_diffusion.h \
 	temperature_audit.h \

@@ -34,6 +34,7 @@
 #include "qvis_limiter.h"
 #include "pices.h"
 #include "pices_volume_audit.h"
+#include "pices_composition_volume.h"
 #include "drive_solvers.h"
 #include "phase_change.h"
 
@@ -173,6 +174,7 @@ void general_stokes_solver(struct All_variables *E)
 
   /* A thermal/transport acceptance is not yet a completed coupled step. */
   pices_volume_audit_commit(E);
+  pices_composition_volume_commit(E);
   return;
 }
 

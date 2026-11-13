@@ -91,7 +91,7 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
-    char energy_solver[32],pices_projection[32];
+    char energy_solver[32],pices_projection[32],pices_volume_mode[32];
     float legacy_inputdiffusivity;
     float reference_conductivity;
 
@@ -126,6 +126,28 @@ PyObject * pyCitcom_Advection_diffusion_set_properties(PyObject *self, PyObject 
     getIntProperty(properties, "pices_max_substeps", E->pices.max_substeps, fp);
     getDoubleProperty(properties, "pices_cfl", E->pices.cfl, fp);
     getDoubleProperty(properties, "pices_max_timestep_Ma", E->pices.max_timestep_Ma, fp);
+    getStringProperty(properties, "pices_volume_mode", pices_volume_mode, fp);
+    if(strcmp(pices_volume_mode,"off") && strcmp(pices_volume_mode,"shadow") && strcmp(pices_volume_mode,"active")) {
+        PyErr_SetString(PyExc_ValueError, "pices_volume_mode must be off, shadow or active");
+        return NULL;
+    }
+    E->pices.volume_mode=!strcmp(pices_volume_mode,"active")?2:!strcmp(pices_volume_mode,"shadow");
+    E->pices.volume_slot=-1;E->pices.volume_initialized=0;
+    memset(E->pices.volume_baseline,0,sizeof(E->pices.volume_baseline));
+    memset(E->pices.volume_source,0,sizeof(E->pices.volume_source));
+    getIntProperty(properties, "pices_volume_hops", E->pices.volume_hops, fp);
+    getIntProperty(properties, "pices_volume_iterations", E->pices.volume_iterations, fp);
+    getDoubleProperty(properties, "pices_volume_tolerance", E->pices.volume_tolerance, fp);
+    if(E->pices.volume_hops<1 || E->pices.volume_hops>8 ||
+       E->pices.volume_iterations<1 || E->pices.volume_iterations>100000 ||
+       !isfinite(E->pices.volume_tolerance) || E->pices.volume_tolerance<=0 || E->pices.volume_tolerance>1e-8) {
+        PyErr_SetString(PyExc_ValueError, "invalid composition-volume neighborhood, iterations or tolerance");
+        return NULL;
+    }
+    if(E->pices.volume_mode && (!E->pices.enabled || !E->pices.eba)) {
+        PyErr_SetString(PyExc_ValueError, "composition-volume reconstruction requires EBA PICES");
+        return NULL;
+    }
 
     getIntProperty(properties, "ADV", E->advection.ADVECTION, fp);
     getIntProperty(properties, "filter_temp", E->advection.filter_temperature, fp);
