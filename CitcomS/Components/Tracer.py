@@ -72,6 +72,12 @@ class Tracer(CitcomComponent):
 
         # (tracer_ic_method == 0)
         tracers_per_element = inv.int("tracers_per_element", default=10)
+        # legacy: original bounding-box seeder (tracer_seed is ignored).
+        # cell_uniform: exactly tracers_per_element in each actual host cell.
+        # volume_uniform: FE-volume quotas preserve only the global total.
+        # B/C share a spherical-volume sampler and fixed private seed.
+        tracer_seed_distribution = inv.str("tracer_seed_distribution", default="legacy")
+        tracer_seed = inv.int("tracer_seed", default=20261114)
 
         # (tracer_ic_method == 1)
         tracer_file = inv.str("tracer_file", default="tracer.dat")

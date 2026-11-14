@@ -95,6 +95,15 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ if(E->trace.seed_distribution==1) {
+  const char method[]="fe_quota_spherical_volume_seed_v1";
+  int settings[]={E->trace.seed_distribution,E->trace.seed};
+  pices_sha_add(&s,method,sizeof(method));pices_sha_add(&s,settings,sizeof(settings));
+ } else if(E->trace.seed_distribution==2) {
+  const char method[]="cell_quota_spherical_volume_seed_v1";
+  int settings[]={E->trace.seed_distribution,E->trace.seed,E->trace.itperel};
+  pices_sha_add(&s,method,sizeof(method));pices_sha_add(&s,settings,sizeof(settings));
+ }
  if(E->control.RH!=1) {
   pices_sha_add(&s,&E->control.RH,sizeof(E->control.RH));
   pices_sha_add(&s,E->control.rh_state,sizeof(E->control.rh_state));

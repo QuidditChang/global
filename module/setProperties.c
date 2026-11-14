@@ -842,8 +842,19 @@ PyObject * pyCitcom_Tracer_set_properties(PyObject *self, PyObject *args)
         report(E,message);
     }
 
+    {
+        char seed_mode[64];int seed;
+        extern void tracer_seed_configure(struct All_variables *,const char *,int);
+        getStringProperty(properties,"tracer_seed_distribution",seed_mode,fp);
+        getIntProperty(properties,"tracer_seed",seed,fp);
+        tracer_seed_configure(E,seed_mode,seed);
+    }
     getIntProperty(properties, "tracer_ic_method",
                    E->trace.ic_method, fp);
+    {
+        extern void tracer_seed_check_ic(struct All_variables *);
+        tracer_seed_check_ic(E);
+    }
 
     if (E->trace.ic_method==0) {
         getIntProperty(properties, "tracers_per_element",

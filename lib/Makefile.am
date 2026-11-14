@@ -122,7 +122,7 @@ sources = Pices_motion.c Pices_benchmark.c pices_benchmark.h Pices.c Pices_compo
 	Stokes_flow_Incomp.c \
 	Topo_gravity.c \
 	tracer_defs.h \
-	Tracer_setup.c \
+	Tracer_setup.c Tracer_seed.c tracer_seed.h tracer_seed_math.h \
 	viscosity_descriptions.h \
 	Viscosity_structures.c \
 	Full_boundary_conditions.c \

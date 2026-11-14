@@ -3786,6 +3786,12 @@ int pices_motion_gradient(struct All_variables *E,int cap,int e,double x,double 
  return 1;
 }
 
+/* Initialization validates a proposed point without relocating or clipping it. */
+int pices_seed_host_valid(struct All_variables *E,int cap,int e,double t,double p,double r) {
+ int nodes[9];double w[9];
+ return pices_element_weights(E,cap,e,t,p,r,nodes,w);
+}
+
 int pices_motion_host_valid(struct All_variables *E,int cap,int p) {
  int nodes[9];double w[9];
  return pices_element_weights(E,cap,E->trace.ielement[cap][p],E->trace.basicq[cap][0][p],E->trace.basicq[cap][1][p],E->trace.basicq[cap][2][p],nodes,w);

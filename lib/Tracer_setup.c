@@ -50,6 +50,7 @@ extern void pices_velocity_context(int, const char *);
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
+#include "tracer_seed.h"
 
 #ifdef USE_GGRD
 void ggrd_init_tracer_flavors(struct All_variables *);
@@ -120,11 +121,16 @@ void tracer_input(struct All_variables *E)
 
     }
     if(E->control.tracer) {
+        char seed_mode[64];int seed;
+        input_string("tracer_seed_distribution",seed_mode,"legacy",m);
+        input_int("tracer_seed",&seed,"20261114,0,nomax",m);
+        tracer_seed_configure(E,seed_mode,seed);
 
         /* tracer_ic_method=0 (random generated array) */
         /* tracer_ic_method=1 (all proc read the same file) */
         /* tracer_ic_method=2 (each proc reads its restart file) */
         input_int("tracer_ic_method",&(E->trace.ic_method),"0,0,nomax",m);
+        tracer_seed_check_ic(E);
 
         if (E->trace.ic_method==0){
             input_int("tracers_per_element",&(E->trace.itperel),"10,0,nomax",m);
@@ -1114,6 +1120,7 @@ void initialize_tracers(struct All_variables *E)
     if (E->trace.nflavors > 0)
         count_tracers_of_flavors(E);
 
+    tracer_seed_report(E);
     return;
 }
 
@@ -1133,6 +1140,12 @@ static void make_tracer_array(struct All_variables *E)
     void init_tracer_flavors();
 
     if (E->parallel.me==0) fprintf(stderr,"Making Tracer Array\n");
+
+    if(E->trace.seed_distribution) {
+        tracer_seed_generate(E);
+        if(E->trace.nflavors)init_tracer_flavors(E);
+        return;
+    }
 
     /* Jiashun has made some modifications */
     for (j=1;j<=E->sphere.caps_per_proc;j++) {

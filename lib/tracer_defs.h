@@ -42,6 +42,8 @@ struct TRACE{
     int ianalytical_tracer_test;
     int ic_method;
     int itperel;
+    int seed_distribution; /* 0: legacy; 1: FE-volume quotas; 2: fixed cell quota */
+    int seed; /* Private initialization RNG; no particle state added. */
     int itracer_interpolation_scheme;
 
     double box_cushion;
