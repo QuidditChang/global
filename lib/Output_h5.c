@@ -1402,12 +1402,12 @@ void h5output_meta(struct All_variables *E)
     hsize_t *dims;
     double *data;
     float tmp;
-    float phase_depth[PHASE_TRANSITIONS];
-    float phase_density_jump[PHASE_TRANSITIONS];
-    float phase_Ra[PHASE_TRANSITIONS];
-    float phase_width[PHASE_TRANSITIONS];
-    float phase_clapeyron[PHASE_TRANSITIONS];
-    float phase_transT[PHASE_TRANSITIONS];
+    float phase_depth[LEGACY_PHASE_TRANSITIONS];
+    float phase_density_jump[LEGACY_PHASE_TRANSITIONS];
+    float phase_Ra[LEGACY_PHASE_TRANSITIONS];
+    float phase_width[LEGACY_PHASE_TRANSITIONS];
+    float phase_clapeyron[LEGACY_PHASE_TRANSITIONS];
+    float phase_transT[LEGACY_PHASE_TRANSITIONS];
 
     input = h5create_group(E->hdf5.file_id, "input", (size_t)0);
 
@@ -1543,7 +1543,7 @@ void h5output_meta(struct All_variables *E)
      * Phase.inventory
      */
 
-    for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+    for(phase_index=0; phase_index<LEGACY_PHASE_TRANSITIONS; phase_index++) {
         phase_depth[phase_index] = E->control.phase[phase_index].depth;
         phase_density_jump[phase_index] =
             E->control.phase[phase_index].density_jump;
@@ -1557,17 +1557,36 @@ void h5output_meta(struct All_variables *E)
     }
 
     status = set_attribute_float_vector(input, "phase_depth",
-                                        PHASE_TRANSITIONS, phase_depth);
+                                        LEGACY_PHASE_TRANSITIONS, phase_depth);
     status = set_attribute_float_vector(input, "phase_delta_rho",
-                                        PHASE_TRANSITIONS, phase_density_jump);
+                                        LEGACY_PHASE_TRANSITIONS, phase_density_jump);
     status = set_attribute_float_vector(input, "phase_Ra",
-                                        PHASE_TRANSITIONS, phase_Ra);
+                                        LEGACY_PHASE_TRANSITIONS, phase_Ra);
     status = set_attribute_float_vector(input, "phase_width",
-                                        PHASE_TRANSITIONS, phase_width);
+                                        LEGACY_PHASE_TRANSITIONS, phase_width);
     status = set_attribute_float_vector(input, "phase_clapeyron",
-                                        PHASE_TRANSITIONS, phase_clapeyron);
+                                        LEGACY_PHASE_TRANSITIONS, phase_clapeyron);
     status = set_attribute_float_vector(input, "phase_transT",
-                                        PHASE_TRANSITIONS, phase_transT);
+                                        LEGACY_PHASE_TRANSITIONS, phase_transT);
+
+    /* Preserve the three-entry legacy attributes and add a distinct block
+     * only for enabled pPv. Values use the same internal units as phase_*. */
+    if(E->control.pPv_enabled) {
+        const struct Phase_transition *p = &E->control.phase[pPv_PHASE_INDEX];
+        status = set_attribute_int(input, "pPv_enabled", E->control.pPv_enabled);
+        status = set_attribute_int(input, "pPv_latent_enabled",
+                                   E->control.pPv_latent_enabled);
+        status = set_attribute_float(input, "pPv_depth", p->depth);
+        status = set_attribute_float(input, "pPv_delta_rho", p->density_jump);
+        status = set_attribute_float(input, "pPv_delta_s", p->entropy_jump);
+        status = set_attribute_float(input, "pPv_Ra", p->Ra);
+        status = set_attribute_float(input, "pPv_width",
+                                     p->inv_width == 0.0 ? 0.0 : 1.0/p->inv_width);
+        status = set_attribute_float(input, "pPv_clapeyron", p->clapeyron);
+        status = set_attribute_float(input, "pPv_transT", p->transT);
+        status = set_attribute_float(input, "pPv_k_ratio", E->control.pPv_k_ratio);
+        status = set_attribute_float(input, "pPv_eta_ratio", E->control.pPv_eta_ratio);
+    }
 
     /*
      * Solver.inventory

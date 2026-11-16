@@ -651,7 +651,7 @@ static void write_mechanical_power(struct All_variables *E)
     struct power_stats wphase[PHASE_TRANSITIONS], wphase_total, wpressure;
     struct power_stats residual;
     static const char *phase_names[PHASE_TRANSITIONS] = {
-        "Wphase_410", "Wphase_520", "Wphase_660"
+        "Wphase_410", "Wphase_520", "Wphase_660", "Wphase_pPv"
     };
     static const char separator[] =
         "==============================================================================\n";
@@ -676,13 +676,12 @@ static void write_mechanical_power(struct All_variables *E)
                     chemical[m][i] -= E->control.Atemp
                         * E->composition.buoyancy_ratio[j]
                         * E->composition.comp_node[m][j][i];
-            for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+            for(phase_index=0; phase_index<phase_change_count(E); phase_index++) {
                 if(E->control.phase[phase_index].Ra != 0.0)
                     phase[phase_index][m][i] =
                         -E->control.phase[phase_index].Ra
-                        * (E->phase_B[phase_index][m][i]
-                           - phase_change_reference_fraction(
-                               E, phase_index, m, i));
+                        * phase_change_density_fraction(E, phase_index, m, i,
+                            E->phase_B[phase_index][m][i]);
                 else
                     phase[phase_index][m][i] = 0.0;
             }
@@ -731,12 +730,15 @@ static void write_mechanical_power(struct All_variables *E)
         print_power_row(E->fp, "Qvisc", qvisc);
         print_power_row(E->fp, "Wthermal", wthermal);
         print_power_row(E->fp, "Wchemical", wchemical);
-        for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
+        for(phase_index=0; phase_index<LEGACY_PHASE_TRANSITIONS; phase_index++)
             print_power_row(E->fp, phase_names[phase_index],
                             wphase[phase_index]);
         print_power_row(E->fp, "Wphase_total", wphase_total);
         print_power_row(E->fp, "Wpressure", wpressure);
         print_power_row(E->fp, "Rmechanical", residual);
+        if(E->control.pPv_enabled)
+            print_power_row(E->fp, phase_names[pPv_PHASE_INDEX],
+                            wphase[pPv_PHASE_INDEX]);
         fputs(separator, E->fp);
         fflush(E->fp);
     }
@@ -890,7 +892,8 @@ const char *const eba_power_names[EBA_POWER_COUNT] = {
     "Wphase_total", "Wpressure", "Rmechanical", "Roperator",
     "Rbody_split", "Rheating_operator", "Qvisc_capped", "Qvisc_used",
     "Qvisc_removed", "Qvisc_potential_removed", "Qvisc_limited_volume",
-    "Daug_operator", "Pplate_aug_correction", "Pother_aug_correction", "Raug_operator"
+    "Daug_operator", "Pplate_aug_correction", "Pother_aug_correction", "Raug_operator",
+    "Wphase_pPv"
 };
 static struct Eba_power_snapshot eba_power_cache;
 static struct All_variables *eba_power_owner;
@@ -1092,11 +1095,11 @@ static void write_eba_mechanical_power(struct All_variables *E)
                         *E->composition.comp_node[m][j][node];
             thermal[m][node]*=E->refstate.gravity[nz];
             chemical[m][node]*=E->refstate.gravity[nz];
-            for(k=0; k<PHASE_TRANSITIONS; k++)
+            for(k=0; k<phase_change_count(E); k++)
                 if(E->control.phase[k].Ra!=0.0)
                     phase[k][m][node]=-E->control.phase[k].Ra
-                        *(E->phase_B[k][m][node]
-                          -phase_change_reference_fraction(E,k,m,node))
+                        *phase_change_density_fraction(E,k,m,node,
+                            E->phase_B[k][m][node])
                         *E->refstate.gravity[nz];
         }
     remove_horiz_ave2(E,thermal); remove_horiz_ave2(E,chemical);
@@ -1104,7 +1107,8 @@ static void write_eba_mechanical_power(struct All_variables *E)
     eba_radial_work(E,chemical,EBA_WCHEMICAL,scale);
     for(k=0; k<PHASE_TRANSITIONS; k++) {
         remove_horiz_ave2(E,phase[k]);
-        eba_radial_work(E,phase[k],EBA_W410+k,scale);
+        eba_radial_work(E,phase[k],
+                        k==pPv_PHASE_INDEX ? EBA_WpPv : EBA_W410+k,scale);
         free_nodal_field(E,phase[k]);
     }
     strain=(float *)malloc((E->lmesh.nel+1)*sizeof(float));
@@ -1137,6 +1141,8 @@ static void write_eba_mechanical_power(struct All_variables *E)
         int n=eba_power_cache.depth_count;
         shell[EBA_WPHASE*n+depth]=shell[EBA_W410*n+depth]
             +shell[EBA_W520*n+depth]+shell[EBA_W660*n+depth];
+        if(E->control.pPv_enabled)
+            shell[EBA_WPHASE*n+depth]+=shell[EBA_WpPv*n+depth];
     }
     for(term=0; term<EBA_POWER_COUNT; term++)
         for(depth=0; depth<eba_power_cache.depth_count; depth++)
@@ -1162,7 +1168,8 @@ static void write_eba_mechanical_power(struct All_variables *E)
                 E->control.qvis_friction_angle_rad);
         fprintf(E->fp,"%-20s  %24s\n","TERM","TOTAL");
         for(term=0; term<EBA_POWER_COUNT; term++)
-            fprintf(E->fp,"%-20s  %+.17e\n",eba_power_names[term],totals[term]);
+            if(term!=EBA_WpPv || E->control.pPv_enabled)
+                fprintf(E->fp,"%-20s  %+.17e\n",eba_power_names[term],totals[term]);
         fprintf(E->fp,"%-20s  %+.17e\n","Qvisc_raw",totals[EBA_QVISC]);
         fflush(E->fp);
     }

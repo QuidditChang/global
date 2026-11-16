@@ -39,7 +39,10 @@ class Phase(CitcomComponent):
 
     def setProperties(self, stream):
         from CitcomSLib import Phase_set_properties
-        Phase_set_properties(self.all_variables, self.inventory, stream)
+        capability = Phase_set_properties(self.all_variables, self.inventory, stream)
+        if self.inventory.pPv_enabled and capability != 1:
+            raise RuntimeError(
+                "pPv requires a rebuilt CitcomSLib with pPv phase support")
         return
 
 
@@ -64,6 +67,19 @@ class Phase(CitcomComponent):
             "phase_clapeyron", default=[0.0235, 0.0, -0.0235])
         phase_transT = pyre.inventory.array(
             "phase_transT", default=[0.78, 0.78, 0.78])
+
+        # Independent pPv controls; old three-entry phase_* cfgs stay valid.
+        pPv_enabled = pyre.inventory.bool("pPv_enabled", default=False)
+        pPv_latent_enabled = pyre.inventory.bool("pPv_latent_enabled", default=False)
+        pPv_k_ratio = pyre.inventory.float("pPv_k_ratio", default=1.0)
+        pPv_eta_ratio = pyre.inventory.float("pPv_eta_ratio", default=1.0)
+        pPv_depth = pyre.inventory.float("pPv_depth", default=0.0)
+        pPv_transT = pyre.inventory.float("pPv_transT", default=0.0)
+        pPv_clapeyron = pyre.inventory.float("pPv_clapeyron", default=0.0)
+        pPv_width = pyre.inventory.float("pPv_width", default=0.0)
+        # Density is dimensional kg/m^3; entropy is normalized by Cp0.
+        pPv_delta_rho = pyre.inventory.float("pPv_delta_rho", default=0.0)
+        pPv_delta_s = pyre.inventory.float("pPv_delta_s", default=0.0)
 
 
 # version

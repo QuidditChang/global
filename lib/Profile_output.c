@@ -128,6 +128,9 @@ enum Profile_flag {
     PROFILE_FLAG_BUOYANCY_PHASE_520,
     PROFILE_FLAG_BUOYANCY_PHASE_660,
     PROFILE_FLAG_BUOYANCY_TOTAL,
+    /* Append optional pPv fields: existing profile flag IDs stay stable. */
+    PROFILE_FLAG_pPv_FRACTION,
+    PROFILE_FLAG_BUOYANCY_PHASE_pPv,
     PROFILE_FLAG_COUNT
 };
 
@@ -173,13 +176,12 @@ static double density_total_at_node(struct All_variables *E, int cap, int node)
             density += density_scale * E->composition.buoyancy_ratio[component]
                 * E->composition.comp_node[cap][component][node];
 
-    for (phase_index = 0; phase_index < PHASE_TRANSITIONS; ++phase_index) {
+    for (phase_index = 0; phase_index < phase_change_count(E); ++phase_index) {
         struct Phase_transition *phase = &E->control.phase[phase_index];
         double fraction = phase_change_fraction_at_temperature(
             E, phase_index, cap, node, E->T[cap][node]);
-        double reference_fraction = phase_change_reference_fraction(
-            E, phase_index, cap, node);
-        density += phase->density_jump * (fraction - reference_fraction);
+        density += phase->density_jump * phase_change_density_fraction(
+            E, phase_index, cap, node, fraction);
     }
 
     if (!isfinite(density) || density <= 0.0) {
@@ -207,6 +209,8 @@ static double conductivity_at_gp(struct All_variables *E, int cap,
     kT = conductivity_temperature_factor(E, temperature);
     k_nd = conductivity_element_prefactor(
         E, cap, element, E->control.reference_conductivity) * kT;
+    k_nd *= pPv_conductivity_factor(E,
+        pPv_fraction_at_gp(E, cap, element, gp, temperature));
     return k_nd * E->data.k0;
 }
 
@@ -368,6 +372,19 @@ static double buoyancy_total_at_node(struct All_variables *E,
     return buoyancy_total_cache[cap][node];
 }
 
+static double pPv_fraction_profile_at_node(struct All_variables *E,
+                                           int cap, int node)
+{
+    return pPv_fraction_at_node(E, cap, node, E->T[cap][node]);
+}
+
+static double buoyancy_phase_pPv_at_node(struct All_variables *E,
+                                         int cap, int node)
+{
+    (void)E;
+    return buoyancy_phase_cache[pPv_PHASE_INDEX][cap][node];
+}
+
 /* Add variables here. The statistical engine does not change. */
 static const struct Profile_variable profile_variables[] = {
     {"temperature", "K", NODE_PROFILE, PROFILE_FLAG_TEMPERATURE,
@@ -453,7 +470,14 @@ static const struct Profile_variable profile_variables[] = {
     {"buoyancy_total", "nondimensional", NODE_PROFILE,
      PROFILE_FLAG_BUOYANCY_TOTAL, PROFILE_DEFAULT_BINS,
      PROFILE_BUOYANCY_TOTAL_MIN, PROFILE_BUOYANCY_TOTAL_MAX,
-     buoyancy_total_at_node, NULL, NULL}
+     buoyancy_total_at_node, NULL, NULL},
+    {"pPv_fraction", "1", NODE_PROFILE, PROFILE_FLAG_pPv_FRACTION,
+     PROFILE_DEFAULT_BINS, 0.0, 1.0000001,
+     pPv_fraction_profile_at_node, NULL, NULL},
+    {"buoyancy_phase_pPv", "nondimensional", NODE_PROFILE,
+     PROFILE_FLAG_BUOYANCY_PHASE_pPv, PROFILE_DEFAULT_BINS,
+     PROFILE_BUOYANCY_TOTAL_MIN, PROFILE_BUOYANCY_TOTAL_MAX,
+     buoyancy_phase_pPv_at_node, NULL, NULL}
 };
 
 #define PROFILE_VARIABLE_COUNT \
@@ -461,6 +485,10 @@ static const struct Profile_variable profile_variables[] = {
 
 static int profile_flag(const struct All_variables *E, int flag_id)
 {
+    /* Enabled pPv runs always expose its state and force contribution. */
+    if (flag_id == PROFILE_FLAG_pPv_FRACTION ||
+        flag_id == PROFILE_FLAG_BUOYANCY_PHASE_pPv)
+        return E->control.pPv_enabled;
     return flag_id >= 0 && flag_id < PROFILE_FLAG_COUNT
         ? E->output.profile_flags[flag_id] : 0;
 }
@@ -581,7 +609,8 @@ static void prepare_buoyancy_profile_fields(struct All_variables *E)
     double gravity;
 
     if (!any_profile_flag(E, PROFILE_FLAG_BUOYANCY_THERMAL,
-                          PROFILE_FLAG_BUOYANCY_TOTAL))
+                          PROFILE_FLAG_BUOYANCY_TOTAL) &&
+        !profile_flag(E, PROFILE_FLAG_BUOYANCY_PHASE_pPv))
         return;
 
     buoyancy_thermal_cache = allocate_profile_field(E, E->lmesh.nno + 1);
@@ -604,14 +633,16 @@ static void prepare_buoyancy_profile_fields(struct All_variables *E)
                     buoyancy_chemical_cache[cap][node] -= E->control.Atemp
                         * E->composition.buoyancy_ratio[component]
                         * E->composition.comp_node[cap][component][node];
-            for (phase_index = 0; phase_index < PHASE_TRANSITIONS;
+            for (phase_index = 0; phase_index < phase_change_count(E);
                  ++phase_index)
                 if (E->control.phase[phase_index].Ra != 0.0)
                     buoyancy_phase_cache[phase_index][cap][node] =
                         -E->control.phase[phase_index].Ra
-                        * (E->phase_B[phase_index][cap][node]
-                           - phase_change_reference_fraction(
-                               E, phase_index, cap, node));
+                        * phase_change_density_fraction(
+                            E, phase_index, cap, node,
+                            /* Output can precede Stokes after restart. */
+                            phase_change_fraction_at_temperature(
+                                E, phase_index, cap, node, E->T[cap][node]));
         }
 
     remove_horiz_ave2(E, buoyancy_thermal_cache);
@@ -824,9 +855,10 @@ static int write_eba_power_npz(struct Npz_writer *writer, struct All_variables *
             status |= npz_add_i32(writer,"mechanical_qvis_mode",&power->qvis_mode,0,NULL);
             status |= add_f64(writer,"mechanical_Qvisc_raw",&power->total[EBA_QVISC],0,NULL);
             for(term=0; term<EBA_POWER_COUNT; term++) {
+                if(term==EBA_WpPv && !E->control.pPv_enabled) continue;
                 snprintf(key,sizeof(key),"mechanical_%s",eba_power_names[term]);
                 status |= add_f64(writer,key,&power->total[term],0,NULL);
-                if(term==EBA_WBODY || (term>=EBA_QVISC && term<=EBA_WPRESSURE) || (term>=EBA_QVISC_CAPPED && term<=EBA_QVISC_LIMITED_VOLUME)) {
+                if(term==EBA_WBODY || term==EBA_WpPv || (term>=EBA_QVISC && term<=EBA_WPRESSURE) || (term>=EBA_QVISC_CAPPED && term<=EBA_QVISC_LIMITED_VOLUME)) {
                     snprintf(key,sizeof(key),"mechanical_%s_shell_integral",
                              eba_power_names[term]);
                     shape[0]=power->depth_count;

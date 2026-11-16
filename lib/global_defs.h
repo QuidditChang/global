@@ -104,7 +104,10 @@ extern "C" {
 
 #define MAX_LEVELS 12   /* max. number of multigrid levels */
 #define NCS      14   /* max. number of sphere caps */
-#define PHASE_TRANSITIONS 3
+/* Keep the public phase_* vectors at three entries. pPv has scalar inputs. */
+#define LEGACY_PHASE_TRANSITIONS 3
+#define pPv_PHASE_INDEX LEGACY_PHASE_TRANSITIONS
+#define PHASE_TRANSITIONS (LEGACY_PHASE_TRANSITIONS + 1)
 
 typedef float higher_precision;  /* matrix coeffs etc */
 typedef double higher_precision1; /* intermediate calculations for finding above coeffs */
@@ -447,6 +450,10 @@ struct CONTROL {
     int zero_elapsed_time;
 
     struct Phase_transition phase[PHASE_TRANSITIONS];
+    int pPv_enabled;
+    int pPv_latent_enabled;
+    float pPv_k_ratio;
+    float pPv_eta_ratio;
 
     int augmented_Lagr;
     double augmented;

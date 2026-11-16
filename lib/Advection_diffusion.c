@@ -975,6 +975,10 @@ void thermal_transport_at_gp(struct All_variables *E, int cap,
         }
         kT = conductivity_temperature_factor(E, tgp[i]);
         kgp[i] = conductivity_prefactor * kT;
+        if(E->control.pPv_enabled && E->control.pPv_k_ratio != 1.0) {
+            double fraction = pPv_fraction_at_gp(E, cap, element, i, tgp[i]);
+            kgp[i] *= pPv_conductivity_factor(E, fraction);
+        }
         kappa_eff[i] = kgp[i] / (rho_gp[i] * cp_gp[i]);
         if(!isfinite(kgp[i]) || !isfinite(kappa_eff[i]) ||
            kappa_eff[i] < 0.0) {
@@ -1107,16 +1111,17 @@ static void element_residual(struct All_variables *E, int el,
         d_rho_g_dr += E->refstate.rho[nz] * E->refstate.gravity[nz]
             * GNx.vpt[GNVXINDEX(2,j,i)];
       }
-      for(phase_index=0;phase_index<PHASE_TRANSITIONS;phase_index++) {
+      for(phase_index=0;phase_index<phase_change_count(E);phase_index++) {
         struct Phase_transition *phase = &E->control.phase[phase_index];
-        if(phase->entropy_jump == 0.0)
+        double entropy = phase_change_entropy(E, phase_index);
+        if(entropy == 0.0)
           continue;
         /* form_rtf_bc stores inverse radius in rtf[3]. */
         phase_change_state(phase, E->sphere.ro-1.0/rtf[3][i], tgp[i],
                            1.0, rho_g, d_rho_g_dr,
                            &q, &fraction, &dX_dT, &dX_dr_pressure);
         phase_energy[i] += rho_gp[i]
-            * (tgp[i] + E->control.surface_temp) * phase->entropy_jump
+            * (tgp[i] + E->control.surface_temp) * entropy
             * (dX_dT * material_dT + dX_dr_pressure * v3[i]);
       }
     }

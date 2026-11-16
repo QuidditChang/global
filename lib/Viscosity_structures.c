@@ -37,6 +37,7 @@
 #include "global_defs.h"
 #include "parsing.h"
 #include "Steinberger_nuref.h"
+#include "phase_change.h"
 
 
 void myerror(struct All_variables *,char *);
@@ -54,6 +55,33 @@ static void read_tracer_visc();
 static void read_tracer_visc22();
 static void get_shape_functions();
 void parallel_process_termination();
+
+/* Apply the equilibrium pPv fraction before stress dependence, yielding and
+ * the final viscosity bounds. Recompute from the current temperature field. */
+static void visc_from_pPv(struct All_variables *E, float **evisc)
+{
+    int cap, element, gp, a;
+    const int ends = enodes[E->mesh.nsd];
+    const int vpts = vpoints[E->mesh.nsd];
+
+    if(!E->control.pPv_enabled || E->control.pPv_eta_ratio == 1.0)
+        return;
+    for(cap=1; cap<=E->sphere.caps_per_proc; cap++)
+        for(element=1; element<=E->lmesh.nel; element++)
+            for(gp=1; gp<=vpts; gp++) {
+                double temperature = 0.0, fraction, viscosity;
+                for(a=1; a<=ends; a++)
+                    temperature += E->T[cap][E->ien[cap][element].node[a]]
+                                 * E->N.vpt[GNVINDEX(a,gp)];
+                fraction = pPv_fraction_at_gp(E, cap, element, gp, temperature);
+                viscosity = evisc[cap][(element-1)*vpts+gp]
+                          * pPv_viscosity_factor(E, fraction);
+                if(!isfinite(viscosity) || viscosity <= 0.0 ||
+                   viscosity > FLT_MAX || (float)viscosity == 0.0f)
+                    myerror(E, "Invalid pPv viscosity before stress/plastic limits");
+                evisc[cap][(element-1)*vpts+gp] = viscosity;
+            }
+}
 
 /* Shared by the standalone parser and the Pyre property bridge. */
 void validate_rheol7_settings(struct All_variables *E)
@@ -330,6 +358,8 @@ void get_system_viscosity(E,propogate,evisc,visc)
 
     if(E->viscosity.CDEPV && E->monitor.solution_cycles > 5)	/* compositional prefactor */
       visc_from_C(E,evisc,E->oldEVI[E->mesh.levmax]);
+
+    visc_from_pPv(E,evisc);
 
     if(E->viscosity.SDEPV)
       visc_from_S(E,evisc,propogate);

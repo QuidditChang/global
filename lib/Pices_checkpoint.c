@@ -150,7 +150,7 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
     E->control.kd_lower_linear,E->control.kd_lower_quadratic};
   pices_sha_add(&s,thermal,sizeof(thermal));
   pices_sha_add(&s,E->refstate.heat_capacity+1,E->lmesh.noz*sizeof(double));
-  for(d=0;d<PHASE_TRANSITIONS;d++) {
+  for(d=0;d<LEGACY_PHASE_TRANSITIONS;d++) {
    const struct Phase_transition *p=&E->control.phase[d];
    double phase[]={p->depth,p->density_jump,p->entropy_jump,p->Ra,p->clapeyron,p->transT,p->inv_width};
    pices_sha_add(&s,phase,sizeof(phase));
@@ -191,6 +191,16 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  if(!legacy_coverage && !E->pices.consistent_projection) {
   const char policy[]="retain_grid_zero_increment_v1";
   pices_sha_add(&s,policy,sizeof(policy));
+ }
+ /* Off is byte-for-byte the legacy physics fingerprint. The optional phase
+  * adds a versioned suffix; raw entropy is included even when latent is off. */
+ if(E->control.pPv_enabled) {
+  const char method[]="pPv_phase_contract_v1";
+  const struct Phase_transition *p=&E->control.phase[pPv_PHASE_INDEX];
+  double settings[]={E->control.pPv_enabled,E->control.pPv_latent_enabled,
+   p->depth,p->density_jump,p->entropy_jump,p->Ra,p->clapeyron,p->transT,p->inv_width,
+   E->control.pPv_k_ratio,E->control.pPv_eta_ratio};
+  pices_sha_add(&s,method,sizeof(method));pices_sha_add(&s,settings,sizeof(settings));
  }
  pices_sha_end(&s,out);
 }

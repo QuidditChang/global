@@ -37,6 +37,7 @@
 #include "global_defs.h"
 #include "material_properties.h"
 #include "parallel_related.h"
+#include "phase_change.h"
 
 static void read_refstate(struct All_variables *E);
 static int read_refstate_data_line(FILE *fp, char *buffer, int length);
@@ -447,6 +448,10 @@ double nodal_conductivity_diagnostic(struct All_variables *E, int cap, int node,
     k_total = kd * kT * kC;
     rho = E->refstate.rho[iz];
     cp = E->refstate.heat_capacity[iz];
+    if(E->control.pPv_enabled && E->control.pPv_k_ratio != 1.0) {
+        double fraction = pPv_fraction_at_node(E, cap, node, E->T[cap][node]);
+        k_total *= pPv_conductivity_factor(E, fraction);
+    }
 
     switch(component) {
     case CONDUCTIVITY_KD: return kd;

@@ -37,8 +37,10 @@ class PhaseEnergyGeometryTest(unittest.TestCase):
             raise RuntimeError("mpicc is required to test the production C block")
         geometry = function((ROOT / "lib/Size_does_matter.c").read_text(),
                             "void form_rtf_bc(")
-        phase = function((ROOT / "lib/Phase_change.c").read_text(),
-                         "void phase_change_state(")
+        phase_source = (ROOT / "lib/Phase_change.c").read_text()
+        phase = "\n".join(function(phase_source, signature) for signature in (
+            "int phase_change_count(", "double phase_change_entropy(",
+            "void phase_change_state("))
         energy = (ROOT / "lib/Advection_diffusion.c").read_text()
         start = energy.index("    for(i=1;i<=vpts;i++) {\n      double material_dT")
         block = energy[start:energy.index("    E->heating_phase[m][el] = 0.0;", start)]
@@ -47,6 +49,7 @@ class PhaseEnergyGeometryTest(unittest.TestCase):
 #include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "phase_change.h"
 double myatan(double y, double x) { return atan2(y,x); }
 '''
         wrapper = r'''
@@ -54,7 +57,8 @@ double energy_at(double ro, double radius, double phase_depth,
                  double temperature, double transT, double clapeyron,
                  double inv_width, double density, double density_gradient,
                  double temperature_rate, double temperature_gradient,
-                 double radial_velocity, double entropy) {
+                 double radial_velocity, double entropy, int phase_index,
+                 int ppv_enabled, int latent_enabled) {
     static struct All_variables state;
     struct All_variables *E=&state;
     struct Shape_function_dx GNx;
@@ -70,11 +74,13 @@ double energy_at(double ro, double radius, double phase_depth,
     E->sphere.ro=ro; E->lmesh.noz=8; E->ien[m]=connectivity;
     E->refstate.rho=ref_rho; E->refstate.gravity=ref_g;
     E->control.surface_temp=0.1;
-    E->control.phase[0].depth=phase_depth;
-    E->control.phase[0].transT=transT;
-    E->control.phase[0].clapeyron=clapeyron;
-    E->control.phase[0].inv_width=inv_width;
-    E->control.phase[0].entropy_jump=entropy;
+    E->control.pPv_enabled=ppv_enabled;
+    E->control.pPv_latent_enabled=latent_enabled;
+    E->control.phase[phase_index].depth=phase_depth;
+    E->control.phase[phase_index].transT=transT;
+    E->control.phase[phase_index].clapeyron=clapeyron;
+    E->control.phase[phase_index].inv_width=inv_width;
+    E->control.phase[phase_index].entropy_jump=entropy;
     for(j=1;j<=ends;j++) {
         double sign=j<=4 ? -1.0 : 1.0;
         connectivity[el].node[j]=j;
@@ -99,9 +105,11 @@ double energy_at(double ro, double radius, double phase_depth,
                         str(path / "test.c"), "-lm", "-o", str(path / "test.so")],
                        check=True, capture_output=True, text=True)
         cls.library = ctypes.CDLL(str(path / "test.so"))
-        cls.energy = cls.library.energy_at
-        cls.energy.argtypes = [ctypes.c_double] * 13
-        cls.energy.restype = ctypes.c_double
+        cls.library.energy_at.argtypes = [ctypes.c_double] * 13 + [ctypes.c_int] * 3
+        cls.library.energy_at.restype = ctypes.c_double
+
+    def energy(self, *args, phase_index=0, enabled=False, latent=False):
+        return self.library.energy_at(*args, phase_index, enabled, latent)
 
     @staticmethod
     def fraction(ro, radius, z0, temperature, t0, gamma, width, rho):
@@ -151,6 +159,14 @@ double energy_at(double ro, double radius, double phase_depth,
         self.assertLess(former,1e-12)
         self.assertGreater(abs(self.energy(1.,radius,z0,.5,.5,.02,250.,
                                            1.2,0.,0.,0.,.2,-.03)),.1)
+
+    def test_pPv_latent_switch_uses_the_same_material_derivative(self):
+        args=[1.,.6,.4,.5,.5,.02,250.,1.2,-.7,.03,-.15,.2,-.03]
+        expected=self.energy(*args)
+        self.assertNotEqual(expected,0.)
+        self.assertEqual(self.energy(*args,phase_index=3,enabled=False,latent=True),0.)
+        self.assertEqual(self.energy(*args,phase_index=3,enabled=True,latent=False),0.)
+        self.assertEqual(self.energy(*args,phase_index=3,enabled=True,latent=True),expected)
 
 
 if __name__ == "__main__":

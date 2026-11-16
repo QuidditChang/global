@@ -6,6 +6,7 @@
 #include "qvis_limiter.h"
 #include "drive_solvers.h"
 #include "npz_writer.h"
+#include "phase_change.h"
 
 static int fixture_size=1;
 static void exchange(struct All_variables *E,double **v,int level) {
@@ -44,7 +45,7 @@ void remove_horiz_ave2(struct All_variables *E,double **f) {
     double avg=0; int i; for(i=1;i<=8;i++) avg+=f[1][i]/8;
     for(i=1;i<=8;i++) f[1][i]-=avg;
 }
-float phase_change_reference_fraction(struct All_variables *E,int p,int m,int i) {
+float phase_change_reference_fraction(const struct All_variables *E,int p,int m,int i) {
     return 0.25f;
 }
 void strain_rate_2_inv(struct All_variables *E,int m,float *s,int root) { s[1]=E->U[1][0]==0 ? 0 : 3; }

@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <sys/types.h>
+#include "element_definitions.h"
 #include "global_defs.h"
 
 #include "parallel_related.h"
@@ -53,9 +54,9 @@ void phase_change_allocate(struct All_variables *E)
   for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
     for(j=1; j<=E->sphere.caps_per_proc; j++) {
       E->phase_B[phase_index][j] =
-          (float *) malloc((nno+1)*sizeof(float));
+          (float *) calloc(nno+1, sizeof(float));
       E->phase_boundary[phase_index][j] =
-          (float *) malloc((nsf+1)*sizeof(float));
+          (float *) calloc(nsf+1, sizeof(float));
     }
 
   return;
@@ -66,24 +67,26 @@ void phase_change_input(struct All_variables *E)
 {
   int m = E->parallel.me;
   int phase_index;
-  float depth[PHASE_TRANSITIONS];
-  float density_jump[PHASE_TRANSITIONS];
-  float entropy_jump[PHASE_TRANSITIONS];
-  float width[PHASE_TRANSITIONS];
-  float clapeyron[PHASE_TRANSITIONS];
-  float transT[PHASE_TRANSITIONS];
+  float depth[LEGACY_PHASE_TRANSITIONS];
+  float density_jump[LEGACY_PHASE_TRANSITIONS];
+  float entropy_jump[LEGACY_PHASE_TRANSITIONS];
+  float width[LEGACY_PHASE_TRANSITIONS];
+  float clapeyron[LEGACY_PHASE_TRANSITIONS];
+  float transT[LEGACY_PHASE_TRANSITIONS];
+  float pPv_depth, pPv_transT, pPv_clapeyron, pPv_width;
+  float pPv_density, pPv_entropy;
 
-  input_float_vector("phase_depth", PHASE_TRANSITIONS, depth, m);
-  input_float_vector("phase_delta_rho", PHASE_TRANSITIONS, density_jump, m);
-  if(!input_float_vector("phase_delta_s", PHASE_TRANSITIONS, entropy_jump, m)) {
+  input_float_vector("phase_depth", LEGACY_PHASE_TRANSITIONS, depth, m);
+  input_float_vector("phase_delta_rho", LEGACY_PHASE_TRANSITIONS, density_jump, m);
+  if(!input_float_vector("phase_delta_s", LEGACY_PHASE_TRANSITIONS, entropy_jump, m)) {
     fprintf(stderr, "phase_delta_s is required for the single-entropy phase model\n");
     parallel_process_termination();
   }
-  input_float_vector("phase_width", PHASE_TRANSITIONS, width, m);
-  input_float_vector("phase_clapeyron", PHASE_TRANSITIONS, clapeyron, m);
-  input_float_vector("phase_transT", PHASE_TRANSITIONS, transT, m);
+  input_float_vector("phase_width", LEGACY_PHASE_TRANSITIONS, width, m);
+  input_float_vector("phase_clapeyron", LEGACY_PHASE_TRANSITIONS, clapeyron, m);
+  input_float_vector("phase_transT", LEGACY_PHASE_TRANSITIONS, transT, m);
 
-  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+  for(phase_index=0; phase_index<LEGACY_PHASE_TRANSITIONS; phase_index++) {
     E->control.phase[phase_index].depth = depth[phase_index];
     E->control.phase[phase_index].density_jump = density_jump[phase_index];
     E->control.phase[phase_index].entropy_jump = entropy_jump[phase_index];
@@ -94,7 +97,59 @@ void phase_change_input(struct All_variables *E)
         (width[phase_index] == 0.0)? 0.0 : 1.0/width[phase_index];
   }
 
+  input_boolean("pPv_enabled", &E->control.pPv_enabled, "off", m);
+  input_boolean("pPv_latent_enabled", &E->control.pPv_latent_enabled, "off", m);
+  input_float("pPv_k_ratio", &E->control.pPv_k_ratio, "1.0", m);
+  input_float("pPv_eta_ratio", &E->control.pPv_eta_ratio, "1.0", m);
+  input_float("pPv_depth", &pPv_depth, "0.0", m);
+  input_float("pPv_transT", &pPv_transT, "0.0", m);
+  input_float("pPv_clapeyron", &pPv_clapeyron, "0.0", m);
+  input_float("pPv_width", &pPv_width, "0.0", m);
+  input_float("pPv_delta_rho", &pPv_density, "0.0", m);
+  input_float("pPv_delta_s", &pPv_entropy, "0.0", m);
+  phase_change_set_pPv(E, pPv_depth, pPv_transT, pPv_clapeyron,
+                       pPv_width, pPv_density, pPv_entropy);
+
   return;
+}
+
+
+void phase_change_set_pPv(struct All_variables *E, float depth, float transT,
+                          float clapeyron, float width, float density_jump,
+                          float entropy_jump)
+{
+  struct Phase_transition *phase = &E->control.phase[pPv_PHASE_INDEX];
+  phase->depth = depth;
+  phase->transT = transT;
+  phase->clapeyron = clapeyron;
+  phase->inv_width = width == 0.0 ? 0.0 : 1.0/width;
+  phase->density_jump = density_jump;
+  phase->entropy_jump = entropy_jump;
+  phase->Ra = 0.0;
+}
+
+
+int phase_change_count(const struct All_variables *E)
+{
+  return E->control.pPv_enabled ? PHASE_TRANSITIONS : LEGACY_PHASE_TRANSITIONS;
+}
+
+
+double phase_change_entropy(const struct All_variables *E, int phase_index)
+{
+  if(phase_index == pPv_PHASE_INDEX &&
+     (!E->control.pPv_enabled || !E->control.pPv_latent_enabled))
+    return 0.0;
+  return E->control.phase[phase_index].entropy_jump;
+}
+
+
+int phase_change_thermal_active(const struct All_variables *E, int phase_index)
+{
+  if(phase_index < LEGACY_PHASE_TRANSITIONS)
+    return 1; /* Preserve the existing three-phase substep constraints. */
+  return E->control.pPv_enabled &&
+      (E->control.pPv_latent_enabled || E->control.pPv_k_ratio != 1.0);
 }
 
 
@@ -102,9 +157,11 @@ void phase_change_apply(struct All_variables *E, double **buoy)
 {
   int phase_index;
 
-  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++)
+  for(phase_index=0; phase_index<phase_change_count(E); phase_index++)
     if(E->control.phase[phase_index].Ra != 0.0)
       apply_one_phase(E, buoy, phase_index);
+    else
+      calc_phase_change(E, phase_index);
 
   return;
 }
@@ -131,12 +188,15 @@ void phase_change_state(const struct Phase_transition *phase,
 }
 
 
-float phase_change_reference_fraction(struct All_variables *E,
+float phase_change_reference_fraction(const struct All_variables *E,
                                       int phase_index, int cap, int node)
 {
   int nz;
   double q, fraction, dX_dT, dX_dr_pressure;
-  struct Phase_transition *phase = &E->control.phase[phase_index];
+  const struct Phase_transition *phase = &E->control.phase[phase_index];
+
+  if(phase_index == pPv_PHASE_INDEX && !E->control.pPv_enabled)
+    return 0.0;
 
   nz = ((node-1) % E->lmesh.noz) + 1;
   phase_change_state(phase, E->sphere.ro-E->sx[cap][3][node],
@@ -147,13 +207,16 @@ float phase_change_reference_fraction(struct All_variables *E,
 }
 
 
-float phase_change_fraction_at_temperature(struct All_variables *E,
+float phase_change_fraction_at_temperature(const struct All_variables *E,
                                            int phase_index, int cap, int node,
                                            double temperature)
 {
   int nz;
   double q, fraction, dX_dT, dX_dr_pressure;
-  struct Phase_transition *phase = &E->control.phase[phase_index];
+  const struct Phase_transition *phase = &E->control.phase[phase_index];
+
+  if(phase_index == pPv_PHASE_INDEX && !E->control.pPv_enabled)
+    return 0.0;
 
   nz = ((node-1) % E->lmesh.noz) + 1;
   phase_change_state(phase, E->sphere.ro-E->sx[cap][3][node], temperature,
@@ -163,19 +226,95 @@ float phase_change_fraction_at_temperature(struct All_variables *E,
 }
 
 
+double phase_change_density_fraction(const struct All_variables *E,
+                                      int phase_index, int cap, int node,
+                                      double fraction)
+{
+  if(phase_index == pPv_PHASE_INDEX)
+    return E->control.pPv_enabled ? fraction : 0.0;
+  return fraction - phase_change_reference_fraction(E, phase_index, cap, node);
+}
+
+
+double pPv_fraction_at_state(const struct All_variables *E, double depth,
+                             double temperature, double rho, double gravity)
+{
+  double q, fraction, dT, dr;
+  if(!E->control.pPv_enabled)
+    return 0.0;
+  phase_change_state(&E->control.phase[pPv_PHASE_INDEX], depth, temperature,
+                     rho, gravity, 0.0, &q, &fraction, &dT, &dr);
+  return fraction;
+}
+
+
+double pPv_fraction_at_node(const struct All_variables *E, int cap, int node,
+                            double temperature)
+{
+  int nz;
+  if(!E->control.pPv_enabled)
+    return 0.0;
+  nz = ((node-1) % E->lmesh.noz) + 1;
+  return pPv_fraction_at_state(E, E->sphere.ro-E->sx[cap][3][node],
+      temperature, E->refstate.rho[nz], E->refstate.gravity[nz]);
+}
+
+
+double pPv_fraction_at_gp(const struct All_variables *E, int cap, int element,
+                          int gp, double temperature)
+{
+  int a, j, node, nz;
+  double xyz[3] = {0.0, 0.0, 0.0};
+  double rho_g = 0.0, weight, radius;
+  if(!E->control.pPv_enabled)
+    return 0.0;
+  for(a=1; a<=8; a++) {
+    node = E->ien[cap][element].node[a];
+    nz = ((node-1) % E->lmesh.noz) + 1;
+    weight = E->N.vpt[GNVINDEX(a,gp)];
+    for(j=0; j<3; j++)
+      xyz[j] += weight * E->x[cap][j+1][node];
+    rho_g += weight * E->refstate.rho[nz] * E->refstate.gravity[nz];
+  }
+  radius = sqrt(xyz[0]*xyz[0]+xyz[1]*xyz[1]+xyz[2]*xyz[2]);
+  return pPv_fraction_at_state(E, E->sphere.ro-radius, temperature, 1.0, rho_g);
+}
+
+
+double pPv_conductivity_factor(const struct All_variables *E, double fraction)
+{
+  if(!E->control.pPv_enabled || E->control.pPv_k_ratio == 1.0)
+    return 1.0;
+  return 1.0 + (E->control.pPv_k_ratio-1.0)*fraction;
+}
+
+
+double pPv_viscosity_factor(const struct All_variables *E, double fraction)
+{
+  if(!E->control.pPv_enabled || E->control.pPv_eta_ratio == 1.0)
+    return 1.0;
+  return pow(E->control.pPv_eta_ratio, fraction);
+}
+
+
 static void apply_one_phase(struct All_variables *E, double **buoy,
                             int phase_index)
 {
   int m, i;
-  float Xref;
   struct Phase_transition *phase = &E->control.phase[phase_index];
   float **B = E->phase_B[phase_index];
 
   calc_phase_change(E, phase_index);
   for(m=1;m<=E->sphere.caps_per_proc;m++)
     for(i=1;i<=E->lmesh.nno;i++) {
-      Xref = phase_change_reference_fraction(E, phase_index, m, i);
-      buoy[m][i] -= phase->Ra * (B[m][i] - Xref);
+      if(phase_index < LEGACY_PHASE_TRANSITIONS) {
+        /* Preserve the original float arithmetic for the legacy solver path. */
+        float Xref = phase_change_reference_fraction(E, phase_index, m, i);
+        buoy[m][i] -= phase->Ra * (B[m][i] - Xref);
+      }
+      else
+        buoy[m][i] -= phase->Ra * phase_change_density_fraction(
+            E, phase_index, m, i, B[m][i]);
     }
 
   if (E->control.verbose) {
@@ -216,6 +355,11 @@ static void calc_phase_change(struct All_variables *E,
         B[m][i] = fraction;
     }
 
+    /* The legacy cache represents one crossing only. pPv may have zero or
+     * multiple crossings; its full fraction field is the authoritative output. */
+    if(phase_index == pPv_PHASE_INDEX)
+      continue;
+
     /* compute the phase boundary, defined as the depth where B==0.5 */
     ns = 0;
     for (k=1;k<=E->lmesh.noy;k++)
@@ -248,7 +392,7 @@ static void debug_phase_change(struct All_variables *E, int phase_index)
     fprintf(E->fp_out,"for cap %d\n",E->sphere.capid[m]);
     for (j=1;j<=E->lmesh.nno;j++) {
       Xref = phase_change_reference_fraction(E, phase_index, m, j);
-      deltaX = B[m][j] - Xref;
+      deltaX = phase_change_density_fraction(E, phase_index, m, j, B[m][j]);
       fprintf(E->fp_out,
               "phase_depth=%.6e node=%06d Z=%.6e T=%.6e "
               "B=%.6e Xref=%.6e deltaX=%.6e "
@@ -284,20 +428,32 @@ static void validate_phase_parameters(struct All_variables *E)
     parallel_process_termination();
   }
 
-  for(phase_index=0; phase_index<PHASE_TRANSITIONS; phase_index++) {
+  if(E->control.pPv_enabled &&
+     (!isfinite(E->control.pPv_k_ratio) || E->control.pPv_k_ratio <= 0.0 ||
+      !isfinite(E->control.pPv_eta_ratio) || E->control.pPv_eta_ratio <= 0.0)) {
+    fprintf(stderr, "pPv conductivity and viscosity ratios must be positive and finite\n");
+    parallel_process_termination();
+  }
+
+  for(phase_index=0; phase_index<phase_change_count(E); phase_index++) {
     phase = &E->control.phase[phase_index];
     legacy_Ra = phase->Ra;
     expected_Ra = E->control.Atemp * phase->density_jump / density_scale;
     phase->Ra = expected_Ra;
 
-    if(phase->depth < 0.0 || phase->depth > E->sphere.ro-E->sphere.ri) {
+    if(!isfinite(phase->depth) || phase->depth < 0.0 ||
+       phase->depth > E->sphere.ro-E->sphere.ri) {
       fprintf(stderr, "phase[%d] depth=%g is outside the model shell\n",
               phase_index, phase->depth);
       parallel_process_termination();
     }
 
-    if(expected_Ra != 0.0 && phase->inv_width == 0.0) {
-      fprintf(stderr, "phase[%d] has nonzero Ra but zero width\n", phase_index);
+    if(!isfinite(phase->density_jump) || !isfinite(phase->clapeyron) ||
+       !isfinite(phase->transT) || !isfinite(phase->inv_width) ||
+       phase->inv_width < 0.0 ||
+       ((expected_Ra != 0.0 || phase->entropy_jump != 0.0 ||
+         phase_index == pPv_PHASE_INDEX) && phase->inv_width <= 0.0)) {
+      fprintf(stderr, "phase[%d] has nonfinite parameters or nonpositive active width\n", phase_index);
       parallel_process_termination();
     }
 
@@ -305,9 +461,20 @@ static void validate_phase_parameters(struct All_variables *E)
       fprintf(stderr, "phase[%d] has non-finite entropy jump\n", phase_index);
       parallel_process_termination();
     }
-    if(phase->density_jump != 0.0 && phase->entropy_jump == 0.0) {
+    if(phase_index < LEGACY_PHASE_TRANSITIONS &&
+       phase->density_jump != 0.0 && phase->entropy_jump == 0.0) {
       fprintf(stderr, "phase[%d] has density contrast but no entropy jump\n",
               phase_index);
+      parallel_process_termination();
+    }
+
+    if(phase_index == pPv_PHASE_INDEX &&
+       (phase->density_jump < 0.0 ||
+        E->data.Ttop + phase->transT*E->data.ref_temperature <= 0.0 ||
+        (E->control.pPv_latent_enabled && phase->density_jump > 0.0 &&
+         phase->clapeyron != 0.0 &&
+         (phase->entropy_jump == 0.0 || phase->clapeyron*phase->entropy_jump > 0.0)))) {
+      fprintf(stderr, "pPv requires nonnegative density increment, positive anchor temperature, and consistent latent entropy\n");
       parallel_process_termination();
     }
 
@@ -338,6 +505,11 @@ static void validate_phase_parameters(struct All_variables *E)
               phase->Ra);
     }
   }
+
+  if(E->parallel.me == 0 && E->control.pPv_enabled)
+    fprintf(stderr, "pPv enabled: direct density increment; latent=%d k_ratio=%g eta_ratio=%g\n",
+            E->control.pPv_latent_enabled, E->control.pPv_k_ratio,
+            E->control.pPv_eta_ratio);
 
   return;
 }

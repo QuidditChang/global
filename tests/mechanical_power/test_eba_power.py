@@ -30,7 +30,10 @@ class MechanicalPowerTest(unittest.TestCase):
         drive = (ROOT/'lib/Drive_solvers.c').read_text()
         element = (ROOT/'lib/Element_calculations.c').read_text()
         profile = (ROOT/'lib/Profile_output.c').read_text()
+        phase = (ROOT/'lib/Phase_change.c').read_text()
         sources = ['#include "fixture.h"', function((ROOT/'lib/Global_operations.c').read_text(), 'double global_vdot(E,A,B,lev)')]
+        sources += [function(phase, 'int phase_change_count('),
+                    function(phase, 'double phase_change_density_fraction(')]
         for signature in ['static double **allocate_nodal_field(',
                           'static double **allocate_element_field(',
                           'static double **allocate_equation_field(',
@@ -72,6 +75,8 @@ class MechanicalPowerTest(unittest.TestCase):
         self.assertEqual(a['mechanical_valid'],1)
         self.assertEqual(a['mechanical_step'],12)
         self.assertEqual(a['mechanical_elapsed_time'],0.125)
+        self.assertNotIn('mechanical_Wphase_pPv',a.files)
+        self.assertNotIn('Wphase_pPv',log)
         self.assertAlmostEqual(float(a['mechanical_Roperator']),0,places=11)
         self.assertAlmostEqual(float(a['mechanical_Rbody_split']),0,places=11)
         self.assertGreater(abs(float(a['mechanical_Wpressure'])),0)
@@ -88,6 +93,17 @@ class MechanicalPowerTest(unittest.TestCase):
                 self.assertEqual(float(fields[1]),float(a['mechanical_'+fields[0]]))
         # The producer intentionally advances the state before NPZ output.
         self.assertEqual(a['mechanical_pre_rigid_rotation'],1)
+
+    def test_pPv_work_is_in_phase_total_and_body_closure(self):
+        a,log=self.run_case(10)
+        self.assertIn('Wphase_pPv',log)
+        self.assertGreater(abs(float(a['mechanical_Wphase_pPv'])),1e-6)
+        phase_sum=sum(float(a['mechanical_Wphase_'+p])
+                      for p in ('410','520','660','pPv'))
+        self.assertAlmostEqual(float(a['mechanical_Wphase_total']),phase_sum,places=11)
+        self.assertAlmostEqual(float(a['mechanical_Rbody_split']),0,places=11)
+        self.assertAlmostEqual(float(a['mechanical_Wphase_pPv_shell_integral'].sum()),
+                               float(a['mechanical_Wphase_pPv']),places=11)
 
     def test_free_dof_residual_is_visible(self):
         a,_=self.run_case(1)

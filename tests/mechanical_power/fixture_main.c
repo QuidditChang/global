@@ -21,6 +21,7 @@ int main(int argc,char **argv) {
     E->lmesh.npno=1; E->lmesh.elz=1; E->lmesh.neq=24;
     E->lmesh.NEL[0]=1; E->lmesh.NPNO[0]=1; E->lmesh.NEQ[0]=24;
     E->control.eba_formulation=1; E->control.Atemp=4;
+    E->control.pPv_enabled=mode==10;
     E->control.disptn_number=mode==3 ? 0 : 2;
     /* Nonzero inv_gruneisen must not introduce ALA beta into EBA. */
     E->control.inv_gruneisen=7;
@@ -49,7 +50,7 @@ int main(int argc,char **argv) {
         E->refstate.rho[nz]=1.2; E->refstate.gravity[nz]=1.1;
         E->refstate.thermal_expansivity[nz]=0.8;
     }
-    for(k=0;k<3;k++) {
+    for(k=0;k<phase_change_count(E);k++) {
         E->control.phase[k].Ra=0.2*(k+1);
         E->phase_B[k][1]=calloc(9,sizeof(float));
     }
@@ -63,9 +64,10 @@ int main(int argc,char **argv) {
         }
         E->N.vpt[GNVINDEX(i,i)]=1; E->EVi[1][i]=2;
         raw[i]=4*1.2*0.8*E->T[1][i]-4*0.3*0.03*i;
-        for(k=0;k<3;k++) {
+        for(k=0;k<phase_change_count(E);k++) {
             E->phase_B[k][1][i]=0.05*(i+k);
-            raw[i]-=E->control.phase[k].Ra*(E->phase_B[k][1][i]-0.25f);
+            raw[i]-=E->control.phase[k].Ra*
+                phase_change_density_fraction(E,k,1,i,E->phase_B[k][1][i]);
         }
         raw[i]*=1.1; avg+=raw[i]/8;
     }

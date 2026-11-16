@@ -32,6 +32,7 @@
 #include <math.h>
 #include "global_defs.h"
 #include "pices.h"
+#include "phase_change.h"
 #include "parallel_related.h"
 #include "setProperties.h"
 
@@ -590,13 +591,19 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
     PyObject *obj, *properties, *out;
     struct All_variables *E;
     FILE *fp;
-    float depth[PHASE_TRANSITIONS];
-    float density_jump[PHASE_TRANSITIONS];
-    float entropy_jump[PHASE_TRANSITIONS];
-    float Ra[PHASE_TRANSITIONS];
-    float width[PHASE_TRANSITIONS];
-    float clapeyron[PHASE_TRANSITIONS];
-    float transT[PHASE_TRANSITIONS];
+    float depth[LEGACY_PHASE_TRANSITIONS];
+    float density_jump[LEGACY_PHASE_TRANSITIONS];
+    float entropy_jump[LEGACY_PHASE_TRANSITIONS];
+    float Ra[LEGACY_PHASE_TRANSITIONS];
+    float width[LEGACY_PHASE_TRANSITIONS];
+    float clapeyron[LEGACY_PHASE_TRANSITIONS];
+    float transT[LEGACY_PHASE_TRANSITIONS];
+    float pPv_depth, pPv_transT, pPv_clapeyron, pPv_width;
+    float pPv_density, pPv_entropy;
+    static const char *phase_vectors[] = {
+        "phase_depth", "phase_delta_rho", "phase_delta_s", "phase_Ra",
+        "phase_width", "phase_clapeyron", "phase_transT"
+    };
     int i;
 
     if (!PyArg_ParseTuple(args, "OOO:Phase_set_properties",
@@ -608,22 +615,39 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
 
     PUTS(("[CitcomS.solver.phase]\n"));
 
-    getFloatVectorProperty(properties, "phase_depth", depth,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_delta_rho", density_jump,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_delta_s", entropy_jump,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_Ra", Ra,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_width", width,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_clapeyron", clapeyron,
-                           PHASE_TRANSITIONS, fp);
-    getFloatVectorProperty(properties, "phase_transT", transT,
-                           PHASE_TRANSITIONS, fp);
+    /* pPv has separate scalars: reject an accidental fourth legacy entry
+     * instead of silently truncating it in the generic vector getter. */
+    for(i=0; i<7; i++) {
+        PyObject *prop = PyObject_GetAttrString(properties, phase_vectors[i]);
+        Py_ssize_t length;
+        if(!prop) return NULL;
+        length = PySequence_Size(prop);
+        Py_DECREF(prop);
+        if(length < 0) return NULL;
+        if(length != LEGACY_PHASE_TRANSITIONS) {
+            PyErr_Format(PyExc_ValueError,
+                         "%s requires exactly %d entries; use pPv_* scalars for pPv",
+                         phase_vectors[i], LEGACY_PHASE_TRANSITIONS);
+            return NULL;
+        }
+    }
 
-    for(i=0; i<PHASE_TRANSITIONS; i++) {
+    getFloatVectorProperty(properties, "phase_depth", depth,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_delta_rho", density_jump,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_delta_s", entropy_jump,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_Ra", Ra,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_width", width,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_clapeyron", clapeyron,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+    getFloatVectorProperty(properties, "phase_transT", transT,
+                           LEGACY_PHASE_TRANSITIONS, fp);
+
+    for(i=0; i<LEGACY_PHASE_TRANSITIONS; i++) {
         E->control.phase[i].depth = depth[i];
         E->control.phase[i].density_jump = density_jump[i];
         E->control.phase[i].entropy_jump = entropy_jump[i];
@@ -633,10 +657,23 @@ PyObject * pyCitcom_Phase_set_properties(PyObject *self, PyObject *args)
         E->control.phase[i].inv_width = (width[i] == 0.0)? 0.0 : 1.0/width[i];
     }
 
+    getIntProperty(properties, "pPv_enabled", E->control.pPv_enabled, fp);
+    getIntProperty(properties, "pPv_latent_enabled", E->control.pPv_latent_enabled, fp);
+    getFloatProperty(properties, "pPv_k_ratio", E->control.pPv_k_ratio, fp);
+    getFloatProperty(properties, "pPv_eta_ratio", E->control.pPv_eta_ratio, fp);
+    getFloatProperty(properties, "pPv_depth", pPv_depth, fp);
+    getFloatProperty(properties, "pPv_transT", pPv_transT, fp);
+    getFloatProperty(properties, "pPv_clapeyron", pPv_clapeyron, fp);
+    getFloatProperty(properties, "pPv_width", pPv_width, fp);
+    getFloatProperty(properties, "pPv_delta_rho", pPv_density, fp);
+    getFloatProperty(properties, "pPv_delta_s", pPv_entropy, fp);
+    phase_change_set_pPv(E, pPv_depth, pPv_transT, pPv_clapeyron,
+                        pPv_width, pPv_density, pPv_entropy);
+
     PUTS(("\n"));
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    /* Phase.py rejects an older installed binary when pPv is enabled. */
+    return PyInt_FromLong(1);
 
 }
 

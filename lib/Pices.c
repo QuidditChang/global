@@ -179,9 +179,11 @@ void pices_validate(struct All_variables *E)
         pices_fail(E,"PICES requires EBA and no enriched heating");
     if(!E->pices.eba && (E->control.Q0!=0 || E->control.disptn_number!=0))
         pices_fail(E,"P1 requires Q0=0, Di=0 and no enriched heating");
-    for(i=0;!E->pices.eba && i<PHASE_TRANSITIONS;i++)
-        if(E->control.phase[i].entropy_jump!=0 || E->control.phase[i].density_jump!=0)
+    for(i=0;!E->pices.eba && i<phase_change_count(E);i++)
+        if(phase_change_entropy(E,i)!=0 || E->control.phase[i].density_jump!=0)
             pices_fail(E,"P1 phase transitions are unsupported");
+    if(!E->pices.eba && E->control.pPv_enabled)
+        pices_fail(E,"pPv requires PICES EBA physics");
     if(E->advection.filter_temperature || !E->advection.ADVECTION ||
        !isfinite(E->advection.fixed_timestep) || E->advection.fixed_timestep<0 || E->mesh.toptbc!=1 || E->mesh.bottbc!=1)
         pices_fail(E,"PICES requires nonnegative fixed dt, ADV=on, no filter, radial Dirichlet");
@@ -203,6 +205,7 @@ static void phase_coefficients(struct All_variables *E,int e,int g,
 {
     int a,j,n,nz; double rg=0,drg=0,ur=0;
     *capacity=rho*cp; if(pressure)*pressure=0;
+    for(j=0;j<PHASE_TRANSITIONS;j++) fractions[j]=0.0;
     for(a=1;a<=8;a++) {
         double N=E->N.vpt[GNVINDEX(a,g)];
         n=E->ien[1][e].node[a];nz=(n-1)%E->lmesh.noz+1;
@@ -210,13 +213,15 @@ static void phase_coefficients(struct All_variables *E,int e,int g,
         drg+=E->refstate.rho[nz]*E->refstate.gravity[nz]*dx->vpt[GNVXINDEX(2,a,g)];
         if(pressure)ur+=E->sphere.cap[1].V[3][n]*N;
     }
-    for(j=0;j<PHASE_TRANSITIONS;j++) {
-        double q,x,dT,dr;
+    for(j=0;j<phase_change_count(E);j++) {
+        double q,x,dT,dr,entropy=phase_change_entropy(E,j);
         const struct Phase_transition *phase=&E->control.phase[j];
         phase_change_state(phase,E->sphere.ro-1/inverse_r,t,1,rg,drg,&q,&x,&dT,&dr);
         fractions[j]=x;
-        *capacity+=rho*(t+E->control.surface_temp)*phase->entropy_jump*dT;
-        if(pressure && phase->entropy_jump!=0)*pressure-=rho*(t+E->control.surface_temp)*phase->entropy_jump*dr*ur;
+        if(entropy!=0) {
+            *capacity+=rho*(t+E->control.surface_temp)*entropy*dT;
+            if(pressure)*pressure-=rho*(t+E->control.surface_temp)*entropy*dr*ur;
+        }
     }
     if(!isfinite(*capacity) || !(*capacity>0) || (pressure && !isfinite(*pressure)))
         pices_fail(E,"nonpositive/nonfinite effective phase capacity or pressure source");
@@ -358,6 +363,22 @@ static void heat_load(struct All_variables *E,const double *field,double *load,d
     free(adi);free(visc);free(raw);
 }
 
+/* Only phases coupled to the heat solve constrain its substep. Density-only
+ * pPv remains active in buoyancy without imposing a new thermal restriction. */
+static double phase_fraction_change(struct All_variables *E,
+    const double *current,const double *previous,int gp_count)
+{
+    int gp,phase_index;
+    double change=0.0;
+    for(gp=8;gp<gp_count;gp++)
+        for(phase_index=0;phase_index<phase_change_count(E);phase_index++)
+            if(phase_change_thermal_active(E,phase_index)) {
+                int index=gp*PHASE_TRANSITIONS+phase_index;
+                change=fmax(change,fabs(current[index]-previous[index])/.05);
+            }
+    return change;
+}
+
 /* Trial updates never modify Tp. Each retry starts from the same frozen
  * coefficients; coefficients are rebuilt for the next accepted substep. */
 static double eba_heat_stage(struct All_variables *E,double *g,const double *old,
@@ -396,8 +417,8 @@ static double eba_heat_stage(struct All_variables *E,double *g,const double *old
                 double k=fabs(E->pices.gp_k[j]/conductivity[j]-1)/.1;
                 change=fmax(change,fmax(c,k));
             }
-            for(j=8*PHASE_TRANSITIONS;j<ng*PHASE_TRANSITIONS;j++)
-                change=fmax(change,fabs(E->pices.gp_fraction[j]-fraction[j])/.05);
+            change=fmax(change,phase_fraction_change(
+                E,E->pices.gp_fraction,fraction,ng));
             change=reduce(E,change,MPI_MAX);
         }
         /* Restore frozen M and kappa for update accounting and Tp relaxation. */
