@@ -461,6 +461,11 @@ struct CONTROL {
 
     float tole_comp;
 
+    /* PICES EBA velocity subsolve policy; default preserves the P3 repair. */
+    char pices_stokes_inner_policy[32];
+    double pices_stokes_inner_rtol;
+    int pices_stokes_diagnostics;
+
     float sob_tolerance;
 
     /* Rayleigh # */

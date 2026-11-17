@@ -1103,6 +1103,19 @@ static double strict_ala_inner_accuracy(struct All_variables *E,
 
 
 
+/* Both standalone and Pyre parsers use the same validation. */
+void pices_stokes_validate_settings(struct All_variables *E)
+{
+    void myerror();
+    if(strcmp(E->control.pices_stokes_inner_policy,"current_rhs")!=0 &&
+       strcmp(E->control.pices_stokes_inner_policy,"legacy_initial_force")!=0)
+        myerror(E,"pices_stokes_inner_policy must be current_rhs or legacy_initial_force");
+    if(!isfinite(E->control.pices_stokes_inner_rtol) ||
+       E->control.pices_stokes_inner_rtol<=0.0 || E->control.pices_stokes_inner_rtol>1.0)
+        myerror(E,"pices_stokes_inner_rtol must be finite and in (0,1]");
+}
+
+
 /* P3 needs an accurate Schur action even after its pressure RHS becomes
  * small. The legacy imp*initial_force_norm tolerance is then too permissive.
  * P5 explicitly uses the same policy in both coupled benchmark arms.
@@ -1111,8 +1124,10 @@ static double pices_stokes_inner_tolerance(struct All_variables *E,
     double **rhs,int lev,double legacy_tolerance)
 {
     double global_vdot();
-    if(((E->pices.enabled && E->pices.eba) || p5_coupled()))
-        return fmax(1.0e-14,1.0e-6*sqrt(global_vdot(E,rhs,rhs,lev)/E->mesh.neq));
+    if(((E->pices.enabled && E->pices.eba) || p5_coupled()) &&
+       strcmp(E->control.pices_stokes_inner_policy,"current_rhs")==0)
+        return fmax(1.0e-14,E->control.pices_stokes_inner_rtol *
+                    sqrt(global_vdot(E,rhs,rhs,lev)/E->mesh.neq));
     return legacy_tolerance;
 }
 
@@ -1367,8 +1382,14 @@ static float solve_Ahat_p_fhat_CG(struct All_variables *E,
              (dpressure>=0 && dpressure<imp) ||
              E->monitor.incompressibility<E->control.tole_comp);
         if(E->parallel.me==0) {
-            fprintf(E->fp,"PICES_STOKES step=%d iterations=%d inner_relative=1e-6 outer_accuracy=%.17g status=%s\n",
-                E->monitor.solution_cycles,count,imp,converged?"PASS":"FAIL");
+            fprintf(E->fp,"PICES_STOKES step=%d iterations=%d inner_relative=%.17g outer_accuracy=%.17g status=%s policy=%s configured_rtol=%.17g initial_force_rms=%.17g dvelocity=%.17g dpressure=%.17g incompressibility=%.17g incompressibility_tolerance=%.17g seconds=%.17g\n",
+                E->monitor.solution_cycles,count,
+                strcmp(E->control.pices_stokes_inner_policy,"current_rhs")==0 ?
+                    E->control.pices_stokes_inner_rtol : 0.0,
+                imp,converged?"PASS":"FAIL",E->control.pices_stokes_inner_policy,
+                E->control.pices_stokes_inner_rtol,v_res,(double)dvelocity,
+                (double)dpressure,(double)E->monitor.incompressibility,
+                (double)E->control.tole_comp,CPU_time0()-time0);
             fflush(E->fp);
         }
         if(!converged)pices_fail(E,"P3 Stokes outer solve did not converge; refusing further advancement/checkpoint");

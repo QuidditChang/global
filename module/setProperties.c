@@ -1115,6 +1115,13 @@ PyObject * pyCitcom_Incompressible_set_properties(PyObject *self, PyObject *args
     getIntProperty(properties, "precond", E->control.precondition, fp);
 
     getDoubleProperty(properties, "accuracy", E->control.accuracy, fp);
+    getStringProperty(properties, "pices_stokes_inner_policy",
+                      E->control.pices_stokes_inner_policy, fp);
+    getDoubleProperty(properties, "pices_stokes_inner_rtol",
+                      E->control.pices_stokes_inner_rtol, fp);
+    getIntProperty(properties, "pices_stokes_diagnostics",
+                   E->control.pices_stokes_diagnostics, fp);
+    pices_stokes_validate_settings(E);
     getFloatProperty(properties, "tole_compressibility", E->control.tole_comp, fp);
 
     getIntProperty(properties, "mg_cycle", E->control.mg_cycle, fp);

@@ -8,6 +8,7 @@
 #include "global_defs.h"
 #include "parsing.h"
 #include "pices.h"
+#include "pices_sha256.h"
 #include "pices_volume_audit.h"
 #include "pices_volume_control.h"
 #include "pices_composition_volume.h"
@@ -774,6 +775,51 @@ static void composition_check(struct All_variables *E)
         E->monitor.solution_cycles,global_primordial,global_error,global_min,global_max,E->control.kC_ratio);
 }
 
+/* Same executable/decomposition only: hash initialized physical arrays, not
+ * velocity/pressure (which legitimately differ between tolerance policies).
+ * One small ordered rank digest is gathered; no particle snapshot is written. */
+static void stokes_initial_identity(struct All_variables *E)
+{
+    PicesSHA grid,particles,combined;
+    char local[130],grid_hex[65],particle_hex[65],*all=NULL;
+    int m,d,n;
+    unsigned long long count=0,total=0;
+    if(!E->control.pices_stokes_diagnostics)return;
+    pices_sha_init(&grid);pices_sha_init(&particles);
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        n=E->trace.ntracers[m];count+=(unsigned long long)n;
+        pices_sha_add(&particles,&n,sizeof(n));
+        for(d=0;d<6;d++)
+            pices_sha_add(&particles,E->trace.basicq[m][d]+1,n*sizeof(double));
+        if(E->trace.nflavors)
+            pices_sha_add(&particles,E->trace.extraq[m][0]+1,n*sizeof(double));
+        pices_sha_add(&particles,E->trace.extraq[m][E->pices.slot]+1,n*sizeof(double));
+        n=E->lmesh.nno;
+        pices_sha_add(&grid,&n,sizeof(n));
+        pices_sha_add(&grid,E->T[m]+1,n*sizeof(E->T[m][0]));
+        if(E->composition.on)for(d=0;d<E->composition.ncomp;d++)
+            pices_sha_add(&grid,E->composition.comp_node[m][d]+1,n*sizeof(double));
+    }
+    pices_sha_end(&grid,local);pices_sha_end(&particles,local+65);
+    if(E->parallel.me==0) {
+        all=malloc((size_t)E->parallel.nproc*130);
+        if(!all)pices_fail(E,"cannot allocate initial Stokes identity digests");
+    }
+    MPI_Gather(local,130,MPI_CHAR,all,130,MPI_CHAR,0,E->parallel.world);
+    MPI_Reduce(&count,&total,1,MPI_UNSIGNED_LONG_LONG,MPI_SUM,0,E->parallel.world);
+    if(E->parallel.me==0) {
+        pices_sha_init(&combined);
+        for(m=0;m<E->parallel.nproc;m++)pices_sha_add(&combined,all+130*m,64);
+        pices_sha_end(&combined,grid_hex);
+        pices_sha_init(&combined);
+        for(m=0;m<E->parallel.nproc;m++)pices_sha_add(&combined,all+130*m+65,64);
+        pices_sha_end(&combined,particle_hex);
+        fprintf(E->fp,"PICES_STOKES_INIT step=%d ranks=%d particles=%llu grid_sha256=%s particles_sha256=%s ordering=rank_cap_array_v1\n",
+                E->monitor.solution_cycles,E->parallel.nproc,total,grid_hex,particle_hex);
+        fflush(E->fp);free(all);
+    }
+}
+
 void pices_initialize(struct All_variables *E)
 {
     int p,n,a,nodes[9]; double w[9],v;
@@ -792,6 +838,7 @@ void pices_initialize(struct All_variables *E)
     if(!pices_volume_control_enabled(E))pices_composition_volume_reconstruct(E);
     composition_check(E);
     assemble(E,E->T[1]); E->pices.initialized=1;
+    stokes_initial_identity(E);
     if(!pices_volume_control_enabled(E))pices_volume_audit_initialize(E);
     fprintf(E->fp,"PICES_INIT method=P1_v1 Tp_slot=%d ntracers=%d kappa=%.17g dt_heat=%.17g min_edge=%.17g no_diffusion=%d checkpoint=%d eba=%d\n",E->pices.slot,E->trace.ntracers[1],E->pices.kappa,E->pices.dt_heat,E->pices.min_edge,E->pices.no_diffusion,E->pices.checkpoint,E->pices.eba);
     fflush(E->fp);

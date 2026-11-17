@@ -266,6 +266,8 @@ void read_initial_settings(struct All_variables *E)
   void set_cg_defaults();
   void set_mg_defaults();
   float tmp;
+  /* Parsing.c limits a standalone input value to 1024 bytes. */
+  char pices_inner_policy[1024];
   int m=E->parallel.me;
 
   /* first the problem type (defines subsequent behaviour) */
@@ -491,6 +493,14 @@ void read_initial_settings(struct All_variables *E)
   input_int("down_heavy",&(E->control.down_heavy),"1,0,nomax",m);
   input_int("up_heavy",&(E->control.up_heavy),"1,0,nomax",m);
   input_double("accuracy",&(E->control.accuracy),"1.0e-4,0.0,1.0",m);
+  input_string("pices_stokes_inner_policy",pices_inner_policy,"current_rhs",m);
+  if(strlen(pices_inner_policy)>=sizeof(E->control.pices_stokes_inner_policy))
+      myerror(E,"pices_stokes_inner_policy is too long");
+  snprintf(E->control.pices_stokes_inner_policy,sizeof(E->control.pices_stokes_inner_policy),"%s",pices_inner_policy);
+  input_double("pices_stokes_inner_rtol",&E->control.pices_stokes_inner_rtol,"1.0e-6",m);
+  input_boolean("pices_stokes_diagnostics",&E->control.pices_stokes_diagnostics,"off",m);
+  pices_stokes_validate_settings(E);
+
 
   input_int("vhighstep",&(E->control.v_steps_high),"1,0,nomax",m);
   input_int("vlowstep",&(E->control.v_steps_low),"250,0,nomax",m);
@@ -1166,6 +1176,9 @@ void global_default_values(E)
   E->control.v_steps_low = 10;
   E->control.v_steps_upper = 1;
   E->control.accuracy = 1.0e-6;
+  strcpy(E->control.pices_stokes_inner_policy,"current_rhs");
+  E->control.pices_stokes_inner_rtol = 1.0e-6;
+  E->control.pices_stokes_diagnostics = 0;
   E->control.vaccuracy = 1.0e-8;
   E->control.verbose=0; /* debugging/profiles */
 

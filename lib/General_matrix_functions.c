@@ -212,7 +212,8 @@ int solve_del2_u(E,d0,F,acc,high_lev)
   char message[200];
 
   double CPU_time0(),initial_time,time;
-  double residual,prior_residual,r0;
+  double residual,prior_residual,r0,true_residual=NAN;
+  int audit_inner=E->pices.enabled && E->pices.eba && E->control.pices_stokes_diagnostics;
   double *D1[NCS], *r[NCS], *Au[NCS];
 
   gneq  = E->mesh.NEQ[high_lev];
@@ -231,9 +232,21 @@ int solve_del2_u(E,d0,F,acc,high_lev)
   initial_time=CPU_time0();
 
   if (!(E->control.NMULTIGRID || E->control.EMULTIGRID)) {
+    if(audit_inner)for(m=1;m<=E->sphere.caps_per_proc;m++) {
+      r[m]=(double *)malloc(neq*sizeof(double));
+      Au[m]=(double *)malloc((neq+1)*sizeof(double));
+      for(i=0;i<neq;i++)r[m][i]=F[m][i];
+    }
     cycles = E->control.v_steps_low;
     residual = conj_grad(E,d0,F,acc,&cycles,high_lev);
     valid = (residual < acc)? 1:0;
+    if(audit_inner) {
+      assemble_del2_u(E,d0,Au,high_lev,1);
+      for(m=1;m<=E->sphere.caps_per_proc;m++)
+        for(i=0;i<neq;i++)Au[m][i]-=r[m][i];
+      true_residual=sqrt(global_vdot(E,Au,Au,high_lev)/gneq);
+      for(m=1;m<=E->sphere.caps_per_proc;m++){free(r[m]);free(Au[m]);}
+    }
   }
 
   else  {
@@ -263,7 +276,6 @@ int solve_del2_u(E,d0,F,acc,high_lev)
 
     cycles = counts;
     if(E->pices.enabled) {
-      double true_residual;
       assemble_del2_u(E,d0,Au,high_lev,1);
       for(m=1;m<=E->sphere.caps_per_proc;m++)
         for(i=0;i<neq;i++)Au[m][i]-=r[m][i];
@@ -296,6 +308,16 @@ int solve_del2_u(E,d0,F,acc,high_lev)
 
   count++;
 
+
+  if(audit_inner && E->parallel.me==0) {
+    fprintf(E->fp,"PICES_STOKES_INNER step=%d policy=%s rhs_rms=%.17g target=%.17g reported=%.17g actual=%.17g work=%d work_kind=%s seconds=%.17g status=%s actual_status=%s\n",
+        E->monitor.solution_cycles,E->control.pices_stokes_inner_policy,r0,acc,
+        residual,true_residual,cycles,
+        (E->control.NMULTIGRID || E->control.EMULTIGRID)?"mg_calls":"cg_iterations",
+        CPU_time0()-initial_time,valid?"PASS":"FAIL",
+        (isfinite(true_residual) && true_residual<acc)?"PASS":"FAIL");
+    fflush(E->fp);
+  }
 
   E->control.total_iteration_cycles += count;
   E->control.total_v_solver_calls += 1;

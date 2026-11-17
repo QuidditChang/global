@@ -95,6 +95,17 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ /* Preserve default-policy checkpoint fingerprints, but never silently
+  * resume a nondefault inner solve policy as the historical default. */
+ if(strcmp(E->control.pices_stokes_inner_policy,"current_rhs") ||
+    E->control.pices_stokes_inner_rtol!=1.0e-6) {
+  const char method[]="configurable_stokes_inner_tolerance_v1";
+  pices_sha_add(&s,method,sizeof(method));
+  pices_sha_add(&s,E->control.pices_stokes_inner_policy,
+                strlen(E->control.pices_stokes_inner_policy)+1);
+  pices_sha_add(&s,&E->control.pices_stokes_inner_rtol,sizeof(double));
+ }
+
  if(E->trace.seed_distribution==1) {
   const char method[]="fe_quota_spherical_volume_seed_v1";
   int settings[]={E->trace.seed_distribution,E->trace.seed};

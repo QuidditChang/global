@@ -22,6 +22,7 @@ void pices_initialize(struct All_variables *);
 void pices_advance(struct All_variables *);
 void pices_limit_timestep(struct All_variables *);
 int pices_time_finished(struct All_variables *);
+void pices_stokes_validate_settings(struct All_variables *E);
 void pices_fail(struct All_variables *, const char *);
 void tracer_temperature_weights(struct All_variables *, int, int, int *, double *);
 void thermal_transport_at_gp(struct All_variables *, int, int, const double *,
