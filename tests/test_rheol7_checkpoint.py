@@ -13,7 +13,7 @@ source=(root/'lib/Pices_checkpoint.c').read_text()
 coupled=source[source.index('int pices_checkpoint_coupled('):source.index('static int schema(')]
 fingerprint=source[source.index('static void fingerprint('):source.index('static void metadata_policy(')]
 tag_start=fingerprint.index(' /* The new baseline 7')
-tag_end=fingerprint.index(' /* Preserve default-policy checkpoint fingerprints',tag_start)
+tag_end=fingerprint.index(' if(strcmp(E->control.pices_stokes_inner_policy,',tag_start)
 untagged=(fingerprint[:tag_start]+fingerprint[tag_end:]).replace('static void fingerprint(', 'static void untagged_fingerprint(')
 prefix=r'''
 #include <assert.h>

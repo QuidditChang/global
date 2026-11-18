@@ -59,6 +59,11 @@ struct All_variables* citcom_init(MPI_Comm *world)
   /* Parameter readers can log before output_init opens the rank log. */
   E->fp = stderr;
   memset(&E->pices, 0, sizeof(E->pices));
+  /* Reserved rheology switches have no reader in either input frontend.
+   * PICES checkpoint validation still checks them; malloc is not zeroed. */
+  E->viscosity.FREEZE = 0;
+  E->viscosity.weak_blobs = 0;
+  E->viscosity.weak_zones = 0;
   E->control.RH=1;
   E->control.rh_initialized=0;
   memset(E->control.rh_state,0,sizeof(E->control.rh_state));

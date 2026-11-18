@@ -152,8 +152,18 @@ void pices_validate(struct All_variables *E)
         if(!E->viscosity.update_allowed || !E->viscosity.FROM_SYSTEM ||
            (E->viscosity.RHEOL!=1 && !steinberger_is_family(E->viscosity.RHEOL)) || E->viscosity.SDEPV ||
            E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
-           E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones)
-            pices_fail(E,"checkpoint requires supported Newtonian rheology and viscosity rebuilds");
+           E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones) {
+            char why[512];
+            snprintf(why,sizeof(why),
+                     "checkpoint requires supported Newtonian rheology and viscosity rebuilds; "
+                     "RHEOL=%d update_allowed=%d FROM_SYSTEM=%d SDEPV=%d PDEPV=%d "
+                     "CDEPV=%d FREEZE=%d channel=%d wedge=%d weak_blobs=%d weak_zones=%d",
+                     E->viscosity.RHEOL,E->viscosity.update_allowed,E->viscosity.FROM_SYSTEM,
+                     E->viscosity.SDEPV,E->viscosity.PDEPV,E->viscosity.CDEPV,
+                     E->viscosity.FREEZE,E->viscosity.channel,E->viscosity.wedge,
+                     E->viscosity.weak_blobs,E->viscosity.weak_zones);
+            pices_fail(E,why);
+        }
         if(E->viscosity.RHEOL==1)for(i=0;i<E->viscosity.num_mat;i++)
             if(E->viscosity.N0[i]!=E->viscosity.N0[0] || E->viscosity.E[i]!=0 || E->viscosity.Z[i]!=0)
                 pices_fail(E,"P2 checkpoint requires uniform temperature-independent viscosity");
