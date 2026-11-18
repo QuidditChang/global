@@ -34,3 +34,5 @@ void lith_age_conform_tbc(struct All_variables *E);
 void assimilate_lith_conform_bcs(struct All_variables *E);
 
 void lith_age_relaxation_node(struct All_variables *, int, int, double *, double *);
+void lith_age_relaxation_at_depth(struct All_variables *, int, int, double,
+                                 double *, double *);

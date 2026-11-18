@@ -34,6 +34,7 @@
 #include "parallel_related.h"
 #include "parsing.h"
 #include "lith_age.h"
+#include "lith_age_weight.h"
 
 float find_age_in_MY();
 void lith_age_update_tbc(struct All_variables *E);
@@ -74,6 +75,10 @@ static double lith_age_old_temperature_weight(struct All_variables *E,
   if(E->control.lith_age_asml) {
     if(fraction < 0.0) fraction = 0.0;
     if(fraction > 1.0) fraction = 1.0;
+    if(E->control.lith_age_asml_profile == 1)
+      return 1.0-lith_age_logistic_rate_weight(fraction,
+          E->control.lith_age_asml_logistic_center,
+          E->control.lith_age_asml_logistic_width);
     /* 1-w, evaluated with expm1 for the small-shape linear limit. */
     if(E->control.lith_age_asml_exp < 1.e-6) return fraction;
     return -expm1(-E->control.lith_age_asml_exp * fraction)
@@ -103,6 +108,20 @@ static void validate_lith_age_asml(struct All_variables *E)
     parallel_process_termination();
   }
   if(!E->control.lith_age_asml) return;
+  if(E->control.lith_age_asml_profile < 0 ||
+     E->control.lith_age_asml_profile > 1 ||
+     (E->control.lith_age_asml_profile == 1 &&
+      (!isfinite(E->control.lith_age_asml_logistic_center) ||
+       E->control.lith_age_asml_logistic_center <= 0.0 ||
+       E->control.lith_age_asml_logistic_center >= 1.0 ||
+       !isfinite(E->control.lith_age_asml_logistic_width) ||
+       E->control.lith_age_asml_logistic_width <= 0.0))) {
+    fprintf(stderr,"lith_age_asml_profile must be 0 (exponential) or 1 "
+            "(integrated logistic); profile 1 requires finite 0 < "
+            "lith_age_asml_logistic_center < 1 and positive finite "
+            "lith_age_asml_logistic_width (fractions of local H)\n");
+    parallel_process_termination();
+  }
   if(!isfinite(E->control.lith_age_asml_tau_Ma) ||
      E->control.lith_age_asml_tau_Ma <= 0.0 ||
      !isfinite(E->control.lith_age_asml_exp) ||
@@ -119,12 +138,21 @@ static void validate_lith_age_asml(struct All_variables *E)
             "and 0 < lith_age_depth < shell thickness\n");
     parallel_process_termination();
   }
-  if(E->parallel.me == 0)
+  if(E->parallel.me == 0) {
     fprintf(stderr, "Thermal assimilation TA: Tref-coupled HSC, "
             "surface amplitude=Tref_surface, H=%g R, exponential shape=%g; "
             "tau=%g Myr; once per accepted forward thermal step\n",
             E->control.lith_age_depth, E->control.lith_age_asml_exp,
             E->control.lith_age_asml_tau_Ma);
+    if(E->control.lith_age_asml_profile == 1)
+      fprintf(stderr,"TA depth profile=integrated_logistic center/H=%.9g "
+              "width/H=%.9g; full-layer center=%.9g km width=%.9g km; "
+              "exponential shape ignored\n",
+              E->control.lith_age_asml_logistic_center,
+              E->control.lith_age_asml_logistic_width,
+              E->control.lith_age_asml_logistic_center*E->control.lith_age_depth*E->data.radius_km,
+              E->control.lith_age_asml_logistic_width*E->control.lith_age_depth*E->data.radius_km);
+  }
 }
 
 
@@ -140,6 +168,9 @@ void lith_age_input(struct All_variables *E)
   input_int("lith_age_asml",&(E->control.lith_age_asml),"0",m);
   input_float("lith_age_asml_tau_Ma",&(E->control.lith_age_asml_tau_Ma),"1.0",m);
   input_float("lith_age_asml_exp",&(E->control.lith_age_asml_exp),"3.0",m);
+  input_int("lith_age_asml_profile",&(E->control.lith_age_asml_profile),"0",m);
+  input_float("lith_age_asml_logistic_center",&(E->control.lith_age_asml_logistic_center),"0.627844922304191",m);
+  input_float("lith_age_asml_logistic_width",&(E->control.lith_age_asml_logistic_width),"0.03139224611520955",m);
   input_float("mantle_temp",&(E->control.lith_age_mantle_temp),"1.0",m);
   input_float("bottom_tbl_thickness",&(E->control.bottom_tbl_thickness),"0.0",m);
   input_float("bottom_tbl_diffusivity_ratio",&(E->control.bottom_tbl_diffusivity_ratio),"1.0",m);
@@ -724,7 +755,11 @@ void lith_age_conform_tbc(struct All_variables *E)
 static double lith_age_relaxation_fraction(struct All_variables *E,
                                            double depth, double thickness)
 {
-    double w = 1.0-lith_age_old_temperature_weight(E,depth,thickness);
+    double w = E->control.lith_age_asml_profile == 1
+        ? lith_age_logistic_rate_weight(depth/thickness,
+              E->control.lith_age_asml_logistic_center,
+              E->control.lith_age_asml_logistic_width)
+        : 1.0-lith_age_old_temperature_weight(E,depth,thickness);
     if(w <= 0.0 || E->advection.timestep <= 0.0) return 0.0;
     return -expm1(-E->advection.timestep * E->data.scalet * w
                   / E->control.lith_age_asml_tau_Ma);
@@ -744,6 +779,27 @@ void lith_age_relaxation_node(struct All_variables *E,int cap,int node,
     double h=lith_age_asml_thickness(E,nodeg);
     *alpha=0;*target=0;
     if(global_k==1 || global_k==E->mesh.noz || depth>=h)return;
+    *alpha=lith_age_relaxation_fraction(E,depth,h);
+    *target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
+}
+
+/* Profile 1 evaluates each horizontal column's support at particle depth.
+ * Radial shape weights then interpolate Tref, without interpolating alpha
+ * through the bottom of the layer.  Surface Tref participates in this target
+ * interpolation, but particles on the radial boundary are never relaxed. */
+void lith_age_relaxation_at_depth(struct All_variables *E,int cap,int node,
+                                 double depth,double *alpha,double *target)
+{
+    int k=(node-1)%E->lmesh.noz+1;
+    int column=(node-1)/E->lmesh.noz;
+    int i=column%E->lmesh.nox+1,j=column/E->lmesh.nox+1;
+    int nodeg=E->lmesh.nxs-1+i+(E->lmesh.nys+j-2)*E->mesh.nox;
+    double h;
+    (void)cap;
+    *alpha=0.0;*target=0.0;
+    if(depth <= 0.0 || depth >= E->control.lith_age_depth) return;
+    h=lith_age_asml_thickness(E,nodeg);
+    if(depth >= h) return;
     *alpha=lith_age_relaxation_fraction(E,depth,h);
     *target=lith_age_target_temperature(E,k,depth,E->age_t[nodeg]);
 }

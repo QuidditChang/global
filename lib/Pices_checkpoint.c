@@ -157,6 +157,14 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
    E->control.lith_age_depth,E->control.lith_age_asml_tau_Ma,E->control.lith_age_asml_exp,
    E->control.max_plate_age_Ma,E->refstate.temperature_surface};
   pices_sha_add(&s,ta,sizeof(ta));
+  /* Profile zero preserves the historical fingerprint. Only an active new
+   * curve adds its local-thickness parameters, so restart cannot change it. */
+  if(E->control.lith_age_asml_profile) {
+   const char method[]="ta_integrated_logistic_v1";
+   double settings[]={E->control.lith_age_asml_profile,
+    E->control.lith_age_asml_logistic_center,E->control.lith_age_asml_logistic_width};
+   pices_sha_add(&s,method,sizeof(method));pices_sha_add(&s,settings,sizeof(settings));
+  }
   pices_sha_add(&s,E->refstate.Tref+1,E->lmesh.noz*sizeof(double));
   /* Interior TB contains transient targets, not Dirichlet data. */
   for(d=1;d<=3;d++)for(n=1;n<=E->lmesh.nno;n++)

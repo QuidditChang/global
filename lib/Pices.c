@@ -515,6 +515,27 @@ static double energy(struct All_variables *E,const double *field)
 /* Convex interpolation of the nodal reaction operator, not of a grid
  * temperature increment. For constant alpha this is exactly the same
  * exponential relaxation applied to Tp. No particle temperature clipping. */
+static void ta_particle_depth_reaction(struct All_variables *E,int cap,
+                                      const int *nodes,const double *w,
+                                      double depth,double *fraction,double *source)
+{
+    int a;
+    *fraction=0;*source=0;
+    for(a=1;a<=8;a++) {
+        double alpha,target,f;
+        if(w[a]==0)continue;
+        lith_age_relaxation_at_depth(E,cap,nodes[a],depth,&alpha,&target);
+        if(!isfinite(alpha) || alpha<0 || alpha>1 ||
+           !pices_temperature_valid(E,target))
+            pices_fail(E,"invalid depth-evaluated particle TA target/fraction");
+        f=w[a]*alpha;
+        *fraction+=f;*source+=f*target;
+    }
+    if(!isfinite(*fraction) || !isfinite(*source) ||
+       *fraction<0 || *fraction>1+16*DBL_EPSILON)
+        pices_fail(E,"invalid depth-evaluated particle TA reaction");
+}
+
 static double ta_particle_relax(const int *nodes,const double *w,
                                 const double *alpha,const double *target,
                                 double old)
@@ -532,6 +553,9 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     int n,p,nodes[9],nn=E->lmesh.nno;double w[9],maximum=0,active=0;
     double *before=array(E,nn+1),*projected=array(E,nn+1);
     double *alpha=array(E,nn+1),*target=array(E,nn+1);
+    double *particle_fraction=NULL,*particle_source=NULL;
+    const int depth_profile=E->control.lith_age_asml_profile==1;
+    const char *operator_name=depth_profile?"particle_relaxation_logistic_v1":"particle_relaxation_v1";
     double *save=E->T[1],time=E->monitor.elapsed_time,stored=0,reconciliation=0;
     memcpy(before,g,(nn+1)*sizeof(double));
     double before_rebase=energy(E,g);
@@ -542,7 +566,23 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
     lith_age_temperature_bound_adj(E,E->mesh.levmax);
     temperatures_conform_bcs(E);
     memset(E->assim_delta_T[1],0,(nn+1)*sizeof(double));
-    for(n=1;n<=nn;n++) {
+    if(depth_profile) {
+        /* Evaluate the new profile at the particle radius, not at the radial
+         * nodes. Each corner column retains its own trench-limited thickness;
+         * the existing nonnegative wedge weights blend only its reaction.
+         * Cache once: a thin supported layer can contain particles even when
+         * neither radial grid node is eligible for nodal assimilation. */
+        particle_fraction=array(E,E->trace.ntracers[1]+1);
+        particle_source=array(E,E->trace.ntracers[1]+1);
+        for(p=1;p<=E->trace.ntracers[1];p++) {
+            double depth=E->sphere.ro-E->trace.basicq[1][2][p];
+            if(depth<=0 || depth>=E->control.lith_age_depth)continue;
+            tracer_temperature_weights(E,1,p,nodes,w);
+            ta_particle_depth_reaction(E,1,nodes,w,depth,
+                &particle_fraction[p],&particle_source[p]);
+            active=fmax(active,particle_fraction[p]);
+        }
+    } else for(n=1;n<=nn;n++) {
         lith_age_relaxation_node(E,1,n,&alpha[n],&target[n]);
         if(!isfinite(alpha[n]) || alpha[n]<0 || alpha[n]>1 ||
            !pices_temperature_valid(E,target[n]))
@@ -559,11 +599,15 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
         reconciliation=energy(E,E->assim_delta_T[1]);
         for(p=1;p<=E->trace.ntracers[1];p++) {
             double old=E->trace.extraq[1][E->pices.slot][p],after;
-            tracer_temperature_weights(E,1,p,nodes,w);
-            after=ta_particle_relax(nodes,w,alpha,target,old);
+            if(depth_profile)
+                after=(1.0-particle_fraction[p])*old+particle_source[p];
+            else {
+                tracer_temperature_weights(E,1,p,nodes,w);
+                after=ta_particle_relax(nodes,w,alpha,target,old);
+            }
             if(!pices_temperature_valid(E,after)) {
-                fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d before_nd=%.17g after_nd=%.17g after_K=%.17g operator=particle_relaxation_v1\n",
-                    E->parallel.me,E->monitor.solution_cycles,p,old,after,E->data.Ttop+after*E->data.ref_temperature);
+                fprintf(stderr,"PICES_TA_INVALID rank=%d step=%d particle=%d before_nd=%.17g after_nd=%.17g after_K=%.17g operator=%s\n",
+                    E->parallel.me,E->monitor.solution_cycles,p,old,after,E->data.Ttop+after*E->data.ref_temperature,operator_name);
                 pices_fail(E,"invalid TA particle temperature");
             }
             E->trace.extraq[1][E->pices.slot][p]=after;
@@ -578,8 +622,8 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
         }
         stored=energy(E,E->assim_delta_T[1]);
     }
-    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=particle_relaxation_v1 stage=%s delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
-        E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,
+    fprintf(E->fp,"PICES_TA step=%d calls=1 time=%.17g dt=%.17g operator=%s stage=%s delta_max=%.17g storage=%.17g reconciliation_storage=%.17g total_grid_storage=%.17g\n",
+        E->monitor.solution_cycles,(double)E->monitor.elapsed_time,dt,operator_name,
         E->pices.ta_before_heat?"before_heat":"after_heat",
         reduce(E,maximum,MPI_MAX),stored,reconciliation,stored+reconciliation);
     diagnostics.values[PD_TASTORE]=stored;
@@ -589,6 +633,7 @@ static void pices_assimilate(struct All_variables *E,double *g,double dt)
             E->assim_delta_T[1][E->ien[1][e].node[a]];
     E->monitor.elapsed_time=time;E->T[1]=save;
     free(before);free(projected);free(alpha);free(target);
+    free(particle_fraction);free(particle_source);
 }
 
 /* Opt-in sparse audit, at the post-advection composition stage. Sharing a

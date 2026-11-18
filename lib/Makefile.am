@@ -90,6 +90,7 @@ sources = Pices_motion.c Pices_benchmark.c pices_benchmark.h Pices.c Pices_compo
 	Interuption.c \
 	interuption.h \
 	lith_age.h \
+	lith_age_weight.h \
 	Lith_age.c \
 	Material_properties.c \
 	material_properties.h \

@@ -563,6 +563,9 @@ PyObject * pyCitcom_Param_set_properties(PyObject *self, PyObject *args)
     getIntProperty(properties, "lith_age_asml", E->control.lith_age_asml, fp);
     getFloatProperty(properties, "lith_age_asml_tau_Ma", E->control.lith_age_asml_tau_Ma, fp);
     getFloatProperty(properties, "lith_age_asml_exp", E->control.lith_age_asml_exp, fp);
+    getIntProperty(properties, "lith_age_asml_profile", E->control.lith_age_asml_profile, fp);
+    getFloatProperty(properties, "lith_age_asml_logistic_center", E->control.lith_age_asml_logistic_center, fp);
+    getFloatProperty(properties, "lith_age_asml_logistic_width", E->control.lith_age_asml_logistic_width, fp);
     getFloatProperty(properties, "lith_age_depth", E->control.lith_age_depth, fp);
     getFloatProperty(properties, "max_plate_age_Ma",
                      E->control.max_plate_age_Ma, fp);
