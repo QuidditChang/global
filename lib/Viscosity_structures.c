@@ -32,6 +32,7 @@
 
 #include <math.h>
 #include <float.h>
+#include <ctype.h>
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
@@ -86,18 +87,40 @@ static void visc_from_pPv(struct All_variables *E, float **evisc)
 /* Shared by the standalone parser and the Pyre property bridge. */
 void validate_rheol7_settings(struct All_variables *E)
 {
-    if(E->viscosity.RHEOL != 7)
+    int i;
+    const int mode = E->viscosity.RHEOL;
+    if(!steinberger_is_family(mode))
         return;
     if(!isfinite(E->viscosity.cold_scale) || E->viscosity.cold_scale < 0.0) {
-        fprintf(stderr,"rheol=7 rank=%d: cold_scale must be finite and >= 0; got %.9g\n",
-                E->parallel.me,E->viscosity.cold_scale);
+        fprintf(stderr,"rheol=%d rank=%d: cold_scale must be finite and >= 0; got %.9g\n",
+                mode,E->parallel.me,E->viscosity.cold_scale);
+        fflush(stderr);
+        MPI_Abort(E->parallel.world,8);
+        exit(8);
+    }
+    if(!steinberger_validate_correction(mode,E->viscosity.rheol7_layer_factors,
+        E->viscosity.rheol7_poly_a,E->viscosity.rheol7_poly_b,E->viscosity.rheol7_poly_c)) {
+        fprintf(stderr,"rheol=%d rank=%d: correction coefficients must be finite "
+                "and f(z)>0 throughout each depth segment [0,410,520,660,2891] km\n",
+                mode,E->parallel.me);
         fflush(stderr);
         MPI_Abort(E->parallel.world,8);
         exit(8);
     }
     if(E->parallel.me == 0) {
-        fprintf(stderr,"rheol=7: TDEPV=%d cold_scale=%.9g hot_scale=1\n",
-                E->viscosity.TDEPV,E->viscosity.cold_scale);
+        fprintf(stderr,"rheol=%d: TDEPV=%d cold_scale=%.9g hot_scale=1 "
+                "rheol_family_v1 correction=%s\n",mode,
+                E->viscosity.TDEPV,E->viscosity.cold_scale,
+                mode==7 ? "baseline" : (mode==71 ? "layer_constant" : "layer_quadratic"));
+        for(i=0;mode!=7 && i<STEINBERGER_LAYERS;i++) {
+            if(mode==71)
+                fprintf(stderr,"rheol71 segment=%d factor=%.17g\n",i,
+                        E->viscosity.rheol7_layer_factors[i]);
+            else
+                fprintf(stderr,"rheol72 segment=%d a=%.17g b=%.17g c=%.17g\n",i,
+                        E->viscosity.rheol7_poly_a[i],E->viscosity.rheol7_poly_b[i],
+                        E->viscosity.rheol7_poly_c[i]);
+        }
         fflush(stderr);
     }
 }
@@ -109,7 +132,9 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
     int a, stream;
     FILE *fp;
     double tk = E->data.Ttop + E->data.ref_temperature*temperature_nd;
-    double reference = steinberger_nuref(depth,tref_K,E->data.ref_viscosity);
+    double reference = steinberger_nuref_mode(E->viscosity.RHEOL,depth,tref_K,
+        E->data.ref_viscosity,E->viscosity.rheol7_layer_factors,
+        E->viscosity.rheol7_poly_a,E->viscosity.rheol7_poly_b,E->viscosity.rheol7_poly_c);
     double az = steinberger_Az(depth);
     double scale = tk < tref_K ? E->viscosity.cold_scale : 1.0;
     double logeta = reference > 0.0 ? log(reference) : NAN;
@@ -120,12 +145,12 @@ static void rheol7_failure(struct All_variables *E, const char *reason,
     for(stream=0;stream<2;stream++) {
         fp = stream == 0 ? stderr : E->fp;
         if(!fp || (stream == 1 && fp == stderr)) continue;
-        fprintf(fp,"rheol=7 fatal: %s; rank=%d step=%d cap=%d element=%d gp=%d\n"
+        fprintf(fp,"rheol=%d fatal: %s; rank=%d step=%d cap=%d element=%d gp=%d\n"
                 "depth_km=%.17g T_nd=%.17g T_K=%.17g Tref_K=%.17g "
                 "refvisc=%.17g Az_K=%.17g cold_scale=%.9g side_scale=%.17g TDEPV=%d\n"
                 "nuref=%.17g eta=%.17g ln_eta=%.17g FLT_MAX=%.9g "
                 "VMIN=%d min=%.9g VMAX=%d max=%.9g (limits applied later)\n",
-                reason,E->parallel.me,E->monitor.solution_cycles,cap,element,gp,
+                E->viscosity.RHEOL,reason,E->parallel.me,E->monitor.solution_cycles,cap,element,gp,
                 depth,temperature_nd,tk,tref_K,E->data.ref_viscosity,az,
                 E->viscosity.cold_scale,scale,E->viscosity.TDEPV,
                 reference,viscosity,logeta,(double)FLT_MAX,
@@ -188,6 +213,34 @@ static double strict_rheology_reference_temperature(struct All_variables *E,
 }
 
 
+/* The legacy vector reader accepts partial lists and trailing junk. Keep the
+ * four rheology coefficients exact and double precision in both input paths. */
+static void read_rheol7_vector(struct All_variables *E, char *name, double *values)
+{
+    char text[2048], *position, *end;
+    int i, valid = 1;
+    if(!input_string(name,text,"",E->parallel.me)) return;
+    position = text;
+    for(i=0;i<STEINBERGER_LAYERS;i++) {
+        while(isspace((unsigned char)*position)) position++;
+        values[i] = strtod(position,&end);
+        if(end==position || !isfinite(values[i])) { valid=0; break; }
+        position = end;
+        while(isspace((unsigned char)*position)) position++;
+        if(i<STEINBERGER_LAYERS-1) {
+            if(*position!=',') { valid=0; break; }
+            position++;
+        } else if(*position!='\0') valid=0;
+    }
+    if(!valid) {
+        fprintf(stderr,"rheol=%d rank=%d: %s requires exactly four finite "
+                "comma-separated numbers\n",E->viscosity.RHEOL,E->parallel.me,name);
+        fflush(stderr);
+        MPI_Abort(E->parallel.world,8);
+        exit(8);
+    }
+}
+
 void viscosity_system_input(struct All_variables *E)
 {
     int m=E->parallel.me;
@@ -214,6 +267,15 @@ void viscosity_system_input(struct All_variables *E)
     input_boolean("VISC_UPDATE",&(E->viscosity.update_allowed),"on",m);
     input_int("rheol",&(E->viscosity.RHEOL),"3",m);
     input_float("cold_scale",&(E->viscosity.cold_scale),"0.5",m);
+    steinberger_defaults(E->viscosity.rheol7_layer_factors,E->viscosity.rheol7_poly_a,
+                        E->viscosity.rheol7_poly_b,E->viscosity.rheol7_poly_c);
+    if(E->viscosity.RHEOL==71)
+        read_rheol7_vector(E,"rheol7_layer_factors",E->viscosity.rheol7_layer_factors);
+    if(E->viscosity.RHEOL==72) {
+        read_rheol7_vector(E,"rheol7_poly_a",E->viscosity.rheol7_poly_a);
+        read_rheol7_vector(E,"rheol7_poly_b",E->viscosity.rheol7_poly_b);
+        read_rheol7_vector(E,"rheol7_poly_c",E->viscosity.rheol7_poly_c);
+    }
     input_int("num_mat",&(E->viscosity.num_mat),"1",m);
     input_float_vector("visc0",E->viscosity.num_mat,(E->viscosity.N0),m);
 
@@ -351,7 +413,7 @@ void get_system_viscosity(E,propogate,evisc,visc)
 	find_trench_location(E);
     }*/
 
-    if(E->viscosity.TDEPV || E->viscosity.RHEOL == 7)
+    if(E->viscosity.TDEPV || steinberger_is_family(E->viscosity.RHEOL))
         visc_from_T(E,evisc,propogate);
     else
         visc_from_mat(E,evisc);
@@ -501,7 +563,9 @@ void visc_from_T(E,EEta,propogate)
     imark = 0;
 
     switch (E->viscosity.RHEOL)   {
-    case 7: /* M2-A nuref times Az temperature correction; cold scale from cfg. */
+    case 7:  /* Fig.1/EBA baseline, without an empirical depth correction. */
+    case 71: /* Positive layer multipliers. */
+    case 72: /* Layer quadratics; defaults preserve the historical M2-A. */
         for(m=1;m<=E->sphere.caps_per_proc;m++)
             for(i=1;i<=nel;i++)
                 for(jj=1;jj<=vpts;jj++) {
@@ -528,14 +592,18 @@ void visc_from_T(E,EEta,propogate)
                     if(E->viscosity.TDEPV && !isfinite(temperature_nd))
                         rheol7_failure(E,"nonfinite rheology temperature: inspect clipping checks, nodes and weights",
                                        m,i,jj,depth_km,temperature_nd,tref_K,NAN);
-                    viscosity = steinberger_nuref(depth_km,tref_K,E->data.ref_viscosity);
+                    viscosity = steinberger_nuref_mode(E->viscosity.RHEOL,depth_km,tref_K,
+                        E->data.ref_viscosity,E->viscosity.rheol7_layer_factors,
+                        E->viscosity.rheol7_poly_a,E->viscosity.rheol7_poly_b,E->viscosity.rheol7_poly_c);
                     if(viscosity <= 0.)
                         rheol7_failure(E,"invalid reference viscosity",m,i,jj,
                                        depth_km,temperature_nd,tref_K,viscosity);
                     if(E->viscosity.TDEPV) {
-                        viscosity = steinberger_viscosity(depth_km,tref_K,
+                        viscosity = steinberger_viscosity_mode(E->viscosity.RHEOL,depth_km,tref_K,
                             E->data.Ttop + E->data.ref_temperature*temperature_nd,
-                            E->data.ref_viscosity,E->viscosity.cold_scale);
+                            E->data.ref_viscosity,E->viscosity.cold_scale,
+                            E->viscosity.rheol7_layer_factors,E->viscosity.rheol7_poly_a,
+                            E->viscosity.rheol7_poly_b,E->viscosity.rheol7_poly_c);
                     }
                     if(!isfinite(viscosity) || viscosity <= 0. || viscosity > FLT_MAX ||
                        (float)viscosity == 0.0f)

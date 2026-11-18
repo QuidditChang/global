@@ -1,5 +1,5 @@
 """70 Ma radial-column validation using cfg, nodal Tref and compiled C kernel.
-Usage: python3 tests/validate_rheol7_initial_profile.py WORKSPACE_ROOT
+Usage: python3 tests/validate_rheol7_initial_profile.py WORKSPACE_ROOT [CFG]
 """
 from pathlib import Path
 import sys, os, tempfile, subprocess, configparser, json
@@ -14,7 +14,17 @@ run=root/'worktrees/runs-cmbhf_EBA';out=root/'output/rheol7_initial_validation';
 cfg=Path(sys.argv[2]).resolve() if len(sys.argv)>2 else run/'cmbhf_EBA.cfg'
 c=configparser.ConfigParser(interpolation=None);c.read(cfg);p=c['CitcomS.solver.param'];k=c['CitcomS.solver.const'];v=c['CitcomS.solver.visc']
 cold_scale=v.getfloat('cold_scale',fallback=0.5)
-out=out/f'cold_scale_{cold_scale:g}';out.mkdir(exist_ok=True)
+mode=v.getint('rheol');assert mode in (7,71,72), 'Expected rheol=7,71,72'
+tdep=v.getboolean('TDEPV',fallback=True)
+# Keep the earlier archived rheol7=M2-A diagnostics intact after renumbering.
+out=out/f'rheol_{mode}'/f'cold_scale_{cold_scale:g}'/cfg.stem;out.mkdir(parents=True,exist_ok=True)
+coefficient_overrides={}
+selected=('rheol7_layer_factors',) if mode==71 else (('rheol7_poly_a','rheol7_poly_b','rheol7_poly_c') if mode==72 else ())
+for name in selected:
+ if name in v:
+  values=[float(x.strip()) for x in v[name].strip().strip('[]()').split(',')]
+  assert len(values)==4 and np.isfinite(values).all(), name+' must contain four finite values'
+  coefficient_overrides[name]=values
 R=k.getfloat('radius');top=k.getfloat('Ttop');bottom=k.getfloat('Tbottom');eta0=k.getfloat('refvisc');delta=bottom-top
 r=np.loadtxt(run/'GLB.coor.global.dat',skiprows=1,usecols=1);z=(1-r)*R/1000;z[0]=2891;z[-1]=0
 tr=top+delta*np.loadtxt(run/'refstate_EBA.txt')[:,2]
@@ -26,6 +36,7 @@ cold=(tr[-1]-top)*erfc(z*1000/(2*np.sqrt(kappa*sec)))
 # Standard column: full lith_age_depth, no trench-dependent half-depth override.
 cold[z>p.getfloat('lith_age_depth')*R/1000]=0
 T=tr+bot-cold;T[0]=bottom;T[-1]=top
+T=np.clip(T,top,bottom) # Same nodal rheology-temperature bounds as production.
 # Same nodal-to-Gauss linear radial interpolation as production.
 gz=[];gt=[];gr=[];centers=[]
 for i in range(len(z)-1):
@@ -33,7 +44,24 @@ for i in range(len(z)-1):
   w=(1+xi)/2;gz.append((1-w)*z[i]+w*z[i+1]);gt.append((1-w)*T[i]+w*T[i+1]);gr.append((1-w)*tr[i]+w*tr[i+1]);centers.append((z[i]+z[i+1])/2)
 gz,gt,gr,centers=map(np.array,(gz,gt,gr,centers))
 with tempfile.TemporaryDirectory() as tmp:
- tmp=Path(tmp);(tmp/'main.c').write_text('#include <stdio.h>\n#include "Steinberger_nuref.h"\nint main(void){double z,r,t,e,s;while(scanf("%lf%lf%lf%lf%lf",&z,&r,&t,&e,&s)==5)printf("%.17g %.17g %.17g\\n",steinberger_Az(z),steinberger_nuref(z,r,e),steinberger_viscosity(z,r,t,e,s));return 0;}')
+ tmp=Path(tmp)
+ arrays={'rheol7_layer_factors':'q','rheol7_poly_a':'a','rheol7_poly_b':'b','rheol7_poly_c':'c'}
+ assignments=''.join(f'{arrays[name]}[{i}]={value:.17g};' for name,values in coefficient_overrides.items() for i,value in enumerate(values))
+ kernel='''#include <stdio.h>
+#include "Steinberger_nuref.h"
+int main(void){
+ double z,r,t,e,s,q[4],a[4],b[4],c[4];
+ steinberger_defaults(q,a,b,c);
+ OVERRIDES
+ if(!steinberger_validate_correction(MODE,q,a,b,c)) return 2;
+ while(scanf("%lf%lf%lf%lf%lf",&z,&r,&t,&e,&s)==5)
+  printf("%.17g %.17g %.17g\\n",steinberger_Az(z),
+   steinberger_nuref_mode(MODE,z,r,e,q,a,b,c),
+   TDEP ? steinberger_viscosity_mode(MODE,z,r,t,e,s,q,a,b,c)
+        : steinberger_nuref_mode(MODE,z,r,e,q,a,b,c));
+ return 0;
+}'''.replace('OVERRIDES',assignments).replace('MODE',str(mode)).replace('TDEP',str(int(tdep)))
+ (tmp/'main.c').write_text(kernel)
  subprocess.run(['cc','-std=c99','-Wall','-Wextra','-Werror','-I'+str(src/'lib'),str(tmp/'main.c'),'-lm','-o',str(tmp/'main')],check=True)
  def evaluate(z,r,t):
   data=''.join(f'{a:.17g} {b:.17g} {d:.17g} {eta0:.17g} {cold_scale:.17g}\n' for a,b,d in zip(z,r,t))
@@ -41,21 +69,23 @@ with tempfile.TemporaryDirectory() as tmp:
  node=evaluate(z,tr,T);gp=evaluate(gz,gr,gt)
  # Independent Kelvin formula, identity, signs and cold scaled-exponent tests.
  for zz,rr,tt,res in [(z,tr,T,node),(gz,gr,gt,gp)]:
-  expected=res[:,1]*np.exp(np.where(tt<rr,cold_scale,1)*res[:,0]*(1/tt-1/rr))
+  expected=res[:,1]*np.exp(np.where(tt<rr,cold_scale,1)*res[:,0]*(1/tt-1/rr)) if tdep else res[:,1]
   assert np.allclose(res[:,2],expected,rtol=2e-13)
   assert np.all(np.isfinite(res)) and np.all(res>0)
   identity=evaluate(zz,rr,rr);assert np.allclose(identity[:,1],identity[:,2],rtol=1e-14)
-  probe=evaluate(zz,rr,rr-100)
-  assert np.allclose(np.log(probe[:,2]/probe[:,1]),cold_scale*probe[:,0]*(1/(rr-100)-1/rr),atol=1e-13)
-  hot=evaluate(zz,rr,rr+100);assert np.all(hot[:,2]<hot[:,1])
+  if tdep:
+   probe=evaluate(zz,rr,rr-100)
+   assert np.allclose(np.log(probe[:,2]/probe[:,1]),cold_scale*probe[:,0]*(1/(rr-100)-1/rr),atol=1e-13)
+   hot=evaluate(zz,rr,rr+100);assert np.all(hot[:,2]<hot[:,1])
  low=v.getfloat('visc_min');high=v.getfloat('visc_max')
  def limited(raw,center):
   upper=np.where(1-center/(R/1000)>.89641,high,5*high)
-  return np.maximum(low,np.minimum(upper,raw))
+  result=np.minimum(upper,raw) if v.getboolean('VMAX',fallback=False) else raw
+  return np.maximum(low,result) if v.getboolean('VMIN',fallback=False) else result
  nlim=limited(node[:,2],z);glim=limited(gp[:,2],centers)
  np.savetxt(out/'nodes_70Ma.txt',np.c_[z,tr,T,node,nlim],header='depth_km Tref_K Tinitial_K Az_K nuref eta_raw_nd eta_limited_nd',fmt='%.12e')
  np.savetxt(out/'gauss_70Ma.txt',np.c_[gz,gr,gt,gp,glim],header='depth_km Tref_K Tinitial_K Az_K nuref eta_raw_nd eta_limited_nd',fmt='%.12e')
- report={'cfg':str(cfg),'cold_scale':cold_scale,'age_Ma':age,'surface_assimilation_depth_km':p.getfloat('lith_age_depth')*R/1000,'bottom_TBL_1percent_height_km':h/1000,'kappa_m2_s':kappa,'surface_temperature_K':T[-1],'cmb_temperature_K':T[0],'surface_raw_Pa_s':node[-1,2]*eta0,'cmb_raw_Pa_s':node[0,2]*eta0,'surface_limited_Pa_s':nlim[-1]*eta0,'cmb_limited_Pa_s':nlim[0]*eta0,'gp_count':len(gz),'gp_min_limited':int(np.sum(gp[:,2]<low)),'gp_max_limited':int(np.sum(gp[:,2]>np.where(1-centers/(R/1000)>.89641,high,5*high))),'checks':'Kelvin formula, reference identity, cold scaled exponent, hot weakening, finite positive, C compilation passed','scope':'1D 70 Ma standard column with full lith_age_depth, not full 3D age map or MPI run; GP caps use element-center radius; nodal caps are illustrative.'}
+ report={'cfg':str(cfg),'rheol':mode,'TDEPV':tdep,'coefficient_overrides':coefficient_overrides,'cold_scale':cold_scale,'age_Ma':age,'surface_assimilation_depth_km':p.getfloat('lith_age_depth')*R/1000,'bottom_TBL_1percent_height_km':h/1000,'kappa_m2_s':kappa,'surface_temperature_K':T[-1],'cmb_temperature_K':T[0],'surface_raw_Pa_s':node[-1,2]*eta0,'cmb_raw_Pa_s':node[0,2]*eta0,'surface_limited_Pa_s':nlim[-1]*eta0,'cmb_limited_Pa_s':nlim[0]*eta0,'gp_count':len(gz),'gp_min_limited':int(np.sum(gp[:,2]<low)) if v.getboolean('VMIN',fallback=False) else 0,'gp_max_limited':int(np.sum(gp[:,2]>np.where(1-centers/(R/1000)>.89641,high,5*high))) if v.getboolean('VMAX',fallback=False) else 0,'checks':'Selected rheol mode, Kelvin formula, reference identity, finite positive, C compilation passed; thermal probes when TDEPV on','scope':'1D 70 Ma standard column with full lith_age_depth; rheology plus thermal correction and bounds only, excludes pPv/composition/plasticity/filtering; not full 3D initialization or MPI run. GP caps use element-center radius; nodal caps are illustrative.'}
  (out/'validation.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
  fig,ax=plt.subplots(1,3,figsize=(13,7),layout='constrained')
  ax[0].plot(tr,z,label='Tref');ax[0].plot(T,z,label='70 Ma + bottom TBL');ax[0].set_xlabel('Temperature (K)')
@@ -63,5 +93,5 @@ with tempfile.TemporaryDirectory() as tmp:
   a.semilogx(node[:,1]*eta0,z,label='nuref');a.semilogx(node[:,2]*eta0,z,label='Temperature-corrected');a.semilogx(nlim*eta0,z,ls='--',label='After viscosity limits')
   a.set_xlabel('Viscosity (Pa s)')
  for a in ax:a.set_ylim(2891,0);a.grid(alpha=.2);a.legend(fontsize=8);a.set_ylabel('Depth (km)')
- ax[2].set_ylim(200,0);ax[2].set_title('Upper 200 km');fig.suptitle(f'rheol=7: Az, cold exponent scale={cold_scale:g}, 70 Ma surface cooling')
+ ax[2].set_ylim(200,0);ax[2].set_title('Upper 200 km');fig.suptitle(f'rheol={mode}, TDEPV={tdep}, cold scale={cold_scale:g}, 70 Ma cooling')
  fig.savefig(out/'initial_viscosity_70Ma.png',dpi=150)

@@ -15,6 +15,7 @@
 #include "global_defs.h"
 #include "pices.h"
 #include "pices_sha256.h"
+#include "Steinberger_nuref.h"
 #ifndef PICES_SOLVER_COMMIT
 #define PICES_SOLVER_COMMIT "unknown"
 #endif
@@ -43,7 +44,7 @@ static void writetext(struct All_variables *E,const char *path,const char *text)
 }
 /* Older constant-viscosity checkpoints keep their original schema. */
 int pices_checkpoint_coupled(struct All_variables *E) {
- return E->viscosity.RHEOL==7 || E->control.vbcs_file ||
+ return steinberger_is_family(E->viscosity.RHEOL) || E->control.vbcs_file ||
         E->control.qvis_mode || E->advection.fixed_timestep<=0;
 }
 static int schema(struct All_variables *E) {
@@ -95,6 +96,19 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
  E->viscosity.max_value,E->viscosity.min_value,E->viscosity.update_allowed,
  E->control.v_steps_low,E->control.augmented_Lagr};
  pices_sha_init(&s);pices_sha_add(&s,params,sizeof(params));
+ /* The new baseline 7 is different physics from historical M2-A 7. A model
+  * tag and active coefficients prevent silent cross-version/profile restart. */
+ if(steinberger_is_family(E->viscosity.RHEOL)) {
+  const char method[]="rheol_family_v1";
+  pices_sha_add(&s,method,sizeof(method));
+  if(E->viscosity.RHEOL==71)
+   pices_sha_add(&s,E->viscosity.rheol7_layer_factors,sizeof(E->viscosity.rheol7_layer_factors));
+  if(E->viscosity.RHEOL==72) {
+   pices_sha_add(&s,E->viscosity.rheol7_poly_a,sizeof(E->viscosity.rheol7_poly_a));
+   pices_sha_add(&s,E->viscosity.rheol7_poly_b,sizeof(E->viscosity.rheol7_poly_b));
+   pices_sha_add(&s,E->viscosity.rheol7_poly_c,sizeof(E->viscosity.rheol7_poly_c));
+  }
+ }
  /* Preserve default-policy checkpoint fingerprints, but never silently
   * resume a nondefault inner solve policy as the historical default. */
  if(strcmp(E->control.pices_stokes_inner_policy,"current_rhs") ||

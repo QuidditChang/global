@@ -81,7 +81,10 @@ struct VISC_OPT {
 
     int SDEPV;
     float sdepv_misfit;
-    float cold_scale; /* rheol=7 cold-side activation multiplier, default 0.5 */
+    float cold_scale; /* rheol=7/71/72 cold-side activation multiplier */
+    /* Fixed depth segments: 0/410/520/660/2891 km; independent of num_mat. */
+    double rheol7_layer_factors[4];
+    double rheol7_poly_a[4], rheol7_poly_b[4], rheol7_poly_c[4];
     int sdepv_normalize,sdepv_visited;
     float sdepv_expt[40];
     float sdepv_trns[40];

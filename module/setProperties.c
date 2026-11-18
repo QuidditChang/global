@@ -35,6 +35,7 @@
 #include "phase_change.h"
 #include "parallel_related.h"
 #include "setProperties.h"
+#include "Steinberger_nuref.h"
 
 
 /* See PEP 353. */
@@ -987,6 +988,47 @@ PyObject * pyCitcom_Tracer_set_properties(PyObject *self, PyObject *args)
 char pyCitcom_Visc_set_properties__doc__[] = "";
 char pyCitcom_Visc_set_properties__name__[] = "Visc_set_properties";
 
+/* Unlike the generic vector getter, corrections must have exactly four
+ * entries, retain double precision and never silently repeat/truncate values. */
+static int rheol7_get_vector(PyObject *properties, const char *attribute,
+                            double *values, FILE *fp)
+{
+    PyObject *property, *sequence;
+    double parsed[4];
+    int i;
+
+    property = PyObject_GetAttrString(properties, attribute);
+    if(!property) return -1;
+    sequence = PySequence_Fast(property,
+                               "rheol7 correction coefficients must be a sequence");
+    Py_DECREF(property);
+    if(!sequence) return -1;
+    if(PySequence_Fast_GET_SIZE(sequence) != 4) {
+        Py_DECREF(sequence);
+        PyErr_Format(PyExc_ValueError, "%s requires exactly four depth coefficients",
+                     attribute);
+        return -1;
+    }
+    for(i=0; i<4; i++) {
+        parsed[i] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, i));
+        if(PyErr_Occurred()) {
+            Py_DECREF(sequence);
+            return -1;
+        }
+        if(!isfinite(parsed[i])) {
+            Py_DECREF(sequence);
+            PyErr_Format(PyExc_ValueError, "%s[%d] must be finite", attribute, i);
+            return -1;
+        }
+    }
+    Py_DECREF(sequence);
+    for(i=0; i<4; i++) values[i] = parsed[i];
+    if(fp)
+        fprintf(fp, "%s=%.17g,%.17g,%.17g,%.17g\n", attribute,
+                values[0], values[1], values[2], values[3]);
+    return 0;
+}
+
 PyObject * pyCitcom_Visc_set_properties(PyObject *self, PyObject *args)
 {
     void validate_rheol7_settings(struct All_variables *);
@@ -1029,6 +1071,24 @@ PyObject * pyCitcom_Visc_set_properties(PyObject *self, PyObject *args)
     getIntProperty(properties, "TDEPV", E->viscosity.TDEPV, fp);
     getIntProperty(properties, "rheol", E->viscosity.RHEOL, fp);
     getFloatProperty(properties, "cold_scale", E->viscosity.cold_scale, fp);
+    steinberger_defaults(E->viscosity.rheol7_layer_factors,
+                         E->viscosity.rheol7_poly_a,
+                         E->viscosity.rheol7_poly_b,
+                         E->viscosity.rheol7_poly_c);
+    if(E->viscosity.RHEOL == 71) {
+        if(rheol7_get_vector(properties, "rheol7_layer_factors",
+                            E->viscosity.rheol7_layer_factors, fp) < 0)
+            return NULL;
+    }
+    else if(E->viscosity.RHEOL == 72) {
+        if(rheol7_get_vector(properties, "rheol7_poly_a",
+                            E->viscosity.rheol7_poly_a, fp) < 0 ||
+           rheol7_get_vector(properties, "rheol7_poly_b",
+                            E->viscosity.rheol7_poly_b, fp) < 0 ||
+           rheol7_get_vector(properties, "rheol7_poly_c",
+                            E->viscosity.rheol7_poly_c, fp) < 0)
+            return NULL;
+    }
     validate_rheol7_settings(E);
     getFloatVectorProperty(properties, "viscE",
                            E->viscosity.E, num_mat, fp);

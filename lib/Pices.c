@@ -17,6 +17,7 @@
 #include "phase_change.h"
 #include "lith_age.h"
 #include "pices_coverage_stats.h"
+#include "Steinberger_nuref.h"
 void thermal_heat_sources(struct All_variables *, int, double *, double *, double *);
 
 void temperatures_conform_bcs(struct All_variables *);
@@ -148,7 +149,8 @@ void pices_validate(struct All_variables *E)
             pices_fail(E,"coupled checkpoint requires P4 EBA heat state");
         if(E->composition.on && !E->pices.p4)
             pices_fail(E,"composition checkpoint requires P4 heat-state schema");
-        if(!E->viscosity.update_allowed || !E->viscosity.FROM_SYSTEM || (E->viscosity.RHEOL!=1 && E->viscosity.RHEOL!=7) || E->viscosity.SDEPV ||
+        if(!E->viscosity.update_allowed || !E->viscosity.FROM_SYSTEM ||
+           (E->viscosity.RHEOL!=1 && !steinberger_is_family(E->viscosity.RHEOL)) || E->viscosity.SDEPV ||
            E->viscosity.PDEPV || E->viscosity.CDEPV || E->viscosity.FREEZE ||
            E->viscosity.channel || E->viscosity.wedge || E->viscosity.weak_blobs || E->viscosity.weak_zones)
             pices_fail(E,"checkpoint requires supported Newtonian rheology and viscosity rebuilds");

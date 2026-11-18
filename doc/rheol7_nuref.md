@@ -1,18 +1,36 @@
-# rheol=7: frozen Steinberger / EBA / M2-A reference viscosity
+# rheol=7/71/72: Steinberger / EBA reference viscosity family
 
 ## Selection and scope
 
-Set `rheol = 7` in `[CitcomS.solver.visc]`. This option computes the reference even with `TDEPV=off`. With `TDEPV=on`,
-it multiplies nuref by exp(s*Az*(1/T_K-1/Tref_K)), where s=cold_scale (default0.5) on the cold
+All three modes compute the reference even with `TDEPV=off`:
+
+| rheol | Reference correction | Active configuration |
+| --- | --- | --- |
+| 7 | `f(z)=1`, physical baseline | none |
+| 71 | constant positive multiplier in each depth segment | `rheol7_layer_factors` |
+| 72 | `f(z)=a_i+b_i*u+c_i*u^2` | `rheol7_poly_a`, `rheol7_poly_b`, `rheol7_poly_c` |
+
+The four fixed depth segments are 0-410, 410-520, 520-660 and 660-2891 km.
+`u=(z-segment_top)/(segment_bottom-segment_top)` and the deeper segment owns
+each interface. The vectors are independent of `num_mat` and material IDs.
+They are stored and transferred in double precision; selected vectors must
+contain exactly four finite numbers. Mode 71 requires positive multipliers;
+mode 72 additionally checks both endpoints and any interior quadratic minimum
+to require `f(z)>0` on the whole segment. Inactive vectors are ignored.
+
+With `TDEPV=on`, each mode
+multiplies nuref by exp(s*Az*(1/T_K-1/Tref_K)), where s=cold_scale (default0.5) on the cold
 side and 1 on the hot side. Actual nodal temperature is interpolated to the
 same quadrature point as Tref; conversion to Kelvin uses Ttop and ref_temperature. Existing rheol options retain their behavior.
-The paired runs-cmbhf_EBA/cmbhf_EBA.cfg now selects rheol=7 and TDEPV=on.
+The paired runs-cmbhf_EBA/cmbhf_EBA.cfg selects 72 to preserve its historical
+M2-A physics. The new `cmbhf_EBA_Q0_30_Vis7_scold1.0_LLSVPsV0.04_B24_0.5_PICES_1.8Ga_pPv`
+experiment selects baseline 7, TDEPV=on and cold_scale=1.0.
 
 The base viscosity is evaluated at viscosity quadrature points using interpolated
 radius and the existing reference-state temperature:
 
     Tref_K = Ttop + ref_temperature * Tref_nd
-    nuref = (1e21 Pa s / refvisc) * f_M2A(z) * exp(Araw(z)/Tref_K + B(z) - C)
+    nuref = (1e21 Pa s / refvisc) * f(z) * exp(Araw(z)/Tref_K + B(z) - C)
 
 `nuref` denotes dimensionless dynamic viscosity eta/refvisc, not kinematic
 viscosity eta/rho. No instantaneous temperature, visc0 multiplier, viscE/viscT,
@@ -33,18 +51,67 @@ explicitly; the usual physical min/max caps are applied downstream.
 4. Lower-mantle log multiplier B=-7.466790490109812, upper B=0;
    log normalization C=13.163586986394256. These are the frozen accepted
    Figure4 reconstruction convention, not a new additive correction to H.
-5. M2-A factor: quadratic in u=(z-segment_top)/(segment_bottom-segment_top)
-   on 0–410 and660–2891 km, constant on410–520 and520–660 km.
-   The lithosphere and basal thermal-boundary-layer anchors are excluded.
-   Polynomial continuation reaches segment endpoints; deeper side owns a boundary.
+5. Mode 7 omits the empirical factor. Mode 71 defaults to identity factors.
+   Mode 72 defaults to the historical M2-A factor: quadratic on 0-410 and
+   660-2891 km, constant on 410-520 and 520-660 km. Its original calibration
+   excluded lithosphere and basal thermal-boundary-layer anchors. Polynomial
+   continuation reaches segment endpoints.
 
-All polynomial coefficients are hardcoded in the header. Sources in the parent
+Figure 1 coefficients and B/C normalization remain frozen in the header.
+The depth correction coefficients are configurable, with frozen M2-A defaults.
+Sources in the parent
 workspace: output/steinberger_adiabatic/fit_and_validation.json and
 output/steinberger_M2_polynomial_factors/validation.json (results.A).
 Original paper: Steinberger & Calderwood (2006), Figures1,4,9.
 M2-A is the previously named A vector curve; its individual lmax is unassigned.
-Changing Tref changes the computed profile; frozen constants are calibrated to
-the current EBA background, not automatically refitted to a different background.
+Changing Tref changes the computed profile; correction coefficients are not
+automatically refitted or renormalized for a different background. The Fig.1
+polynomials and chosen normalization define the common EBA baseline, rather
+than an exact reproduction of every original-paper temperature model.
+
+## Configuration examples
+
+All entries belong in `[CitcomS.solver.visc]`. Choose one mode; a different
+coefficient set for the same correction type does not need another rheol number.
+
+```
+# Physical baseline; the example cold-side response matches the new Vis7 run.
+rheol = 7
+TDEPV = on
+cold_scale = 1.0
+
+# For layer constants, replace the rheol line above with 71:
+# rheol = 71
+rheol7_layer_factors = 1.0,1.0,1.0,1.0
+
+# For historical M2-A, replace the rheol line with 72:
+# rheol = 72
+rheol7_poly_a = 5.067917152408204,0.22571234789343927,0.3127706714585134,2.073829265582211
+rheol7_poly_b = -8.15474461356726,0.0,0.0,-0.7521860487837174
+rheol7_poly_c = 4.799095524666932,0.0,0.0,0.09721318357053432
+```
+
+For a mode-72 identity correction use a=1,1,1,1 and b=c=0,0,0,0.
+Mode 71 with all factors equal to one and mode 72 with identity coefficients
+reproduce mode 7, including its shared temperature response.
+
+## Migration and restart identity (2026-11-18)
+
+Before this change, `rheol=7` always included M2-A. Existing experiments must
+select `rheol=72` to preserve that profile; merely rebuilding an old input with
+`rheol=7` changes its physics. The 49 tracked top-level EBA run templates were
+explicitly migrated to 72; their names and other settings are retained. The
+13 historical P7/P8 gate fixtures were not rewritten: copy and migrate them to
+72 when reproducing their former M2-A physics. The runs worktree records the
+changed templates in `RHEOL_FAMILY_MIGRATED_CONFIGS.txt`.
+
+PICES recognizes all three modes as coupled, rebuildable Newtonian rheologies.
+Its checkpoint fingerprint now includes `rheol_family_v1` and the coefficients
+active in 71 or 72. Changes to the model or coefficients are rejected on restart.
+Historical checkpoints are not automatically migrated by changing their cfg to
+72; use their original build or a separately audited checkpoint migration.
+The new Vis7 LSF is a fresh experiment and checks the installed binary marker
+and Python inventory before creating a run directory.
 
 ## Numerical and integration limits
 
@@ -67,26 +134,30 @@ SDEPV,PDEPV and low-viscosity channel/wedge off; inspect limits/smoothing too.
 
     python3 tests/test_rheol7_nuref.py /path/to/CitcomS/output
 
-Compiles the actual production header with warnings-as-errors, compares all65
-nodes with prior Python profile results, checks refvisc scaling, phase jumps and
-invalid inputs. Viscosity_structures.c also passed MPI compiler syntax checking
-(legacy non-prototype warnings remain). No full MPI convection run performed.
+Compiles the actual production header with warnings-as-errors, compares mode 72
+with the 65-node historical M2-A profile, and exercises baseline/identity/custom
+corrections, interfaces, temperature response and invalid coefficients. The
+runtime tests cover the standalone parser, Pyre property bridge and production
+dispatch including TDEPV=off; see [the validation report](rheol7_family_validation.md) for the
+latest commands and integration results. A local standalone MPI check is not
+a production HPC/Pyre installation or a full convection experiment.
 
 ## Initial-temperature validation (70 Ma)
 
-Run `python3 tests/validate_rheol7_initial_profile.py WORKSPACE_ROOT`. It uses the
+Run `python3 tests/validate_rheol7_initial_profile.py WORKSPACE_ROOT CFG`. It uses the
 current cfg and refstate_EBA.txt, the same erfc anomaly construction as
 Lith_age.c/init_validate.py, and the compiled production C kernel. Surface
-age is70 Ma with full lith_age_depth (127.42 km); the trench-specific half-depth
+age is70 Ma with the cfg's full lith_age_depth (254.84 km in the new Vis7 experiment); the trench-specific half-depth
 branch and initial slab anomalies are outside this representative radial column.
 Bottom TBL thickness is approximately500 km at the1% amplitude height, with
-Tbottom=3700 K. Geological start_age=249.9 Ma is distinct from plate thermal age.
+Tbottom=3700 K. Geological start_age (1799.9 Ma in the new Vis7 experiment) is distinct from plate thermal age.
 
 The diagnostic evaluates65 nodes and128 radial Gauss points, checks reference
-identity, cold half exponent, hot weakening and the Kelvin formula, and applies
+identity, the selected cold-side exponent, hot weakening and the Kelvin formula, and applies
 the current depth-dependent viscosity limits. Actual production uses Gauss-point
 viscosity; nodal limited values in the plot are illustrative. Outputs are in
-output/rheol7_initial_validation. This is not a full3D initialization or MPI solve.
+output/rheol7_initial_validation/rheol_MODE/cold_scale_VALUE/CFG_STEM.
+This is not a full3D initialization or MPI solve.
 
 `cold_scale` is declared in the Pyre Visc inventory, transferred to the C state
 by `pyCitcom_Visc_set_properties`, and read by the standalone C parser. It must be
@@ -96,8 +167,9 @@ the Python component before using the new cfg/lsf; jobs are not auto-submitted.
 
 ## Runtime binding and failure diagnostics
 
-Both input paths validate cold_scale and print rheol=7, TDEPV, cold_scale and
-hot_scale at startup. The property bridge also records cold_scale in its normal
+Both input paths validate cold_scale and print the selected rheol, TDEPV,
+cold_scale, hot_scale, `rheol_family_v1` and the active coefficients at startup.
+The property bridge also records cold_scale in its normal
 parameter output. This fixes an omitted Pyre-to-C assignment that left the
 malloc-allocated cold_scale field uninitialized.
 

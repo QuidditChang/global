@@ -52,6 +52,23 @@ class Visc(CitcomComponent):
         inv.pdepv_y = map(float, inv.pdepv_y)
         inv.cdepv_ff = map(float, inv.cdepv_ff)
 
+        # These are four depth segments, independent of num_mat. Only the
+        # correction selected by rheol participates in the reference profile.
+        import math
+        correction_vectors = ()
+        if inv.rheol == 71:
+            correction_vectors = ("rheol7_layer_factors",)
+        elif inv.rheol == 72:
+            correction_vectors = ("rheol7_poly_a", "rheol7_poly_b",
+                                  "rheol7_poly_c")
+        for name in correction_vectors:
+            values = [float(value) for value in getattr(inv, name)]
+            if len(values) != 4:
+                raise ValueError("%s requires exactly four depth coefficients" % name)
+            if any(math.isnan(value) or math.isinf(value) for value in values):
+                raise ValueError("%s requires finite depth coefficients" % name)
+            setattr(inv, name, values)
+
         Visc_set_properties(self.all_variables, inv, stream)
 
         return
@@ -81,6 +98,18 @@ class Visc(CitcomComponent):
         TDEPV = pyre.inventory.bool("TDEPV", default=False)
         rheol = pyre.inventory.int("rheol", default=3)
         cold_scale = pyre.inventory.float("cold_scale", default=0.5)
+        # 7: Fig.1/EBA baseline; 71: layer multipliers; 72: quadratic multipliers.
+        # Segments are 0-410, 410-520, 520-660 and 660-2891 km.
+        rheol7_layer_factors = pyre.inventory.list(
+            "rheol7_layer_factors", default=[1.0, 1.0, 1.0, 1.0])
+        # Mode 72 defaults reproduce the former rheol=7 M2-A reference.
+        rheol7_poly_a = pyre.inventory.list("rheol7_poly_a", default=[
+            5.067917152408204, 0.22571234789343927,
+            0.3127706714585134, 2.073829265582211])
+        rheol7_poly_b = pyre.inventory.list("rheol7_poly_b", default=[
+            -8.15474461356726, 0.0, 0.0, -0.7521860487837174])
+        rheol7_poly_c = pyre.inventory.list("rheol7_poly_c", default=[
+            4.799095524666932, 0.0, 0.0, 0.09721318357053432])
         viscE = pyre.inventory.list("viscE", default=[1, 1, 1, 1])
         viscT = pyre.inventory.list("viscT", default=[1, 1, 1, 1])
         viscZ = pyre.inventory.list("viscZ", default=[1, 1, 1, 1])
