@@ -493,7 +493,7 @@ void read_initial_settings(struct All_variables *E)
   input_int("down_heavy",&(E->control.down_heavy),"1,0,nomax",m);
   input_int("up_heavy",&(E->control.up_heavy),"1,0,nomax",m);
   input_double("accuracy",&(E->control.accuracy),"1.0e-4,0.0,1.0",m);
-  input_string("pices_stokes_inner_policy",pices_inner_policy,"current_rhs",m);
+  input_string("pices_stokes_inner_policy",pices_inner_policy,"legacy_initial_force",m);
   if(strlen(pices_inner_policy)>=sizeof(E->control.pices_stokes_inner_policy))
       myerror(E,"pices_stokes_inner_policy is too long");
   snprintf(E->control.pices_stokes_inner_policy,sizeof(E->control.pices_stokes_inner_policy),"%s",pices_inner_policy);
@@ -1176,7 +1176,7 @@ void global_default_values(E)
   E->control.v_steps_low = 10;
   E->control.v_steps_upper = 1;
   E->control.accuracy = 1.0e-6;
-  strcpy(E->control.pices_stokes_inner_policy,"current_rhs");
+  strcpy(E->control.pices_stokes_inner_policy,"legacy_initial_force");
   E->control.pices_stokes_inner_rtol = 1.0e-6;
   E->control.pices_stokes_diagnostics = 0;
   E->control.vaccuracy = 1.0e-8;

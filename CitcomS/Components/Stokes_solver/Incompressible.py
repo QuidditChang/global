@@ -91,7 +91,7 @@ class Incompressible(CitcomComponent):
 
         accuracy = prop.float("accuracy", default=1.0e-6)
         pices_stokes_inner_policy = prop.str(
-            "pices_stokes_inner_policy", default="current_rhs",
+            "pices_stokes_inner_policy", default="legacy_initial_force",
             validator=prop.choice(["current_rhs", "legacy_initial_force"]))
         pices_stokes_inner_rtol = prop.float("pices_stokes_inner_rtol", default=1.0e-6)
         pices_stokes_diagnostics = prop.bool("pices_stokes_diagnostics", default=False)

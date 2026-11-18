@@ -109,8 +109,9 @@ static void fingerprint(struct All_variables *E,char out[65],int legacy_coverage
    pices_sha_add(&s,E->viscosity.rheol7_poly_c,sizeof(E->viscosity.rheol7_poly_c));
   }
  }
- /* Preserve default-policy checkpoint fingerprints, but never silently
-  * resume a nondefault inner solve policy as the historical default. */
+ /* Keep the historical current_rhs/1e-6 fingerprint unchanged. D is now
+  * the input default, but must still carry its explicit policy tag so old
+  * current_rhs checkpoints cannot silently resume with a different solve. */
  if(strcmp(E->control.pices_stokes_inner_policy,"current_rhs") ||
     E->control.pices_stokes_inner_rtol!=1.0e-6) {
   const char method[]="configurable_stokes_inner_tolerance_v1";

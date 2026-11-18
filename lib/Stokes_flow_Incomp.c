@@ -1116,8 +1116,8 @@ void pices_stokes_validate_settings(struct All_variables *E)
 }
 
 
-/* P3 needs an accurate Schur action even after its pressure RHS becomes
- * small. The legacy imp*initial_force_norm tolerance is then too permissive.
+/* D uses imp*initial_force_norm by default. current_rhs remains available
+ * to bound the relative inner residual when the pressure RHS becomes small.
  * P5 explicitly uses the same policy in both coupled benchmark arms.
  * Ordinary PG and constant-physics PICES arithmetic remain unchanged. */
 static double pices_stokes_inner_tolerance(struct All_variables *E,

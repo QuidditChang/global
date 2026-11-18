@@ -1,7 +1,8 @@
 """Exercise configurable Stokes tolerances on the small 12-rank MG fixture.
 
 This checks parameter plumbing, actual targets, initialization identity and
-unchanged default results; it is not a production performance benchmark.
+equivalence of implicit and explicit D; it is not a production performance
+benchmark.
 """
 import argparse
 import gzip
@@ -75,6 +76,8 @@ def main():
                           and "P3 " in stderr and "did not converge" in stderr)
         assert proc.returncode in (0, 8) or policy_failure, (name, proc.returncode, stderr[-3000:])
         stokes = [fields(l) for l in log.splitlines() if l.startswith("PICES_STOKES ")]
+        expected_policy = changes.get("pices_stokes_inner_policy", "legacy_initial_force")
+        assert all(r["policy"] == expected_policy for r in stokes), (name, stokes)
         if not policy_failure:
             assert len(stokes) >= 2 and all(r["status"] == "PASS" for r in stokes), (name, stokes)
         inner = [fields(l) for l in log.splitlines() if l.startswith("PICES_STOKES_INNER ")]
@@ -82,6 +85,7 @@ def main():
         diagnostic = changes.get("pices_stokes_diagnostics") == "on"
         assert bool(inner) == diagnostic and bool(identity) == diagnostic
         for row in inner:
+            assert row["policy"] == expected_policy, (name, row)
             if row["status"] == "PASS":
                 assert row["actual_status"] == "PASS", (name, row)
                 assert float(row["actual"]) < float(row["target"])
@@ -108,7 +112,7 @@ def main():
         return directory, identity
 
     default, _ = run("default", {})
-    explicit, _ = run("explicit_default", {"pices_stokes_inner_policy": "current_rhs",
+    explicit, _ = run("explicit_default", {"pices_stokes_inner_policy": "legacy_initial_force",
                                             "pices_stokes_inner_rtol": "1e-6"})
     compared = 0
     for path in default.glob("DATA/*/*/*.gz"):
@@ -127,7 +131,7 @@ def main():
                                         "pices_stokes_inner_rtol": rtol,
                                         "pices_stokes_diagnostics": "on"})
         identities.append(identity[0])
-        if name == "A":
+        if name == "D":
             for path in default.glob("DATA/*/*/*.gz"):
                 assert gzip.open(path, "rb").read() == gzip.open(directory / path.relative_to(default), "rb").read(), path
     assert all(row == identities[0] for row in identities), identities
@@ -139,6 +143,7 @@ def main():
     ):
         run(name, changes, invalid=message)
     summary["default_regression"] = {"status": "PASS", "decoded_files_equal": compared,
+                                      "default_policy": "legacy_initial_force",
                                       "diagnostics_do_not_change_outputs": True,
                                       "initial_identity_equal_all_policies": True}
     (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
