@@ -266,12 +266,13 @@ void pices_checkpoint_preflight(struct All_variables *E,const char *path) {
  if(fstat(fileno(f),&st) || st.st_size!=bytes)pices_fail(E,"checkpoint length mismatch");
  if(fclose(f))pices_fail(E,"checkpoint close failed");
 }
-/* Only the audited diagnostic predecessor may cross commits, explicitly.
+/* Only the original 1.8 Ga producer may cross commits, explicitly.
+ * Backport changes locator geometry only; checkpoint ABI and physics unchanged.
  * All bytes other than solver_commit (including physics and payload hashes)
  * must remain identical. Never rewrite the saved checkpoint. */
 static int coverage_restart_compatible(const char *actual,char *expected)
 {
- const char *source="bb334f35892f88b3c9a9fc5265f70b2e621049bf";
+ const char *source="0608be89a18479a0d22374eb9b395be940c49d86";
  const char *permit=getenv("PICES_RESTART_SOURCE_COMMIT");
  const char *tag="\"solver_commit\":\"";
  const char *a=strstr(actual,tag);char *b=strstr(expected,tag);
@@ -306,7 +307,7 @@ void pices_checkpoint_check_state(struct All_variables *E,const char *path) {
  readtext(E,meta,actual);metadata(E,path,state,expected);
  if(!strcmp(actual,expected))return;
  if(coverage_restart_compatible(actual,expected)) {
-  if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=bb334f35892f88b3c9a9fc5265f70b2e621049bf running_commit=%s all_other_metadata=exact reason=coverage_diagnostics_only\n",PICES_SOLVER_COMMIT);
+  if(E->parallel.me==0)fprintf(E->fp,"PICES_CHECKPOINT compatible_source=0608be89a18479a0d22374eb9b395be940c49d86 running_commit=%s all_other_metadata=exact reason=validated_particle_host\n",PICES_SOLVER_COMMIT);
   return;
  }
  if(!E->pices.consistent_projection) {

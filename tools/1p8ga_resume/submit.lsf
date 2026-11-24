@@ -1,0 +1,82 @@
+#!/bin/bash
+#BSUB -J PICES_1p8Ga_HOSTFIX
+#BSUB -q medium
+#BSUB -x
+#BSUB -n 400
+#BSUB -R "span[ptile=40]"
+#BSUB -W 720:00
+#BSUB -o std_%J.out
+#BSUB -e std_%J.err
+#BSUB -u zhangkd@mail.sustech.edu.cn
+set -euo pipefail
+for variable in ${!PICES_@}; do unset "$variable"; done
+export PICES_COVERAGE_STATS=1
+export CODE_DIR=${CODE_DIR:?Set CODE_DIR to the dedicated host-fix checkout}
+HELPERS="$CODE_DIR/tools/1p8ga_resume"
+export SCRIPTDIR=${SCRIPTDIR:?Set SCRIPTDIR to the pinned scripts checkout}
+test "$(git -C "$SCRIPTDIR" rev-parse HEAD)" = 8ef9049d3fb30147d8c4fd07d21f20cd4272b5f6
+git -C "$SCRIPTDIR" diff --exit-code HEAD -- ":(exclude,glob)**/*.pyc"
+test "$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD)" = codex/pices-1p8ga-host-fix
+EXPERIMENT="cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_1.8Ga_resume"
+RUN_NAME="cmbhf_EBA_Q0_30_rheol7_scold1.0_LLSVPsV0.04_B24_0.3_PICES_1.8Ga_12381236"
+RUN_ROOT="${RUNROOT:-/work/ess-zhangkd/CitcomS/run_links/${RUN_NAME}}"
+export RUNROOT="$RUN_ROOT"
+export STORAGE_CONTROL="/work/ess-zhangkd/CitcomS/run_links/.storage/${RUN_NAME}"
+test -L "$RUN_ROOT"
+test -s "$RUN_ROOT/input.cfg"
+test ! -e "$STORAGE_CONTROL/request.json"
+# Refuse concurrent old/new solvers, including a duplicate queued submission.
+for job in 12381236; do
+    status=$(bjobs -a -noheader -o stat "$job" 2>/dev/null || true)
+    case "$status" in *RUN*|*PEND*|*SUSP*) echo "Old job still active: $job $status" >&2; exit 1;; esac
+done
+# Keep this lock descriptor open across exec. It lives outside dated scratch.
+exec 9>"$STORAGE_CONTROL/resume.lock"
+flock -n 9
+RUNTIME_INSTALL="$CODE_DIR/install"
+module load intel/2018.4 mpi/intel/2018.4
+module load hdf5/1.8.18-parallel-intel-18.4
+MPI_LIB=$(ldd "$RUNTIME_INSTALL/bin/mpipycitcoms" | awk '$1=="libmpi.so.12" {print $3}')
+case "$MPI_LIB" in /share/intel/*/mpi/intel64/lib/libmpi.so.12) ;; *) echo "Unexpected MPI library: $MPI_LIB" >&2; exit 1;; esac
+MPI_ROOT=$(cd "$(dirname "$MPI_LIB")/.." && pwd -P)
+MPIEXEC="$MPI_ROOT/bin/mpiexec.hydra"
+test -x "$MPIEXEC"
+export I_MPI_ROOT="$MPI_ROOT"
+export PATH="$MPI_ROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$RUNTIME_INSTALL/lib:$MPI_ROOT/lib:${LD_LIBRARY_PATH:-}"
+export CITCOMS_SOLVER_PATH="$PATH"
+export CITCOMS_SOLVER_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+unset PYTHONHOME PYTHONPATH
+module load python/anaconda3/2020.11
+unset PYTHONHOME PYTHONPATH
+export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+test -s "$RUN_ROOT/PostProc/Online/solver.finished.json"
+python3 "$HELPERS/prepare.py"
+RUNTIME_DIR=$(cat "$RUN_ROOT/PostProc/Online/resume-$LSB_JOBID/runtime.path")
+RUNTIME_INSTALL="$RUNTIME_DIR/install"
+export CITCOMS_SOLVER_LD_LIBRARY_PATH="$RUNTIME_INSTALL/lib:$MPI_ROOT/lib:${LD_LIBRARY_PATH:-}"
+export PICES_RESTART_SOURCE_COMMIT=0608be89a18479a0d22374eb9b395be940c49d86
+cd "$RUN_ROOT"
+cp "$HELPERS/submit.lsf" "PostProc/Online/resume-$LSB_JOBID/submitted.lsf"
+SOLVER_PYTHONHOME=/work/ess-zhangkd/CitcomS/vendor/python2.6.9
+SITE="$RUNTIME_INSTALL/lib/python2.6/site-packages"
+PYRE_START="$SITE:$SOLVER_PYTHONHOME/lib/python2.6/site-packages"
+EXTRA_EGGS=$(cat "$RUNTIME_DIR/eggs.path")
+if [ -n "$EXTRA_EGGS" ]; then PYRE_START="$PYRE_START:$EXTRA_EGGS"; fi
+for egg in "$SITE"/*.egg; do
+    [ -e "$egg" ] || continue
+    PYRE_START="$PYRE_START:$egg"
+done
+export LSB_STDOUT_DIRECT=y
+export I_MPI_HYDRA_BRANCH_COUNT=39 I_MPI_LSF_USE_COLLECTIVE_LAUNCH=1
+export CITCOMS_CLEANUP_OUTPUTS=1 CITCOMS_DYNAMIC_POSTPROC=1
+export CITCOMS_PLOT_LLSVPS=1 CITCOMS_PLOT_pPv=0
+export MPLCONFIGDIR="$RUN_ROOT/PostProc/Online/matplotlib"
+mkdir -p "$MPLCONFIGDIR"
+PVPYTHON=/work/ess-zhangkd/ParaView-5.9.1-osmesa-MPI-Linux-Python3.8-64bit/bin/pvpython
+exec python3 "$HELPERS/launch.py" launch \
+    --run-root "$RUN_ROOT" --code-dir "$RUNTIME_INSTALL" \
+    --storage-control "$STORAGE_CONTROL" --scratch-roll-days 7 \
+    --solver-pythonhome "$SOLVER_PYTHONHOME" --pyre-start "$PYRE_START" \
+    --pvpython "$PVPYTHON" --mpiexec "$MPIEXEC"
